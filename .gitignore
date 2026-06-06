@@ -1,0 +1,62 @@
+# Local scratch / experiments
+agents/
+
+# Local AI assistant context (not for version control)
+CLAUDE.md
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets & credentials
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+service_account.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# LangGraph / LangChain
+.langgraph_api/
+.langchain/
+langgraph.db
+langgraph.db-shm
+langgraph.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+*.tmp
+*.bak
+logs/
+
+# Test & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
