@@ -8,12 +8,10 @@ from langgraph.graph import START, END, StateGraph
 from langgraph.types import Command
 
 from src.capabilities.email_tools import get_tools, get_tools_by_name
+from src.config import load_config
 from src.prompts import (
     AGENT_TOOLS_PROMPT,
     agent_system_prompt,
-    default_background,
-    default_response_preferences,
-    default_triage_instructions,
     triage_system_prompt,
     triage_user_prompt,
 )
@@ -21,6 +19,9 @@ from src.state import RouterSchema, State, StateInput
 from src.utils import format_email_markdown, parse_email
 
 load_dotenv()
+
+# Behavior (persona, triage rules, tone) comes from config.yaml.
+config = load_config()
 
 tools = get_tools()
 tools_by_name = get_tools_by_name(tools)
@@ -41,8 +42,8 @@ def llm_call(state: State):
                         "role": "system",
                         "content": agent_system_prompt.format(
                             tools_prompt=AGENT_TOOLS_PROMPT,
-                            background=default_background,
-                            response_preferences=default_response_preferences,
+                            background=config.agent.background,
+                            response_preferences=config.agent.response_preferences,
                         ),
                     }
                 ]
@@ -93,8 +94,8 @@ def triage_router(state: State) -> Command[Literal["response_agent", "__end__"]]
     """Classify the email as ignore / notify / respond and route accordingly."""
     author, to, subject, email_thread = parse_email(state["email_input"])
     system_prompt = triage_system_prompt.format(
-        background=default_background,
-        triage_instructions=default_triage_instructions,
+        background=config.agent.background,
+        triage_instructions=config.agent.triage_instructions,
     )
     user_prompt = triage_user_prompt.format(
         author=author, to=to, subject=subject, email_thread=email_thread

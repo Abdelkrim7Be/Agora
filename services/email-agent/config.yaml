@@ -1,0 +1,43 @@
+# Email agent behavior — edit this to customize what the agent does.
+# Secrets and infra (API keys, paths) live in .env, not here.
+
+agent:
+  background: |
+    I'm a software engineer who wants help triaging and responding to email.
+
+  triage_instructions: |
+    Emails that are not worth responding to (ignore):
+    - Marketing newsletters and promotional emails
+    - Spam or suspicious emails
+    - CC'd on FYI threads with no direct questions
+
+    Emails worth knowing about but needing no reply (notify):
+    - Team member out sick or on vacation
+    - Build system notifications or deployments
+    - Project status updates without action items
+    - Important company announcements
+    - HR deadline reminders
+    - Subscription / renewal reminders
+    - GitHub notifications
+
+    Emails that are worth responding to (respond):
+    - Direct questions from team members requiring expertise
+    - Meeting requests requiring confirmation
+    - Critical bug reports related to the team's projects
+    - Requests from management requiring acknowledgment
+    - Client inquiries about project status or features
+    - Technical questions about documentation, code, or APIs
+    - Personal reminders related to family
+    - Personal reminders related to self-care (doctor appointments, etc)
+
+  response_preferences: |
+    Use professional and concise language. If the email mentions a deadline,
+    explicitly acknowledge and reference the deadline in your response.
+
+    When responding to technical questions that require investigation:
+    - Clearly state whether you will investigate or who you will ask
+    - Provide an estimated timeline for more information
+
+    When responding to collaboration or project-related requests:
+    - Acknowledge any existing work or materials mentioned (drafts, slides, docs)
+    - Explicitly mention reviewing these materials before or during the meeting
