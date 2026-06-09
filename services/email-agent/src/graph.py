@@ -4,10 +4,11 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
-from src.capabilities import load_capabilities, tools_by_name
+from src.capabilities import approval_required, load_capabilities, tools_by_name
 from src.config import load_config
 from src.prompts import (
     agent_system_prompt,
@@ -24,6 +25,7 @@ config = load_config()
 
 tools, tools_prompt = load_capabilities(config.capabilities)
 tools_by_name_map = tools_by_name(tools)
+approval_set = approval_required(config.capabilities)
 
 # Groq is the primary LLM for all agents (see CLAUDE.md).
 llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
@@ -53,15 +55,54 @@ def llm_call(state: State):
 
 
 def tool_node(state: State):
-    """Execute the tool calls requested by the LLM."""
+    """Execute the tool calls requested by the LLM, pausing for approval on gated tools."""
     result = []
+    sent = False
     for tool_call in state["messages"][-1].tool_calls:
-        tool = tools_by_name_map[tool_call["name"]]
-        observation = tool.invoke(tool_call["args"])
+        name = tool_call["name"]
+        args = tool_call["args"]
+
+        if name in approval_set:
+            # Pause the graph and surface the pending action to the caller.
+            decision = interrupt(
+                {
+                    "action": name,
+                    "args": args,
+                    "tool_call_id": tool_call["id"],
+                    "description": f"Approve the '{name}' action?",
+                }
+            )
+            if decision.get("type") == "reject":
+                result.append(
+                    {
+                        "role": "tool",
+                        "content": f"Action '{name}' was rejected by the user. Do not retry it; call Done.",
+                        "tool_call_id": tool_call["id"],
+                    }
+                )
+                continue
+            # Approved — allow the caller to override args (e.g. an edited draft).
+            args = decision.get("args") or args
+
+        tool = tools_by_name_map[name]
+        observation = tool.invoke(args)
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
         )
-    return {"messages": result}
+        if name == "write_email":
+            sent = True
+
+    update = {"messages": result}
+    if sent:
+        update["email_sent"] = True
+    return update
+
+
+def after_tools(state: State) -> Literal["llm_call", "__end__"]:
+    """Sending the email is the terminal action; otherwise keep working the loop."""
+    if state.get("email_sent"):
+        return END
+    return "llm_call"
 
 
 def should_continue(state: State) -> Literal["environment", "__end__"]:
@@ -75,21 +116,7 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
     return END
 
 
-# Response agent: a minimal llm <-> tools loop.
-agent_builder = StateGraph(State)
-agent_builder.add_node("llm_call", llm_call)
-agent_builder.add_node("environment", tool_node)
-agent_builder.add_edge(START, "llm_call")
-agent_builder.add_conditional_edges(
-    "llm_call",
-    should_continue,
-    {"environment": "environment", END: END},
-)
-agent_builder.add_edge("environment", "llm_call")
-agent = agent_builder.compile()
-
-
-def triage_router(state: State) -> Command[Literal["response_agent", "__end__"]]:
+def triage_router(state: State) -> Command[Literal["llm_call", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
     author, to, subject, email_thread = parse_email(state["email_input"])
     system_prompt = triage_system_prompt.format(
@@ -111,7 +138,7 @@ def triage_router(state: State) -> Command[Literal["response_agent", "__end__"]]
     classification = result.classification
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")
-        goto = "response_agent"
+        goto = "llm_call"
         update = {
             "classification_decision": classification,
             "messages": [
@@ -135,15 +162,31 @@ def triage_router(state: State) -> Command[Literal["response_agent", "__end__"]]
     return Command(goto=goto, update=update)
 
 
-# Overall workflow: triage first, then hand off to the response agent.
+# Single flat workflow: triage, then the llm <-> tools loop. Keeping the response
+# agent's nodes in this graph (rather than a nested subgraph) lets interrupts in
+# tool_node pause and resume reliably against the checkpointer below.
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
-    .add_node(triage_router)
-    .add_node("response_agent", agent)
+    .add_node("triage_router", triage_router)
+    .add_node("llm_call", llm_call)
+    .add_node("environment", tool_node)
     .add_edge(START, "triage_router")
+    .add_conditional_edges(
+        "llm_call",
+        should_continue,
+        {"environment": "environment", END: END},
+    )
+    .add_conditional_edges(
+        "environment",
+        after_tools,
+        {"llm_call": "llm_call", END: END},
+    )
 )
 
-email_assistant = overall_workflow.compile()
+# MemorySaver persists run state so interrupts can pause/resume within a process.
+# (Swap for SqliteSaver/Postgres when runs must survive a restart — see Slice 5+.)
+checkpointer = MemorySaver()
+email_assistant = overall_workflow.compile(checkpointer=checkpointer)
 
 # Backwards-compatible alias for callers importing `graph`.
 graph = email_assistant

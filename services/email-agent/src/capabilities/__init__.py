@@ -34,3 +34,19 @@ def load_capabilities(flags: Dict[str, bool]) -> Tuple[List[BaseTool], str]:
 
 def tools_by_name(tools: List[BaseTool]) -> Dict[str, BaseTool]:
     return {t.name: t for t in tools}
+
+
+def approval_required(flags: Dict[str, bool]) -> set[str]:
+    """Aggregate the names of tools that need human approval across enabled capabilities."""
+    names: set[str] = set()
+    for name, enabled in flags.items():
+        if name not in CAPABILITY_MODULES:
+            raise ValueError(
+                f"Unknown capability '{name}' in config. "
+                f"Known: {sorted(CAPABILITY_MODULES)}"
+            )
+        if not enabled:
+            continue
+        module = importlib.import_module(CAPABILITY_MODULES[name])
+        names |= getattr(module, "REQUIRES_APPROVAL", set())
+    return names

@@ -27,3 +27,5 @@ class State(MessagesState):
     # MessagesState provides the `messages` key; we add email-specific fields.
     email_input: dict
     classification_decision: Literal["ignore", "respond", "notify"]
+    # Set once an email has actually been sent — the run's terminal action.
+    email_sent: bool

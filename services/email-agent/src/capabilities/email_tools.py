@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
-
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import tool
 from pydantic import BaseModel
 
 
@@ -26,12 +24,5 @@ TOOLS_PROMPT = """
 2. Done - E-mail has been sent
 """
 
-
-def get_tools() -> List[BaseTool]:
-    return TOOLS
-
-
-def get_tools_by_name(tools: List[BaseTool] | None = None) -> Dict[str, BaseTool]:
-    if tools is None:
-        tools = get_tools()
-    return {t.name: t for t in tools}
+# Tools that require human approval before executing (HITL gate).
+REQUIRES_APPROVAL = {"write_email"}

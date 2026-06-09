@@ -1,6 +1,53 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+from langchain_core.messages import AIMessage
+
+
+# --- Fake LLMs: let tests drive the real graph deterministically, no Groq calls. ---
+
+
+def ai_tool_call(name: str, args: dict, call_id: str = "call_1") -> AIMessage:
+    """An AI message that requests a single tool call."""
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+    )
+
+
+class _FakeRouter:
+    def __init__(self, classification: str):
+        self._classification = classification
+
+    def invoke(self, _messages):
+        return SimpleNamespace(classification=self._classification)
+
+
+class _FakeToolLLM:
+    def __init__(self, sequence: list[AIMessage]):
+        self._sequence = list(sequence)
+        self._i = 0
+
+    def invoke(self, _messages):
+        msg = self._sequence[min(self._i, len(self._sequence) - 1)]
+        self._i += 1
+        return msg
+
+
+@pytest.fixture
+def fake_llms(monkeypatch):
+    """Patch the graph's router + tool LLM so tests run offline and deterministically."""
+
+    def _install(classification: str = "respond", tool_sequence=None):
+        import src.graph as g
+
+        monkeypatch.setattr(g, "llm_router", _FakeRouter(classification))
+        if tool_sequence is not None:
+            monkeypatch.setattr(g, "llm_with_tools", _FakeToolLLM(tool_sequence))
+
+    return _install
 
 
 # Reference per-email shape (author/to/subject/email_thread) — used by the graph.

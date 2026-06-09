@@ -29,3 +29,6 @@ TOOLS_PROMPT = """
 1. schedule_meeting(attendees, subject, duration_minutes, preferred_day, start_time) - Schedule a meeting
 2. check_calendar_availability(day) - Check available time slots for a given day
 """
+
+# schedule_meeting commits a calendar action; reading availability is safe.
+REQUIRES_APPROVAL = {"schedule_meeting"}
