@@ -62,11 +62,5 @@ When handling emails, follow these steps:
 </ Response Preferences >
 """
 
-# Tool descriptions inserted into the response agent prompt (email-only).
-AGENT_TOOLS_PROMPT = """
-1. write_email(to, subject, content) - Send emails to specified recipients
-2. Done - E-mail has been sent
-"""
-
-# Behavior values (background, triage_instructions, response_preferences) live in
-# config.yaml and are loaded via src.config.load_config — see Slice 2.
+# Tool descriptions now come from each capability module's TOOLS_PROMPT,
+# assembled at startup by src.capabilities.load_capabilities.

@@ -20,13 +20,18 @@ class Done(BaseModel):
     done: bool
 
 
+TOOLS = [write_email, Done]
+TOOLS_PROMPT = """
+1. write_email(to, subject, content) - Send emails to specified recipients
+2. Done - E-mail has been sent
+"""
+
+
 def get_tools() -> List[BaseTool]:
-    """Return the email-only toolset for the response agent."""
-    return [write_email, Done]
+    return TOOLS
 
 
 def get_tools_by_name(tools: List[BaseTool] | None = None) -> Dict[str, BaseTool]:
-    """Map tools by their registered name."""
     if tools is None:
         tools = get_tools()
     return {t.name: t for t in tools}

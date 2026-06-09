@@ -41,3 +41,7 @@ agent:
     When responding to collaboration or project-related requests:
     - Acknowledge any existing work or materials mentioned (drafts, slides, docs)
     - Explicitly mention reviewing these materials before or during the meeting
+
+capabilities:
+  email: true       # write_email + Done — keep on
+  calendar: false   # schedule_meeting + check_calendar_availability — off for now

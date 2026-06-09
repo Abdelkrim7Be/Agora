@@ -1,5 +1,36 @@
 from __future__ import annotations
 
-# Email capability modules live here.
-# Each module exposes LangChain tools that the graph nodes can call.
-# e.g. gmail.py  → list_emails, read_email, send_email, archive_email
+import importlib
+from typing import Dict, List, Tuple
+
+from langchain_core.tools import BaseTool
+
+CAPABILITY_MODULES: Dict[str, str] = {
+    "email": "src.capabilities.email_tools",
+    "calendar": "src.capabilities.calendar_tools",
+}
+
+
+def load_capabilities(flags: Dict[str, bool]) -> Tuple[List[BaseTool], str]:
+    """Assemble the active tool list + combined tools-prompt from enabled capabilities.
+
+    Fails loud on an unknown capability name (typo in config.yaml).
+    """
+    tools: List[BaseTool] = []
+    prompt_parts: List[str] = []
+    for name, enabled in flags.items():
+        if name not in CAPABILITY_MODULES:
+            raise ValueError(
+                f"Unknown capability '{name}' in config. "
+                f"Known: {sorted(CAPABILITY_MODULES)}"
+            )
+        if not enabled:
+            continue
+        module = importlib.import_module(CAPABILITY_MODULES[name])
+        tools.extend(module.TOOLS)
+        prompt_parts.append(module.TOOLS_PROMPT.strip())
+    return tools, "\n".join(prompt_parts)
+
+
+def tools_by_name(tools: List[BaseTool]) -> Dict[str, BaseTool]:
+    return {t.name: t for t in tools}

@@ -7,10 +7,9 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import START, END, StateGraph
 from langgraph.types import Command
 
-from src.capabilities.email_tools import get_tools, get_tools_by_name
+from src.capabilities import load_capabilities, tools_by_name
 from src.config import load_config
 from src.prompts import (
-    AGENT_TOOLS_PROMPT,
     agent_system_prompt,
     triage_system_prompt,
     triage_user_prompt,
@@ -20,11 +19,11 @@ from src.utils import format_email_markdown, parse_email
 
 load_dotenv()
 
-# Behavior (persona, triage rules, tone) comes from config.yaml.
+# Behavior (persona, triage rules, tone) and capability flags come from config.yaml.
 config = load_config()
 
-tools = get_tools()
-tools_by_name = get_tools_by_name(tools)
+tools, tools_prompt = load_capabilities(config.capabilities)
+tools_by_name_map = tools_by_name(tools)
 
 # Groq is the primary LLM for all agents (see CLAUDE.md).
 llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
@@ -41,7 +40,7 @@ def llm_call(state: State):
                     {
                         "role": "system",
                         "content": agent_system_prompt.format(
-                            tools_prompt=AGENT_TOOLS_PROMPT,
+                            tools_prompt=tools_prompt,
                             background=config.agent.background,
                             response_preferences=config.agent.response_preferences,
                         ),
@@ -57,7 +56,7 @@ def tool_node(state: State):
     """Execute the tool calls requested by the LLM."""
     result = []
     for tool_call in state["messages"][-1].tool_calls:
-        tool = tools_by_name[tool_call["name"]]
+        tool = tools_by_name_map[tool_call["name"]]
         observation = tool.invoke(tool_call["args"])
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}

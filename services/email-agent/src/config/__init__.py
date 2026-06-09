@@ -44,6 +44,7 @@ class AgentBehavior(BaseModel):
 
 class AgentConfig(BaseModel):
     agent: AgentBehavior
+    capabilities: dict[str, bool] = {"email": True}
 
 
 def load_config(path: str | Path | None = None) -> AgentConfig:
