@@ -1,47 +1,149 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal
 
-from langgraph.graph import StateGraph, END
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langgraph.graph import START, END, StateGraph
+from langgraph.types import Command
 
+from src.capabilities.email_tools import get_tools, get_tools_by_name
+from src.prompts import (
+    AGENT_TOOLS_PROMPT,
+    agent_system_prompt,
+    default_background,
+    default_response_preferences,
+    default_triage_instructions,
+    triage_system_prompt,
+    triage_user_prompt,
+)
+from src.state import RouterSchema, State, StateInput
+from src.utils import format_email_markdown, parse_email
 
-class AgentState(TypedDict):
-    emails: list[dict]
-    actions: list[dict]
-    done: bool
+load_dotenv()
 
+tools = get_tools()
+tools_by_name = get_tools_by_name(tools)
 
-def fetch_node(state: AgentState) -> AgentState:
-    # TODO: pull emails via Gmail toolkit
-    return state
-
-
-def triage_node(state: AgentState) -> AgentState:
-    # TODO: classify each email (reply / archive / escalate / ignore)
-    return state
-
-
-def act_node(state: AgentState) -> AgentState:
-    # TODO: execute decided actions (send reply, archive, label)
-    return state
-
-
-def should_act(state: AgentState) -> str:
-    return "act" if state["actions"] else END
-
-
-def build_graph() -> StateGraph:
-    g = StateGraph(AgentState)
-    g.add_node("fetch", fetch_node)
-    g.add_node("triage", triage_node)
-    g.add_node("act", act_node)
-
-    g.set_entry_point("fetch")
-    g.add_edge("fetch", "triage")
-    g.add_conditional_edges("triage", should_act, {"act": "act", END: END})
-    g.add_edge("act", END)
-
-    return g
+# Groq is the primary LLM for all agents (see CLAUDE.md).
+llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
+llm_router = llm.with_structured_output(RouterSchema)
+llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 
 
-graph = build_graph().compile()
+def llm_call(state: State):
+    """LLM decides which tool to call to handle the email."""
+    return {
+        "messages": [
+            llm_with_tools.invoke(
+                [
+                    {
+                        "role": "system",
+                        "content": agent_system_prompt.format(
+                            tools_prompt=AGENT_TOOLS_PROMPT,
+                            background=default_background,
+                            response_preferences=default_response_preferences,
+                        ),
+                    }
+                ]
+                + state["messages"]
+            )
+        ]
+    }
+
+
+def tool_node(state: State):
+    """Execute the tool calls requested by the LLM."""
+    result = []
+    for tool_call in state["messages"][-1].tool_calls:
+        tool = tools_by_name[tool_call["name"]]
+        observation = tool.invoke(tool_call["args"])
+        result.append(
+            {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
+        )
+    return {"messages": result}
+
+
+def should_continue(state: State) -> Literal["environment", "__end__"]:
+    """Route to tools, or end once the Done tool is called."""
+    last_message = state["messages"][-1]
+    if last_message.tool_calls:
+        for tool_call in last_message.tool_calls:
+            if tool_call["name"] == "Done":
+                return END
+            return "environment"
+    return END
+
+
+# Response agent: a minimal llm <-> tools loop.
+agent_builder = StateGraph(State)
+agent_builder.add_node("llm_call", llm_call)
+agent_builder.add_node("environment", tool_node)
+agent_builder.add_edge(START, "llm_call")
+agent_builder.add_conditional_edges(
+    "llm_call",
+    should_continue,
+    {"environment": "environment", END: END},
+)
+agent_builder.add_edge("environment", "llm_call")
+agent = agent_builder.compile()
+
+
+def triage_router(state: State) -> Command[Literal["response_agent", "__end__"]]:
+    """Classify the email as ignore / notify / respond and route accordingly."""
+    author, to, subject, email_thread = parse_email(state["email_input"])
+    system_prompt = triage_system_prompt.format(
+        background=default_background,
+        triage_instructions=default_triage_instructions,
+    )
+    user_prompt = triage_user_prompt.format(
+        author=author, to=to, subject=subject, email_thread=email_thread
+    )
+    email_markdown = format_email_markdown(subject, author, to, email_thread)
+
+    result = llm_router.invoke(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
+
+    classification = result.classification
+    if classification == "respond":
+        print("📧 Classification: RESPOND - This email requires a response")
+        goto = "response_agent"
+        update = {
+            "classification_decision": classification,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Respond to the email: {email_markdown}",
+                }
+            ],
+        }
+    elif classification == "ignore":
+        print("🚫 Classification: IGNORE - This email can be safely ignored")
+        goto = END
+        update = {"classification_decision": classification}
+    elif classification == "notify":
+        print("🔔 Classification: NOTIFY - This email contains important information")
+        goto = END
+        update = {"classification_decision": classification}
+    else:
+        raise ValueError(f"Invalid classification: {classification}")
+
+    return Command(goto=goto, update=update)
+
+
+# Overall workflow: triage first, then hand off to the response agent.
+overall_workflow = (
+    StateGraph(State, input_schema=StateInput)
+    .add_node(triage_router)
+    .add_node("response_agent", agent)
+    .add_edge(START, "triage_router")
+)
+
+email_assistant = overall_workflow.compile()
+
+# Backwards-compatible alias for callers importing `graph`.
+graph = email_assistant

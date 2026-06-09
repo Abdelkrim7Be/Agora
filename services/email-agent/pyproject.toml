@@ -11,6 +11,7 @@ dependencies = [
     "langchain>=0.3",
     "langchain-openai>=0.2",
     "langchain-anthropic>=0.2",
+    "langchain-groq>=0.1",
     "langchain-google-community[gmail]>=2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

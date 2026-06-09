@@ -3,18 +3,20 @@ from __future__ import annotations
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from src.graph import graph
+from src.graph import email_assistant
 
 app = FastAPI(title="email-agent", version="0.1.0")
 
 
-class RunRequest(BaseModel):
-    max_emails: int = 20
-    dry_run: bool = True
+class EmailInput(BaseModel):
+    author: str
+    to: str
+    subject: str
+    email_thread: str
 
 
 class RunResponse(BaseModel):
-    actions_taken: int
+    classification: str
     summary: str
 
 
@@ -24,10 +26,10 @@ async def health() -> dict:
 
 
 @app.post("/run", response_model=RunResponse)
-async def run(req: RunRequest) -> RunResponse:
-    initial_state = {"emails": [], "actions": [], "done": False}
-    result = await graph.ainvoke(initial_state)
+async def run(email: EmailInput) -> RunResponse:
+    result = await email_assistant.ainvoke({"email_input": email.model_dump()})
+    classification = result.get("classification_decision", "unknown")
     return RunResponse(
-        actions_taken=len(result.get("actions", [])),
-        summary="run complete",
+        classification=classification,
+        summary=f"email triaged as {classification}",
     )
