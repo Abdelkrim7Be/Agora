@@ -12,10 +12,18 @@ def write_email(to: str, subject: str, content: str) -> str:
     if settings.dry_run:
         return f"Email sent to {to} with subject '{subject}' [dry run]"
     from langchain_google_community import GmailToolkit
-    from langchain_google_community.gmail.utils import build_resource_service
+    from langchain_google_community.gmail.utils import (
+        build_gmail_service,
+        get_google_credentials,
+    )
     creds = str(SERVICE_ROOT / settings.gmail_credentials_path)
     token = str(SERVICE_ROOT / settings.gmail_token_path)
-    resource = build_resource_service(credentials_path=creds, token_path=token)
+    credentials = get_google_credentials(
+        token_file=token,
+        client_secrets_file=creds,
+        scopes=["https://mail.google.com/"],
+    )
+    resource = build_gmail_service(credentials=credentials)
     toolkit = GmailToolkit(api_resource=resource)
     send_tool = next(t for t in toolkit.get_tools() if t.name == "send_gmail_message")
     return send_tool.invoke({"message": content, "to": [to], "subject": subject})
