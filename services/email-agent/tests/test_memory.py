@@ -117,6 +117,60 @@ def test_reject_updates_triage_preferences(fake_llms):
 
 
 # ---------------------------------------------------------------------------
+# Graph-level: the reject memory update never sends a dangling tool_call.
+# An assistant message with tool_calls must be answered by a tool message for
+# each id, or Groq rejects the request. This guards that contract offline.
+# ---------------------------------------------------------------------------
+
+def _assert_no_dangling_tool_calls(messages):
+    answered = set()
+    requested = []
+    for m in messages:
+        if isinstance(m, dict) and m.get("role") == "tool":
+            answered.add(m.get("tool_call_id"))
+        tool_calls = getattr(m, "tool_calls", None)
+        if tool_calls:
+            requested.extend(tc["id"] for tc in tool_calls)
+    dangling = [rid for rid in requested if rid not in answered]
+    assert not dangling, f"unanswered tool_calls in memory messages: {dangling}"
+
+
+def test_reject_memory_messages_have_no_dangling_tool_call(fake_llms, monkeypatch):
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.store.memory import InMemoryStore
+    from langgraph.types import Command
+    import src.graph as g
+    from tests.conftest import ai_tool_call, RESPOND_EMAIL
+
+    captured = {}
+    real_update = g.update_memory
+
+    def spy(store, ns, messages, llm):
+        captured["messages"] = messages
+        return real_update(store, ns, messages, llm)
+
+    monkeypatch.setattr(g, "update_memory", spy)
+
+    graph = g.overall_workflow.compile(
+        checkpointer=MemorySaver(), store=InMemoryStore()
+    )
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, call_id="c1"),
+            ai_tool_call("Done", {"done": True}, call_id="c2"),
+        ],
+    )
+
+    cfg = {"configurable": {"thread_id": "test-dangling-001"}}
+    graph.invoke({"email_input": RESPOND_EMAIL}, cfg)
+    graph.invoke(Command(resume={"type": "reject"}), cfg)
+
+    assert "messages" in captured, "update_memory was not called on reject"
+    _assert_no_dangling_tool_calls(captured["messages"])
+
+
+# ---------------------------------------------------------------------------
 # Graph-level: edit triggers response_preferences update
 # ---------------------------------------------------------------------------
 

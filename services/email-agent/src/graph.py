@@ -81,12 +81,21 @@ def tool_node(state: State, store: BaseStore):
                 }
             )
             if decision.get("type") == "reject":
+                # Answer the tool call FIRST so the message sequence stays valid
+                # (an assistant tool_call must be followed by a tool message — Groq
+                # rejects a dangling call). Only then learn from the rejection.
+                rejection = {
+                    "role": "tool",
+                    "content": f"Action '{name}' was rejected by the user. Do not retry it; call Done.",
+                    "tool_call_id": tool_call["id"],
+                }
+                result.append(rejection)
                 # Teach: this kind of email should not be classified as respond.
-                email_ctx = state.get("messages", [])
                 update_memory(
                     store,
                     namespace("triage_preferences"),
-                    list(email_ctx)
+                    list(state["messages"])
+                    + result
                     + [
                         {
                             "role": "user",
@@ -98,13 +107,6 @@ def tool_node(state: State, store: BaseStore):
                         }
                     ],
                     llm_memory,
-                )
-                result.append(
-                    {
-                        "role": "tool",
-                        "content": f"Action '{name}' was rejected by the user. Do not retry it; call Done.",
-                        "tool_call_id": tool_call["id"],
-                    }
                 )
                 continue
 
