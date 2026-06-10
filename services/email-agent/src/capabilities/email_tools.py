@@ -3,6 +3,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
+from src.capabilities import hitl_approved
 from src.config import SERVICE_ROOT, settings
 
 
@@ -11,6 +12,10 @@ def write_email(to: str, subject: str, content: str) -> str:
     """Write and send an email."""
     if settings.dry_run:
         return f"Email sent to {to} with subject '{subject}' [dry run]"
+    if not hitl_approved.get():
+        raise RuntimeError(
+            "write_email requires human approval — call via the graph API, not directly."
+        )
     from langchain_google_community import GmailToolkit
     from langchain_google_community.gmail.utils import (
         build_gmail_service,

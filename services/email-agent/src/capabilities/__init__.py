@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import importlib
+from contextvars import ContextVar
 from typing import Dict, List, Tuple
 
 from langchain_core.tools import BaseTool
+
+# Set to True by tool_node only after human approval; gated tools check this before executing.
+hitl_approved: ContextVar[bool] = ContextVar("hitl_approved", default=False)
 
 CAPABILITY_MODULES: Dict[str, str] = {
     "email": "src.capabilities.email_tools",

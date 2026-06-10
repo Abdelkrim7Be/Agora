@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
 from langgraph.types import Command, interrupt
 
-from src.capabilities import approval_required, load_capabilities, tools_by_name
+from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
 from src.config import load_config
 from src.prompts import (
     agent_system_prompt,
@@ -85,7 +85,14 @@ def tool_node(state: State):
             args = decision.get("args") or args
 
         tool = tools_by_name_map[name]
-        observation = tool.invoke(args)
+        if name in approval_set:
+            tok = hitl_approved.set(True)
+            try:
+                observation = tool.invoke(args)
+            finally:
+                hitl_approved.reset(tok)
+        else:
+            observation = tool.invoke(args)
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
         )
