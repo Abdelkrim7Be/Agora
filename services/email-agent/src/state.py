@@ -18,14 +18,20 @@ class RouterSchema(BaseModel):
     )
 
 
+class EmailInput(TypedDict):
+    author: str
+    to: str
+    subject: str
+    email_thread: str
+
+
 class StateInput(TypedDict):
-    # The input handed to the graph: a single email.
-    email_input: dict
+    email_input: EmailInput
 
 
 class State(MessagesState):
     # MessagesState provides the `messages` key; we add email-specific fields.
-    email_input: dict
+    email_input: EmailInput
     classification_decision: Literal["ignore", "respond", "notify"]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
