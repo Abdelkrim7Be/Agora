@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -192,7 +193,10 @@ overall_workflow = (
 
 # MemorySaver persists run state so interrupts can pause/resume within a process.
 # (Swap for SqliteSaver/Postgres when runs must survive a restart — see Slice 5+.)
-checkpointer = MemorySaver()
+# Under LangGraph Studio / Platform (`langgraph dev`) persistence is injected by the
+# runtime, which rejects a custom checkpointer — so only attach ours standalone.
+_under_langgraph_platform = bool(os.environ.get("LANGSMITH_LANGGRAPH_API_VARIANT"))
+checkpointer = None if _under_langgraph_platform else MemorySaver()
 email_assistant = overall_workflow.compile(checkpointer=checkpointer)
 
 # Backwards-compatible alias for callers importing `graph`.
