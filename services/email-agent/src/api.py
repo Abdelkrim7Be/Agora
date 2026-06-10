@@ -1,14 +1,35 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langgraph.types import Command
 from pydantic import BaseModel
 
-from src.graph import email_assistant
+from src.graph import overall_workflow
 
-app = FastAPI(title="email-agent", version="0.1.0")
+# Separate files avoid SQLite "database is locked" when saver and store write concurrently.
+_CHECKPOINTS_DB = "checkpoints.db"
+_STORE_DB = "store.db"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncSqliteSaver.from_conn_string(_CHECKPOINTS_DB) as checkpointer:
+        async with AsyncSqliteStore.from_conn_string(_STORE_DB) as mem_store:
+            # AsyncSqliteStore.aget/aput do NOT auto-run setup — call explicitly.
+            await checkpointer.setup()
+            await mem_store.setup()
+            app.state.graph = overall_workflow.compile(
+                checkpointer=checkpointer, store=mem_store
+            )
+            yield
+
+
+app = FastAPI(title="email-agent", version="0.1.0", lifespan=lifespan)
 
 
 class EmailInput(BaseModel):
@@ -50,9 +71,9 @@ def _format(result: dict, run_id: str) -> RunResponse:
     )
 
 
-def _require_run(run_id: str) -> dict:
+async def _require_run(graph, run_id: str) -> dict:
     config = _thread_config(run_id)
-    state = email_assistant.get_state(config)
+    state = await graph.aget_state(config)
     if not state.values:
         raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
     return config
@@ -64,27 +85,30 @@ async def health() -> dict:
 
 
 @app.post("/run", response_model=RunResponse)
-async def run(email: EmailInput) -> RunResponse:
+async def run(request: Request, email: EmailInput) -> RunResponse:
+    graph = request.app.state.graph
     run_id = str(uuid.uuid4())
-    result = await email_assistant.ainvoke(
+    result = await graph.ainvoke(
         {"email_input": email.model_dump()}, _thread_config(run_id)
     )
     return _format(result, run_id)
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)
-async def approve(run_id: str, approval: ApprovalInput) -> RunResponse:
-    config = _require_run(run_id)
-    result = await email_assistant.ainvoke(
+async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    result = await graph.ainvoke(
         Command(resume={"type": "approve", "args": approval.args}), config
     )
     return _format(result, run_id)
 
 
 @app.post("/run/{run_id}/reject", response_model=RunResponse)
-async def reject(run_id: str) -> RunResponse:
-    config = _require_run(run_id)
-    result = await email_assistant.ainvoke(
+async def reject(request: Request, run_id: str) -> RunResponse:
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    result = await graph.ainvoke(
         Command(resume={"type": "reject"}), config
     )
     return _format(result, run_id)
