@@ -7,11 +7,15 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
+from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
 from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
 from src.config import load_config
+from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.prompts import (
+    MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
     triage_system_prompt,
     triage_user_prompt,
@@ -21,21 +25,25 @@ from src.utils import format_email_markdown, parse_email
 
 load_dotenv()
 
-# Behavior (persona, triage rules, tone) and capability flags come from config.yaml.
 config = load_config()
 
 tools, tools_prompt = load_capabilities(config.capabilities)
 tools_by_name_map = tools_by_name(tools)
 approval_set = approval_required(config.capabilities)
 
-# Groq is the primary LLM for all agents (see CLAUDE.md).
 llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
 llm_router = llm.with_structured_output(RouterSchema)
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
+llm_memory = llm.with_structured_output(UserPreferences)
 
 
-def llm_call(state: State):
+def llm_call(state: State, store: BaseStore):
     """LLM decides which tool to call to handle the email."""
+    response_prefs = get_memory(
+        store,
+        namespace("response_preferences"),
+        config.agent.response_preferences,
+    )
     return {
         "messages": [
             llm_with_tools.invoke(
@@ -45,7 +53,7 @@ def llm_call(state: State):
                         "content": agent_system_prompt.format(
                             tools_prompt=tools_prompt,
                             background=config.agent.background,
-                            response_preferences=config.agent.response_preferences,
+                            response_preferences=response_prefs,
                         ),
                     }
                 ]
@@ -55,8 +63,8 @@ def llm_call(state: State):
     }
 
 
-def tool_node(state: State):
-    """Execute the tool calls requested by the LLM, pausing for approval on gated tools."""
+def tool_node(state: State, store: BaseStore):
+    """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
     sent = False
     for tool_call in state["messages"][-1].tool_calls:
@@ -64,7 +72,6 @@ def tool_node(state: State):
         args = tool_call["args"]
 
         if name in approval_set:
-            # Pause the graph and surface the pending action to the caller.
             decision = interrupt(
                 {
                     "action": name,
@@ -74,6 +81,24 @@ def tool_node(state: State):
                 }
             )
             if decision.get("type") == "reject":
+                # Teach: this kind of email should not be classified as respond.
+                email_ctx = state.get("messages", [])
+                update_memory(
+                    store,
+                    namespace("triage_preferences"),
+                    list(email_ctx)
+                    + [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"The user rejected the draft '{name}'. "
+                                "Emails like this should not be classified as respond. "
+                                f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                            ),
+                        }
+                    ],
+                    llm_memory,
+                )
                 result.append(
                     {
                         "role": "tool",
@@ -82,8 +107,27 @@ def tool_node(state: State):
                     }
                 )
                 continue
-            # Approved — allow the caller to override args (e.g. an edited draft).
-            args = decision.get("args") or args
+
+            edited_args = decision.get("args")
+            if edited_args and edited_args != args:
+                # Teach: the draft style didn't match preferences — capture the diff.
+                update_memory(
+                    store,
+                    namespace("response_preferences"),
+                    [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"The user edited the email draft. "
+                                f"Original: {args}. "
+                                f"Edited: {edited_args}. "
+                                f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                            ),
+                        }
+                    ],
+                    llm_memory,
+                )
+            args = edited_args or args
 
         tool = tools_by_name_map[name]
         if name in approval_set:
@@ -124,12 +168,19 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
     return END
 
 
-def triage_router(state: State) -> Command[Literal["llm_call", "__end__"]]:
+def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
     author, to, subject, email_thread = parse_email(state["email_input"])
+
+    triage_instructions = get_memory(
+        store,
+        namespace("triage_preferences"),
+        config.agent.triage_instructions,
+    )
+
     system_prompt = triage_system_prompt.format(
         background=config.agent.background,
-        triage_instructions=config.agent.triage_instructions,
+        triage_instructions=triage_instructions,
     )
     user_prompt = triage_user_prompt.format(
         author=author, to=to, subject=subject, email_thread=email_thread
@@ -170,9 +221,6 @@ def triage_router(state: State) -> Command[Literal["llm_call", "__end__"]]:
     return Command(goto=goto, update=update)
 
 
-# Single flat workflow: triage, then the llm <-> tools loop. Keeping the response
-# agent's nodes in this graph (rather than a nested subgraph) lets interrupts in
-# tool_node pause and resume reliably against the checkpointer below.
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
     .add_node("triage_router", triage_router)
@@ -191,13 +239,9 @@ overall_workflow = (
     )
 )
 
-# MemorySaver persists run state so interrupts can pause/resume within a process.
-# (Swap for SqliteSaver/Postgres when runs must survive a restart — see Slice 5+.)
-# Under LangGraph Studio / Platform (`langgraph dev`) persistence is injected by the
-# runtime, which rejects a custom checkpointer — so only attach ours standalone.
 _under_langgraph_platform = bool(os.environ.get("LANGSMITH_LANGGRAPH_API_VARIANT"))
 checkpointer = None if _under_langgraph_platform else MemorySaver()
-email_assistant = overall_workflow.compile(checkpointer=checkpointer)
+store = None if _under_langgraph_platform else InMemoryStore()
+email_assistant = overall_workflow.compile(checkpointer=checkpointer, store=store)
 
-# Backwards-compatible alias for callers importing `graph`.
 graph = email_assistant
