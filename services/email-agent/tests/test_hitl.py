@@ -98,3 +98,23 @@ def test_api_run_then_approve(client, fake_llms, respond_email):
 
     approved = client.post(f"/run/{run['run_id']}/approve", json={}).json()
     assert approved["status"] == "completed"
+
+
+def test_api_respond_returns_pending_approval_on_redraft(client, fake_llms, respond_email):
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("write_email", DRAFT, "c2"),
+            ai_tool_call("Done", {"done": True}, "c3"),
+        ],
+    )
+
+    run = client.post("/run", json=respond_email).json()
+    assert run["status"] == "pending_approval"
+
+    # Feedback triggers a re-draft — run pauses again on the second draft.
+    responded = client.post(
+        f"/run/{run['run_id']}/respond", json={"feedback": "make it shorter"}
+    ).json()
+    assert responded["status"] == "pending_approval"

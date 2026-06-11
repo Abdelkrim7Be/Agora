@@ -46,6 +46,10 @@ class ApprovalInput(BaseModel):
     args: dict | None = None
 
 
+class RespondInput(BaseModel):
+    feedback: str
+
+
 class RunResponse(BaseModel):
     run_id: str
     status: str  # "pending_approval" | "completed"
@@ -112,5 +116,15 @@ async def reject(request: Request, run_id: str) -> RunResponse:
     config = await _require_run(graph, run_id)
     result = await graph.ainvoke(
         Command(resume={"type": "reject"}), config
+    )
+    return _format(result, run_id)
+
+
+@app.post("/run/{run_id}/respond", response_model=RunResponse)
+async def respond(request: Request, run_id: str, body: RespondInput) -> RunResponse:
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    result = await graph.ainvoke(
+        Command(resume=[{"type": "response", "args": body.feedback}]), config
     )
     return _format(result, run_id)
