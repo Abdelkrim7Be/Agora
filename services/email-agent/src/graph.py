@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Literal
 
@@ -87,6 +88,8 @@ def _parse_decision(raw) -> tuple[str, object]:
     Fails closed: an unknown or missing type raises rather than defaulting to a
     send — an unparseable approval must never trigger the gated action.
     """
+    if isinstance(raw, str):
+        raw = json.loads(raw)
     d = raw[0] if isinstance(raw, list) else raw
     type_ = d.get("type")
     raw_args = d.get("args")
