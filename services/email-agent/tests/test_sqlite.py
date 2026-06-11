@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langgraph.types import Command
 
 from src.graph import overall_workflow
-from tests.conftest import RESPOND_EMAIL, ai_tool_call
+from src.memory import get_memory, namespace, update_memory
+from tests.conftest import RESPOND_EMAIL, _FakeMemoryLLM, ai_tool_call
 
 
 async def test_paused_run_survives_restart(tmp_path, fake_llms):
@@ -44,3 +47,26 @@ async def test_paused_run_survives_restart(tmp_path, fake_llms):
             )
             assert result.get("__interrupt__") is None
             assert result.get("email_sent") is True
+
+
+async def test_learned_memory_survives_restart(tmp_path):
+    """A preference written through update_memory in one process is readable via
+    get_memory after reconnecting to the same store file — the core S8 promise.
+    Sync memory calls run in a worker thread, mirroring how LangGraph executes
+    sync nodes (calling them on the event loop raises InvalidStateError)."""
+    store_db = str(tmp_path / "store.db")
+    ns = namespace("response_preferences")
+    llm = _FakeMemoryLLM("learned: keep replies short")
+
+    # First "process" — learn a preference.
+    async with AsyncSqliteStore.from_conn_string(store_db) as st1:
+        await st1.setup()
+        await asyncio.to_thread(
+            update_memory, st1, ns, [{"role": "user", "content": "be concise"}], llm
+        )
+
+    # Second "process" — fresh connection, same file: the learning persisted.
+    async with AsyncSqliteStore.from_conn_string(store_db) as st2:
+        await st2.setup()
+        value = await asyncio.to_thread(get_memory, st2, ns, "unused default")
+        assert value == "learned: keep replies short"

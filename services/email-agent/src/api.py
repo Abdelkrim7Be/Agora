@@ -23,6 +23,9 @@ async def lifespan(app: FastAPI):
             # AsyncSqliteStore.aget/aput do NOT auto-run setup — call explicitly.
             await checkpointer.setup()
             await mem_store.setup()
+            # The graph's nodes are sync, so LangGraph runs them in a threadpool where
+            # sync store.get/put works. A future ASYNC node must use aget/aput instead —
+            # a sync store call on the event loop raises InvalidStateError.
             app.state.graph = overall_workflow.compile(
                 checkpointer=checkpointer, store=mem_store
             )
