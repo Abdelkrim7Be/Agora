@@ -18,9 +18,14 @@ class Settings:
     gmail_token_path: str = os.getenv("GMAIL_TOKEN_PATH", "token.json")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
+    poll_interval_minutes: int = int(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     dry_run: bool = os.getenv("AGENT_DRY_RUN", "true").lower() == "true"
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
+    # Durable state files — shared by the API and the poller so a paused run started
+    # by one is resumable by the other (same checkpoints/store on disk).
+    checkpoints_db: str = os.getenv("AGENT_CHECKPOINTS_DB", "checkpoints.db")
+    store_db: str = os.getenv("AGENT_STORE_DB", "store.db")
 
 
 settings = Settings()

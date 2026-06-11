@@ -9,17 +9,16 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langgraph.types import Command
 from pydantic import BaseModel
 
+from src.config import settings
 from src.graph import overall_workflow
-
-# Separate files avoid SQLite "database is locked" when saver and store write concurrently.
-_CHECKPOINTS_DB = "checkpoints.db"
-_STORE_DB = "store.db"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with AsyncSqliteSaver.from_conn_string(_CHECKPOINTS_DB) as checkpointer:
-        async with AsyncSqliteStore.from_conn_string(_STORE_DB) as mem_store:
+    # Separate files avoid SQLite locking between saver and store; shared with the
+    # poller (src/config Settings) so either process can resume the other's runs.
+    async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_db) as checkpointer:
+        async with AsyncSqliteStore.from_conn_string(settings.store_db) as mem_store:
             # AsyncSqliteStore.aget/aput do NOT auto-run setup — call explicitly.
             await checkpointer.setup()
             await mem_store.setup()
