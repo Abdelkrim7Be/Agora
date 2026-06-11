@@ -137,3 +137,33 @@ async def test_pdf_not_downloaded_when_extraction_disabled(mocked_gmail, fake_ll
     await poller.poll_once(_graph(), resource=object())
 
     download_mock.assert_not_called()
+
+
+class _RecordingGraph:
+    """Captures the state passed to the graph so we can assert on injected context."""
+
+    def __init__(self):
+        self.inputs: list[dict] = []
+
+    async def ainvoke(self, state, cfg):
+        self.inputs.append(state)
+        return {}  # no __interrupt__ → run completes
+
+
+async def test_pdf_extracted_and_injected_when_enabled(mocked_gmail, monkeypatch):
+    """Flag ON: poll_once downloads the PDF, extracts text, and folds it into email_thread."""
+    set_unread, _ = mocked_gmail
+    set_unread([_raw_message_with_pdf("m_pdf")])
+
+    monkeypatch.setattr(poller.settings, "extract_attachments", True)
+    monkeypatch.setattr(poller, "download_attachment", lambda *a, **k: b"raw-pdf-bytes")
+    monkeypatch.setattr(poller, "extract_pdf_text", lambda data, max_chars: "INVOICE TOTAL 500")
+
+    graph = _RecordingGraph()
+    await poller.poll_once(graph, resource=object())
+
+    assert len(graph.inputs) == 1
+    thread = graph.inputs[0]["email_input"]["email_thread"]
+    assert "Attachment contents:" in thread
+    assert "INVOICE TOTAL 500" in thread
+    assert "invoice.pdf" in thread  # filename header in the injected block

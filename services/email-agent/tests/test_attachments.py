@@ -192,3 +192,37 @@ def test_extract_pdf_text_truncates_at_max_chars(monkeypatch):
     result = gc.extract_pdf_text(b"fake", max_chars=100)
     assert "…[truncated]" in result
     assert len(result) < 200
+
+
+def _build_pdf(text: str) -> bytes:
+    """Build a minimal but valid single-page PDF with extractable text."""
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\nBT /F1 24 Tf 72 700 Td (%s) Tj ET\nendstream"
+        % (len(text) + 24, text.encode()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for i, body in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (i, body)
+    xref_pos = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for off in offsets:
+        out += b"%010d 00000 n \n" % off
+    out += b"trailer\n<< /Root 1 0 R /Size %d >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objs) + 1,
+        xref_pos,
+    )
+    return out
+
+
+def test_extract_pdf_text_real_pdf():
+    """Exercise real pypdf parsing (not mocked) so API drift is caught."""
+    pdf_bytes = _build_pdf("Invoice total 500 EUR")
+    result = gc.extract_pdf_text(pdf_bytes, max_chars=1000)
+    assert "Invoice total 500 EUR" in result
