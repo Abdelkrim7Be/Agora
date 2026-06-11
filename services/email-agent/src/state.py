@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from typing_extensions import Literal, TypedDict
+from typing_extensions import Literal, NotRequired, TypedDict
 from langgraph.graph import MessagesState
 
 
@@ -23,6 +23,11 @@ class EmailInput(TypedDict):
     to: str
     subject: str
     email_thread: str
+    # Gmail identifiers — present when an email comes from the poller, absent on the
+    # manual /run path. NotRequired keeps that path valid without these fields.
+    email_id: NotRequired[str]
+    gmail_thread_id: NotRequired[str]
+    attachments: NotRequired[list]
 
 
 class StateInput(TypedDict):

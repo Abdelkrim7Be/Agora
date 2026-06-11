@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage
 
+from src.memory import UserPreferences
+
 
 # --- Fake LLMs: let tests drive the real graph deterministically, no Groq calls. ---
 
@@ -36,16 +38,34 @@ class _FakeToolLLM:
         return msg
 
 
+class _FakeMemoryLLM:
+    """Returns a canned UserPreferences so memory updates run offline."""
+
+    def __init__(self, preference_text: str = "updated preference"):
+        self._pref = preference_text
+
+    def invoke(self, _messages):
+        return UserPreferences(
+            chain_of_thought="fake reasoning",
+            user_preferences=self._pref,
+        )
+
+
 @pytest.fixture
 def fake_llms(monkeypatch):
-    """Patch the graph's router + tool LLM so tests run offline and deterministically."""
+    """Patch the graph's router, tool LLM, and memory LLM for offline deterministic tests."""
 
-    def _install(classification: str = "respond", tool_sequence=None):
+    def _install(
+        classification: str = "respond",
+        tool_sequence=None,
+        memory_preference: str = "updated preference",
+    ):
         import src.graph as g
 
         monkeypatch.setattr(g, "llm_router", _FakeRouter(classification))
         if tool_sequence is not None:
             monkeypatch.setattr(g, "llm_with_tools", _FakeToolLLM(tool_sequence))
+        monkeypatch.setattr(g, "llm_memory", _FakeMemoryLLM(memory_preference))
 
     return _install
 

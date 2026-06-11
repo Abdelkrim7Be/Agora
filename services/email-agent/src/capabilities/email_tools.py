@@ -4,7 +4,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from src.capabilities import hitl_approved
-from src.config import SERVICE_ROOT, settings
+from src.config import settings
 
 
 @tool
@@ -17,19 +17,10 @@ def write_email(to: str, subject: str, content: str) -> str:
             "write_email requires human approval — call via the graph API, not directly."
         )
     from langchain_google_community import GmailToolkit
-    from langchain_google_community.gmail.utils import (
-        build_gmail_service,
-        get_google_credentials,
-    )
-    creds = str(SERVICE_ROOT / settings.gmail_credentials_path)
-    token = str(SERVICE_ROOT / settings.gmail_token_path)
-    credentials = get_google_credentials(
-        token_file=token,
-        client_secrets_file=creds,
-        scopes=["https://mail.google.com/"],
-    )
-    resource = build_gmail_service(credentials=credentials)
-    toolkit = GmailToolkit(api_resource=resource)
+
+    from src.gmail_client import gmail_resource
+
+    toolkit = GmailToolkit(api_resource=gmail_resource())
     send_tool = next(t for t in toolkit.get_tools() if t.name == "send_gmail_message")
     return send_tool.invoke({"message": content, "to": [to], "subject": subject})
 

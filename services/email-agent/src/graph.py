@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Literal
 
@@ -7,35 +8,44 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
+from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
 from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
 from src.config import load_config
+from src.gmail_client import format_attachments
+from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.prompts import (
+    MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
     triage_system_prompt,
     triage_user_prompt,
 )
 from src.state import RouterSchema, State, StateInput
-from src.utils import format_email_markdown, parse_email
+from src.utils import format_draft_markdown, format_email_markdown, parse_email
 
 load_dotenv()
 
-# Behavior (persona, triage rules, tone) and capability flags come from config.yaml.
 config = load_config()
 
 tools, tools_prompt = load_capabilities(config.capabilities)
 tools_by_name_map = tools_by_name(tools)
 approval_set = approval_required(config.capabilities)
 
-# Groq is the primary LLM for all agents (see CLAUDE.md).
 llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
 llm_router = llm.with_structured_output(RouterSchema)
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
+llm_memory = llm.with_structured_output(UserPreferences)
 
 
-def llm_call(state: State):
+def llm_call(state: State, store: BaseStore):
     """LLM decides which tool to call to handle the email."""
+    response_prefs = get_memory(
+        store,
+        namespace("response_preferences"),
+        config.agent.response_preferences,
+    )
     return {
         "messages": [
             llm_with_tools.invoke(
@@ -45,7 +55,7 @@ def llm_call(state: State):
                         "content": agent_system_prompt.format(
                             tools_prompt=tools_prompt,
                             background=config.agent.background,
-                            response_preferences=config.agent.response_preferences,
+                            response_preferences=response_prefs,
                         ),
                     }
                 ]
@@ -55,8 +65,60 @@ def llm_call(state: State):
     }
 
 
-def tool_node(state: State):
-    """Execute the tool calls requested by the LLM, pausing for approval on gated tools."""
+def _parse_decision(raw) -> tuple[str, object]:
+    """Normalize the interrupt response from Agent Inbox (list) or REST API (dict).
+
+    Agent Inbox resumes with a list: [{"type": "accept"|"edit"|"ignore"|"response", "args": ...}]
+    REST API resumes with a dict:    {"type": "approve"|"reject", "args": ...}
+
+    Vocabulary mapping:
+    - approve + None args → accept
+    - approve + args dict → edit  (backward-compat: REST /approve carries edited draft directly)
+    - reject             → ignore
+
+    Edit args un-nesting: Agent Inbox wraps as {"action": "...", "args": {...}};
+    REST /approve sends the draft dict flat. Both are resolved to the same flat dict.
+
+    Returns (normalized_type, data) where data is:
+    - accept:   None
+    - edit:     edited args dict
+    - ignore:   None
+    - response: feedback string
+
+    Fails closed: an unknown or missing type raises rather than defaulting to a
+    send — an unparseable approval must never trigger the gated action.
+    """
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    d = raw[0] if isinstance(raw, list) else raw
+    type_ = d.get("type")
+    raw_args = d.get("args")
+
+    if type_ == "approve":
+        type_ = "edit" if raw_args else "accept"
+    elif type_ == "reject":
+        type_ = "ignore"
+
+    if type_ not in ("accept", "edit", "ignore", "response"):
+        raise ValueError(f"Unrecognized interrupt decision type: {type_!r}")
+
+    if type_ == "edit":
+        # Agent Inbox: {"action": "write_email", "args": {...}} — un-nest the inner args.
+        # REST /approve: args is already the flat draft dict.
+        if isinstance(raw_args, dict) and "args" in raw_args and "action" in raw_args:
+            data = raw_args["args"]
+        else:
+            data = raw_args
+    elif type_ == "response":
+        data = raw_args
+    else:
+        data = None
+
+    return type_, data
+
+
+def tool_node(state: State, store: BaseStore):
+    """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
     sent = False
     for tool_call in state["messages"][-1].tool_calls:
@@ -64,26 +126,97 @@ def tool_node(state: State):
         args = tool_call["args"]
 
         if name in approval_set:
-            # Pause the graph and surface the pending action to the caller.
-            decision = interrupt(
-                {
-                    "action": name,
-                    "args": args,
-                    "tool_call_id": tool_call["id"],
-                    "description": f"Approve the '{name}' action?",
-                }
+            description = (
+                format_draft_markdown(args) if name == "write_email" else f"Approve '{name}'?"
             )
-            if decision.get("type") == "reject":
-                result.append(
-                    {
-                        "role": "tool",
-                        "content": f"Action '{name}' was rejected by the user. Do not retry it; call Done.",
-                        "tool_call_id": tool_call["id"],
-                    }
+            request = {
+                "action_request": {"action": name, "args": args},
+                "config": {
+                    "allow_accept": True,
+                    "allow_edit": True,
+                    "allow_respond": True,
+                    "allow_ignore": True,
+                },
+                "description": description,
+            }
+            raw = interrupt([request])
+            decision_type, decision_data = _parse_decision(raw)
+
+            if decision_type == "ignore":
+                # Answer the tool call FIRST (dangling-tool-call discipline: Groq
+                # rejects an unanswered tool_call in the message sequence).
+                result.append({
+                    "role": "tool",
+                    "content": f"User ignored the '{name}' draft. Ignore this email and call Done.",
+                    "tool_call_id": tool_call["id"],
+                })
+                update_memory(
+                    store,
+                    namespace("triage_preferences"),
+                    list(state["messages"])
+                    + result
+                    + [{
+                        "role": "user",
+                        "content": (
+                            f"The user ignored the draft '{name}'. "
+                            "Emails like this should not be classified as respond. "
+                            f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                        ),
+                    }],
+                    llm_memory,
                 )
                 continue
-            # Approved — allow the caller to override args (e.g. an edited draft).
-            args = decision.get("args") or args
+
+            if decision_type == "response":
+                feedback = decision_data
+                result.append({
+                    "role": "tool",
+                    "content": f"User gave feedback to incorporate: {feedback}",
+                    "tool_call_id": tool_call["id"],
+                })
+                update_memory(
+                    store,
+                    namespace("response_preferences"),
+                    list(state["messages"])
+                    + result
+                    + [{
+                        "role": "user",
+                        "content": (
+                            f"User gave feedback on the draft: {feedback}. "
+                            f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                        ),
+                    }],
+                    llm_memory,
+                )
+                continue
+
+            if decision_type == "edit":
+                edited_args = decision_data or args
+                if edited_args != args:
+                    # Rewrite the AI message's tool_call args so message history
+                    # reflects what actually ran (immutable copy — reference pattern).
+                    ai_message = state["messages"][-1]
+                    updated_tool_calls = [
+                        tc for tc in ai_message.tool_calls if tc["id"] != tool_call["id"]
+                    ] + [{"type": "tool_call", "name": name, "args": edited_args, "id": tool_call["id"]}]
+                    result.append(ai_message.model_copy(update={"tool_calls": updated_tool_calls}))
+                    update_memory(
+                        store,
+                        namespace("response_preferences"),
+                        [{
+                            "role": "user",
+                            "content": (
+                                f"The user edited the email draft. "
+                                f"Original: {args}. "
+                                f"Edited: {edited_args}. "
+                                f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                            ),
+                        }],
+                        llm_memory,
+                    )
+                args = edited_args
+
+            # accept and edit fall through to tool execution below
 
         tool = tools_by_name_map[name]
         if name in approval_set:
@@ -124,17 +257,27 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
     return END
 
 
-def triage_router(state: State) -> Command[Literal["llm_call", "__end__"]]:
+def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
     author, to, subject, email_thread = parse_email(state["email_input"])
+    atts = state["email_input"].get("attachments") or []
+    att_str = format_attachments(atts)
+
+    triage_instructions = get_memory(
+        store,
+        namespace("triage_preferences"),
+        config.agent.triage_instructions,
+    )
+
     system_prompt = triage_system_prompt.format(
         background=config.agent.background,
-        triage_instructions=config.agent.triage_instructions,
+        triage_instructions=triage_instructions,
     )
     user_prompt = triage_user_prompt.format(
-        author=author, to=to, subject=subject, email_thread=email_thread
+        author=author, to=to, subject=subject, email_thread=email_thread,
+        attachments=att_str or "none",
     )
-    email_markdown = format_email_markdown(subject, author, to, email_thread)
+    email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
 
     result = llm_router.invoke(
         [
@@ -170,9 +313,6 @@ def triage_router(state: State) -> Command[Literal["llm_call", "__end__"]]:
     return Command(goto=goto, update=update)
 
 
-# Single flat workflow: triage, then the llm <-> tools loop. Keeping the response
-# agent's nodes in this graph (rather than a nested subgraph) lets interrupts in
-# tool_node pause and resume reliably against the checkpointer below.
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
     .add_node("triage_router", triage_router)
@@ -191,13 +331,9 @@ overall_workflow = (
     )
 )
 
-# MemorySaver persists run state so interrupts can pause/resume within a process.
-# (Swap for SqliteSaver/Postgres when runs must survive a restart — see Slice 5+.)
-# Under LangGraph Studio / Platform (`langgraph dev`) persistence is injected by the
-# runtime, which rejects a custom checkpointer — so only attach ours standalone.
 _under_langgraph_platform = bool(os.environ.get("LANGSMITH_LANGGRAPH_API_VARIANT"))
 checkpointer = None if _under_langgraph_platform else MemorySaver()
-email_assistant = overall_workflow.compile(checkpointer=checkpointer)
+store = None if _under_langgraph_platform else InMemoryStore()
+email_assistant = overall_workflow.compile(checkpointer=checkpointer, store=store)
 
-# Backwards-compatible alias for callers importing `graph`.
 graph = email_assistant

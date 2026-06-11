@@ -38,6 +38,12 @@ build/
 langgraph.db
 langgraph.db-shm
 langgraph.db-wal
+checkpoints.db
+checkpoints.db-shm
+checkpoints.db-wal
+store.db
+store.db-shm
+store.db-wal
 
 # IDE
 .vscode/
