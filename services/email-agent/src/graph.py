@@ -22,7 +22,7 @@ from src.prompts import (
     triage_user_prompt,
 )
 from src.state import RouterSchema, State, StateInput
-from src.utils import format_email_markdown, parse_email
+from src.utils import format_draft_markdown, format_email_markdown, parse_email
 
 load_dotenv()
 
@@ -64,6 +64,50 @@ def llm_call(state: State, store: BaseStore):
     }
 
 
+def _parse_decision(raw) -> tuple[str, object]:
+    """Normalize the interrupt response from Agent Inbox (list) or REST API (dict).
+
+    Agent Inbox resumes with a list: [{"type": "accept"|"edit"|"ignore"|"response", "args": ...}]
+    REST API resumes with a dict:    {"type": "approve"|"reject", "args": ...}
+
+    Vocabulary mapping:
+    - approve + None args → accept
+    - approve + args dict → edit  (backward-compat: REST /approve carries edited draft directly)
+    - reject             → ignore
+
+    Edit args un-nesting: Agent Inbox wraps as {"action": "...", "args": {...}};
+    REST /approve sends the draft dict flat. Both are resolved to the same flat dict.
+
+    Returns (normalized_type, data) where data is:
+    - accept:   None
+    - edit:     edited args dict
+    - ignore:   None
+    - response: feedback string
+    """
+    d = raw[0] if isinstance(raw, list) else raw
+    type_ = d.get("type", "accept")
+    raw_args = d.get("args")
+
+    if type_ == "approve":
+        type_ = "edit" if raw_args else "accept"
+    elif type_ == "reject":
+        type_ = "ignore"
+
+    if type_ == "edit":
+        # Agent Inbox: {"action": "write_email", "args": {...}} — un-nest the inner args.
+        # REST /approve: args is already the flat draft dict.
+        if isinstance(raw_args, dict) and "args" in raw_args and "action" in raw_args:
+            data = raw_args["args"]
+        else:
+            data = raw_args
+    elif type_ == "response":
+        data = raw_args
+    else:
+        data = None
+
+    return type_, data
+
+
 def tool_node(state: State, store: BaseStore):
     """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
@@ -73,52 +117,84 @@ def tool_node(state: State, store: BaseStore):
         args = tool_call["args"]
 
         if name in approval_set:
-            decision = interrupt(
-                {
-                    "action": name,
-                    "args": args,
-                    "tool_call_id": tool_call["id"],
-                    "description": f"Approve the '{name}' action?",
-                }
+            description = (
+                format_draft_markdown(args) if name == "write_email" else f"Approve '{name}'?"
             )
-            if decision.get("type") == "reject":
-                # Answer the tool call FIRST so the message sequence stays valid
-                # (an assistant tool_call must be followed by a tool message — Groq
-                # rejects a dangling call). Only then learn from the rejection.
-                rejection = {
+            request = {
+                "action_request": {"action": name, "args": args},
+                "config": {
+                    "allow_accept": True,
+                    "allow_edit": True,
+                    "allow_respond": True,
+                    "allow_ignore": True,
+                },
+                "description": description,
+            }
+            raw = interrupt([request])
+            decision_type, decision_data = _parse_decision(raw)
+
+            if decision_type == "ignore":
+                # Answer the tool call FIRST (dangling-tool-call discipline: Groq
+                # rejects an unanswered tool_call in the message sequence).
+                result.append({
                     "role": "tool",
-                    "content": f"Action '{name}' was rejected by the user. Do not retry it; call Done.",
+                    "content": f"User ignored the '{name}' draft. Ignore this email and call Done.",
                     "tool_call_id": tool_call["id"],
-                }
-                result.append(rejection)
-                # Teach: this kind of email should not be classified as respond.
+                })
                 update_memory(
                     store,
                     namespace("triage_preferences"),
                     list(state["messages"])
                     + result
-                    + [
-                        {
-                            "role": "user",
-                            "content": (
-                                f"The user rejected the draft '{name}'. "
-                                "Emails like this should not be classified as respond. "
-                                f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
-                            ),
-                        }
-                    ],
+                    + [{
+                        "role": "user",
+                        "content": (
+                            f"The user ignored the draft '{name}'. "
+                            "Emails like this should not be classified as respond. "
+                            f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                        ),
+                    }],
                     llm_memory,
                 )
                 continue
 
-            edited_args = decision.get("args")
-            if edited_args and edited_args != args:
-                # Teach: the draft style didn't match preferences — capture the diff.
+            if decision_type == "response":
+                feedback = decision_data
+                result.append({
+                    "role": "tool",
+                    "content": f"User gave feedback to incorporate: {feedback}",
+                    "tool_call_id": tool_call["id"],
+                })
                 update_memory(
                     store,
                     namespace("response_preferences"),
-                    [
-                        {
+                    list(state["messages"])
+                    + result
+                    + [{
+                        "role": "user",
+                        "content": (
+                            f"User gave feedback on the draft: {feedback}. "
+                            f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
+                        ),
+                    }],
+                    llm_memory,
+                )
+                continue
+
+            if decision_type == "edit":
+                edited_args = decision_data or args
+                if edited_args != args:
+                    # Rewrite the AI message's tool_call args so message history
+                    # reflects what actually ran (immutable copy — reference pattern).
+                    ai_message = state["messages"][-1]
+                    updated_tool_calls = [
+                        tc for tc in ai_message.tool_calls if tc["id"] != tool_call["id"]
+                    ] + [{"type": "tool_call", "name": name, "args": edited_args, "id": tool_call["id"]}]
+                    result.append(ai_message.model_copy(update={"tool_calls": updated_tool_calls}))
+                    update_memory(
+                        store,
+                        namespace("response_preferences"),
+                        [{
                             "role": "user",
                             "content": (
                                 f"The user edited the email draft. "
@@ -126,11 +202,12 @@ def tool_node(state: State, store: BaseStore):
                                 f"Edited: {edited_args}. "
                                 f"{MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT}"
                             ),
-                        }
-                    ],
-                    llm_memory,
-                )
-            args = edited_args or args
+                        }],
+                        llm_memory,
+                    )
+                args = edited_args
+
+            # accept and edit fall through to tool execution below
 
         tool = tools_by_name_map[name]
         if name in approval_set:

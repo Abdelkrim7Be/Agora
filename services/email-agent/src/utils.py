@@ -33,6 +33,14 @@ def format_email_markdown(subject, author, to, email_thread, attachments=None) -
 """
 
 
+def format_draft_markdown(args: dict) -> str:
+    """Render a write_email tool-call args as a markdown preview for the approval UI."""
+    to = args.get("to", "")
+    subject = args.get("subject", "")
+    content = args.get("content", "")
+    return f"**To**: {to}\n**Subject**: {subject}\n\n{content}"
+
+
 def extract_tool_call_names(messages: List[Any]) -> List[str]:
     """Collect the names of every tool call across a list of messages."""
     names: List[str] = []

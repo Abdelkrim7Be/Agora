@@ -59,7 +59,7 @@ def test_gated_action_pauses_then_approve_executes(fake_llms, respond_email):
     cfg = _cfg()
 
     paused = email_assistant.invoke({"email_input": respond_email}, cfg)
-    assert paused["__interrupt__"][0].value["action"] == "write_email"
+    assert paused["__interrupt__"][0].value[0]["action_request"]["action"] == "write_email"
     assert not _email_was_sent(paused["messages"])
 
     done = email_assistant.invoke(Command(resume={"type": "approve", "args": None}), cfg)
@@ -94,7 +94,7 @@ def test_api_run_then_approve(client, fake_llms, respond_email):
 
     run = client.post("/run", json=respond_email).json()
     assert run["status"] == "pending_approval"
-    assert run["pending_action"]["action"] == "write_email"
+    assert run["pending_action"][0]["action_request"]["action"] == "write_email"
 
     approved = client.post(f"/run/{run['run_id']}/approve", json={}).json()
     assert approved["status"] == "completed"

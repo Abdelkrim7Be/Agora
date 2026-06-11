@@ -50,7 +50,7 @@ class RunResponse(BaseModel):
     run_id: str
     status: str  # "pending_approval" | "completed"
     classification: str | None = None
-    pending_action: dict | None = None
+    pending_action: list | None = None  # list of Agent Inbox request objects when paused
 
 
 def _thread_config(run_id: str) -> dict:
