@@ -8,6 +8,7 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from src.config import settings
 from src.gmail_client import (
+    fetch_thread,
     fetch_unread,
     get_message,
     gmail_resource,
@@ -30,7 +31,9 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
     outcomes: list[tuple] = []
     for ref in fetch_unread(max_results, resource=resource):
         msg_id = ref["id"]
-        email_input = gmail_to_email_input(get_message(msg_id, resource=resource))
+        message = get_message(msg_id, resource=resource)
+        thread = fetch_thread(message["threadId"], resource=resource)
+        email_input = gmail_to_email_input(message, thread_messages=thread)
         run_id = str(uuid.uuid4())
         cfg = {"configurable": {"thread_id": run_id}}
 

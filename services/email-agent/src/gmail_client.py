@@ -52,6 +52,13 @@ def mark_as_read(msg_id: str, resource=None) -> None:
     ).execute()
 
 
+def fetch_thread(thread_id: str, resource=None) -> list[dict]:
+    """Return all messages in a Gmail thread (oldest first, as the API orders them)."""
+    resource = resource or gmail_resource()
+    thread = resource.users().threads().get(userId="me", id=thread_id).execute()
+    return thread.get("messages", [])
+
+
 def _extract_message_part(payload: dict) -> str:
     """Pull the plain-text body out of a Gmail message payload, preferring text/plain."""
     if payload.get("parts"):
@@ -77,14 +84,49 @@ def _header(headers: list[dict], name: str, default: str) -> str:
     return next((h["value"] for h in headers if h["name"] == name), default)
 
 
-def gmail_to_email_input(message: dict) -> EmailInput:
-    """Map a raw Gmail message into the agent's EmailInput shape."""
+def format_thread(
+    messages: list[dict],
+    max_messages: int | None = None,
+    max_chars_per_message: int = 2000,
+) -> str:
+    """Render a thread's messages chronologically as labeled blocks.
+
+    Keeps the most-recent `max_messages` (token budget; defaults to the configured
+    cap) and truncates each body so one long message can't blow the context window.
+    """
+    limit = max_messages if max_messages is not None else settings.thread_max_messages
+    if limit:
+        messages = messages[-limit:]
+
+    blocks = []
+    for m in messages:
+        headers = m["payload"]["headers"]
+        author = _header(headers, "From", "Unknown Sender")
+        date = _header(headers, "Date", "")
+        body = _extract_message_part(m["payload"])
+        if len(body) > max_chars_per_message:
+            body = body[:max_chars_per_message] + "\n…[truncated]"
+        blocks.append(f"From: {author}\nDate: {date}\n\n{body}")
+    return "\n\n---\n\n".join(blocks)
+
+
+def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = None) -> EmailInput:
+    """Map a raw Gmail message into the agent's EmailInput shape.
+
+    Headers (author/to/subject) come from the triggering `message`; when
+    `thread_messages` is given, `email_thread` carries the full conversation history
+    so the agent understands prior exchanges before drafting.
+    """
     headers = message["payload"]["headers"]
+    if thread_messages:
+        email_thread = format_thread(thread_messages)
+    else:
+        email_thread = _extract_message_part(message["payload"])
     return {
         "author": _header(headers, "From", "Unknown Sender"),
         "to": _header(headers, "To", "Unknown Recipient"),
         "subject": _header(headers, "Subject", "No Subject"),
-        "email_thread": _extract_message_part(message["payload"]),
+        "email_thread": email_thread,
         "email_id": message["id"],
         "gmail_thread_id": message["threadId"],
     }

@@ -19,6 +19,8 @@ class Settings:
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
     poll_interval_minutes: int = int(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
+    # Cap how many of a thread's most-recent messages are fed as context (token budget).
+    thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = os.getenv("AGENT_DRY_RUN", "true").lower() == "true"
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))

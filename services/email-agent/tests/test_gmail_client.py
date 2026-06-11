@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 
-from src.gmail_client import _extract_message_part, gmail_to_email_input
+from src.gmail_client import _extract_message_part, format_thread, gmail_to_email_input
 
 
 def _b64(text: str) -> str:
@@ -79,3 +79,57 @@ def test_gmail_to_email_input_defaults_missing_headers():
     assert result["author"] == "Unknown Sender"
     assert result["to"] == "Unknown Recipient"
     assert result["subject"] == "No Subject"
+
+
+# --- format_thread / thread-aware mapping (S10) ---
+
+def _thread_msg(author: str, date: str, body: str) -> dict:
+    return {
+        "payload": {
+            "headers": [
+                {"name": "From", "value": author},
+                {"name": "Date", "value": date},
+            ],
+            "body": {"data": _b64(body)},
+        }
+    }
+
+
+def test_format_thread_renders_all_messages_chronologically():
+    msgs = [
+        _thread_msg("alice@x.com", "Mon", "first message"),
+        _thread_msg("me@x.com", "Tue", "my reply"),
+        _thread_msg("alice@x.com", "Wed", "follow up"),
+    ]
+    out = format_thread(msgs)
+    assert out.index("first message") < out.index("my reply") < out.index("follow up")
+    assert out.count("---") == 2  # two separators between three blocks
+    assert "From: alice@x.com" in out and "Date: Tue" in out
+
+
+def test_format_thread_caps_to_most_recent_messages():
+    msgs = [_thread_msg("a@x.com", f"d{i}", f"body {i}") for i in range(5)]
+    out = format_thread(msgs, max_messages=2)
+    assert "body 0" not in out and "body 2" not in out
+    assert "body 3" in out and "body 4" in out
+
+
+def test_format_thread_truncates_long_bodies():
+    msgs = [_thread_msg("a@x.com", "d", "x" * 5000)]
+    out = format_thread(msgs, max_chars_per_message=100)
+    assert "…[truncated]" in out
+    assert len(out) < 500
+
+
+def test_gmail_to_email_input_uses_full_thread_when_provided():
+    trigger = _message(HEADERS, {"body": {"data": _b64("latest message")}}, msg_id="abc", thread_id="thr9")
+    thread = [
+        _thread_msg("alice@x.com", "Mon", "original question"),
+        _thread_msg("me@x.com", "Tue", "my earlier answer"),
+    ]
+    result = gmail_to_email_input(trigger, thread_messages=thread)
+    # Headers still from the triggering message; thread carries prior turns.
+    assert result["subject"] == "Quick question"
+    assert result["email_id"] == "abc"
+    assert "original question" in result["email_thread"]
+    assert "my earlier answer" in result["email_thread"]

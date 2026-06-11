@@ -42,6 +42,12 @@ def mocked_gmail(monkeypatch):
         )
 
     monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: messages[msg_id])
+    # Single-message thread — keeps poll_once behavior assertions focused.
+    monkeypatch.setattr(
+        poller,
+        "fetch_thread",
+        lambda thread_id, resource=None: [m for m in messages.values() if m["threadId"] == thread_id],
+    )
     monkeypatch.setattr(poller, "mark_as_read", lambda msg_id, resource=None: marked.append(msg_id))
     return set_unread, marked
 
