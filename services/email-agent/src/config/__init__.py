@@ -28,6 +28,9 @@ class Settings:
     # by one is resumable by the other (same checkpoints/store on disk).
     checkpoints_db: str = os.getenv("AGENT_CHECKPOINTS_DB", "checkpoints.db")
     store_db: str = os.getenv("AGENT_STORE_DB", "store.db")
+    # PDF text extraction (gated — default off to avoid downloading large files).
+    extract_attachments: bool = os.getenv("AGENT_EXTRACT_ATTACHMENTS", "false").lower() == "true"
+    attachment_max_chars: int = int(os.getenv("AGENT_ATTACHMENT_MAX_CHARS", "3000"))
 
 
 settings = Settings()

@@ -8,6 +8,8 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from src.config import settings
 from src.gmail_client import (
+    download_attachment,
+    extract_pdf_text,
     fetch_thread,
     fetch_unread,
     get_message,
@@ -34,6 +36,25 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
         message = get_message(msg_id, resource=resource)
         thread = fetch_thread(message["threadId"], resource=resource)
         email_input = gmail_to_email_input(message, thread_messages=thread)
+
+        if settings.extract_attachments:
+            pdf_blocks = []
+            for att in email_input.get("attachments", []):
+                if att["mime_type"] == "application/pdf" and att.get("attachment_id"):
+                    try:
+                        raw = download_attachment(msg_id, att["attachment_id"], resource=resource)
+                        text = extract_pdf_text(raw, settings.attachment_max_chars)
+                        if text:
+                            pdf_blocks.append(f"--- {att['filename']} ---\n{text}")
+                    except Exception:
+                        pass
+            if pdf_blocks:
+                extra = "\n\n".join(pdf_blocks)
+                email_input = {
+                    **email_input,
+                    "email_thread": email_input["email_thread"] + "\n\nAttachment contents:\n" + extra,
+                }
+
         run_id = str(uuid.uuid4())
         cfg = {"configurable": {"thread_id": run_id}}
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+from unittest.mock import MagicMock
 
+import src.gmail_client as gc
 from src.gmail_client import extract_attachments, format_attachments, gmail_to_email_input
 from src.utils import format_email_markdown
 
@@ -160,3 +162,33 @@ def test_format_email_markdown_omits_attachments_line_when_none():
 def test_format_email_markdown_omits_attachments_line_when_empty_list():
     out = format_email_markdown("Test Subject", "from@x.com", "to@x.com", "body text", attachments=[])
     assert "**Attachments**:" not in out
+
+
+# --- extract_pdf_text (mocked pypdf) ---
+
+def test_extract_pdf_text_returns_page_text(monkeypatch):
+    """extract_pdf_text joins text from all pages."""
+    mock_pypdf = MagicMock()
+    mock_reader = MagicMock()
+    mock_reader.pages = [
+        MagicMock(extract_text=MagicMock(return_value="Page one content")),
+        MagicMock(extract_text=MagicMock(return_value="Page two content")),
+    ]
+    mock_pypdf.PdfReader.return_value = mock_reader
+    monkeypatch.setattr(gc, "_pypdf", mock_pypdf)
+
+    result = gc.extract_pdf_text(b"fake pdf bytes", max_chars=1000)
+    assert "Page one content" in result
+    assert "Page two content" in result
+
+
+def test_extract_pdf_text_truncates_at_max_chars(monkeypatch):
+    mock_pypdf = MagicMock()
+    mock_reader = MagicMock()
+    mock_reader.pages = [MagicMock(extract_text=MagicMock(return_value="x" * 5000))]
+    mock_pypdf.PdfReader.return_value = mock_reader
+    monkeypatch.setattr(gc, "_pypdf", mock_pypdf)
+
+    result = gc.extract_pdf_text(b"fake", max_chars=100)
+    assert "…[truncated]" in result
+    assert len(result) < 200

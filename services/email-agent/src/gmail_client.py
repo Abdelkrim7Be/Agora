@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import base64
 
+try:
+    import pypdf as _pypdf
+except ImportError:
+    _pypdf = None  # type: ignore[assignment]
+
 from src.config import SERVICE_ROOT, settings
 from src.state import EmailInput
 
@@ -57,6 +62,33 @@ def fetch_thread(thread_id: str, resource=None) -> list[dict]:
     resource = resource or gmail_resource()
     thread = resource.users().threads().get(userId="me", id=thread_id).execute()
     return thread.get("messages", [])
+
+
+def download_attachment(message_id: str, attachment_id: str, resource=None) -> bytes:
+    """Download a raw Gmail attachment by id and return decoded bytes."""
+    resource = resource or gmail_resource()
+    data = (
+        resource.users()
+        .messages()
+        .attachments()
+        .get(userId="me", messageId=message_id, id=attachment_id)
+        .execute()
+    )
+    return base64.urlsafe_b64decode(data["data"])
+
+
+def extract_pdf_text(data: bytes, max_chars: int) -> str:
+    """Extract text from PDF bytes, capped at max_chars characters."""
+    from io import BytesIO
+
+    if _pypdf is None:
+        return ""
+    reader = _pypdf.PdfReader(BytesIO(data))
+    text_parts = [page.extract_text() or "" for page in reader.pages]
+    full_text = "\n".join(text_parts)
+    if len(full_text) > max_chars:
+        full_text = full_text[:max_chars] + "\n…[truncated]"
+    return full_text
 
 
 def _extract_message_part(payload: dict) -> str:

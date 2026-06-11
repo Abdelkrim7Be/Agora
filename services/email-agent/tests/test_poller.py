@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from unittest.mock import MagicMock
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -9,6 +10,31 @@ from langgraph.store.memory import InMemoryStore
 import src.poller as poller
 from src.graph import overall_workflow
 from tests.conftest import ai_tool_call
+
+
+def _raw_message_with_pdf(msg_id: str) -> dict:
+    """Message with a PDF attachment part to test gating logic."""
+    body_data = base64.urlsafe_b64encode(b"see attached").decode()
+    return {
+        "id": msg_id,
+        "threadId": f"thread-{msg_id}",
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [
+                {"name": "From", "value": "alice@example.com"},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Subject", "value": "Invoice attached"},
+            ],
+            "parts": [
+                {"mimeType": "text/plain", "filename": "", "body": {"data": body_data}},
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "invoice.pdf",
+                    "body": {"attachmentId": "att_abc", "size": 50000},
+                },
+            ],
+        },
+    }
 
 
 def _raw_message(msg_id: str, subject: str, body: str) -> dict:
@@ -96,3 +122,18 @@ async def test_poll_once_empty_inbox(mocked_gmail, fake_llms):
 
     assert outcomes == []
     assert marked == []
+
+
+async def test_pdf_not_downloaded_when_extraction_disabled(mocked_gmail, fake_llms, monkeypatch):
+    """download_attachment must never be called when AGENT_EXTRACT_ATTACHMENTS is false."""
+    set_unread, _ = mocked_gmail
+    set_unread([_raw_message_with_pdf("m_pdf")])
+    fake_llms(classification="ignore")
+
+    download_mock = MagicMock()
+    monkeypatch.setattr(poller, "download_attachment", download_mock)
+    monkeypatch.setattr(poller.settings, "extract_attachments", False)
+
+    await poller.poll_once(_graph(), resource=object())
+
+    download_mock.assert_not_called()
