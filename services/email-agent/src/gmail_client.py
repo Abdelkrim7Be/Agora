@@ -93,9 +93,14 @@ def format_thread(
 
     Keeps the most-recent `max_messages` (token budget; defaults to the configured
     cap) and truncates each body so one long message can't blow the context window.
+    A non-positive cap (<= 0) means no limit — include the whole thread.
     """
+    # Sort by internalDate so chronological order doesn't depend on the API's
+    # ordering. Gmail returns oldest-first today, but this makes it a guarantee.
+    messages = sorted(messages, key=lambda m: int(m.get("internalDate", 0)))
+
     limit = max_messages if max_messages is not None else settings.thread_max_messages
-    if limit:
+    if limit and limit > 0:
         messages = messages[-limit:]
 
     blocks = []

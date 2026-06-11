@@ -83,8 +83,8 @@ def test_gmail_to_email_input_defaults_missing_headers():
 
 # --- format_thread / thread-aware mapping (S10) ---
 
-def _thread_msg(author: str, date: str, body: str) -> dict:
-    return {
+def _thread_msg(author: str, date: str, body: str, internal_date: str | None = None) -> dict:
+    msg = {
         "payload": {
             "headers": [
                 {"name": "From", "value": author},
@@ -93,6 +93,9 @@ def _thread_msg(author: str, date: str, body: str) -> dict:
             "body": {"data": _b64(body)},
         }
     }
+    if internal_date is not None:
+        msg["internalDate"] = internal_date
+    return msg
 
 
 def test_format_thread_renders_all_messages_chronologically():
@@ -119,6 +122,23 @@ def test_format_thread_truncates_long_bodies():
     out = format_thread(msgs, max_chars_per_message=100)
     assert "…[truncated]" in out
     assert len(out) < 500
+
+
+def test_format_thread_sorts_by_internal_date():
+    # Supplied out of order; internalDate must drive chronological rendering.
+    msgs = [
+        _thread_msg("a@x.com", "Wed", "third", internal_date="3000"),
+        _thread_msg("a@x.com", "Mon", "first", internal_date="1000"),
+        _thread_msg("a@x.com", "Tue", "second", internal_date="2000"),
+    ]
+    out = format_thread(msgs)
+    assert out.index("first") < out.index("second") < out.index("third")
+
+
+def test_format_thread_non_positive_cap_means_unlimited():
+    msgs = [_thread_msg("a@x.com", f"d{i}", f"body {i}") for i in range(5)]
+    out = format_thread(msgs, max_messages=0)
+    assert all(f"body {i}" in out for i in range(5))
 
 
 def test_gmail_to_email_input_uses_full_thread_when_provided():
