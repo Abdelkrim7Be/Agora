@@ -13,6 +13,7 @@ from langgraph.types import Command, interrupt
 
 from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
 from src.config import load_config
+from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
@@ -173,6 +174,8 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
 def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
     author, to, subject, email_thread = parse_email(state["email_input"])
+    atts = state["email_input"].get("attachments") or []
+    att_str = format_attachments(atts)
 
     triage_instructions = get_memory(
         store,
@@ -185,9 +188,10 @@ def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call",
         triage_instructions=triage_instructions,
     )
     user_prompt = triage_user_prompt.format(
-        author=author, to=to, subject=subject, email_thread=email_thread
+        author=author, to=to, subject=subject, email_thread=email_thread,
+        attachments=att_str or "none",
     )
-    email_markdown = format_email_markdown(subject, author, to, email_thread)
+    email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
 
     result = llm_router.invoke(
         [

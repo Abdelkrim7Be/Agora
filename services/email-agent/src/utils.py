@@ -13,15 +13,21 @@ def parse_email(email_input: dict) -> tuple[str, str, str, str]:
     )
 
 
-def format_email_markdown(subject, author, to, email_thread) -> str:
+def format_email_markdown(subject, author, to, email_thread, attachments=None) -> str:
     """Format email details into a readable markdown block."""
+    att_section = ""
+    if attachments:
+        from src.gmail_client import format_attachments
+        att_str = format_attachments(attachments)
+        if att_str:
+            att_section = f"**Attachments**: {att_str}\n\n"
     return f"""
 
 **Subject**: {subject}
 **From**: {author}
 **To**: {to}
 
-{email_thread}
+{att_section}{email_thread}
 
 ---
 """

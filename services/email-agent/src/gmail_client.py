@@ -80,6 +80,38 @@ def _extract_message_part(payload: dict) -> str:
     return ""
 
 
+def _walk_for_attachments(part: dict, results: list) -> None:
+    filename = part.get("filename", "")
+    if filename:
+        results.append({
+            "filename": filename,
+            "mime_type": part.get("mimeType", ""),
+            "size": part.get("body", {}).get("size", 0),
+            "attachment_id": part.get("body", {}).get("attachmentId"),
+        })
+    for child in part.get("parts", []):
+        _walk_for_attachments(child, results)
+
+
+def extract_attachments(payload: dict) -> list[dict]:
+    """Collect attachment metadata from a Gmail message payload (recursive walk)."""
+    results: list[dict] = []
+    _walk_for_attachments(payload, results)
+    return results
+
+
+def format_attachments(attachments: list[dict]) -> str:
+    """Render attachment list as a single-line summary, or '' when empty."""
+    if not attachments:
+        return ""
+    parts = []
+    for att in attachments:
+        size = att.get("size") or 0
+        size_str = f"{size // 1024} KB" if size >= 1024 else f"{size} B"
+        parts.append(f"{att['filename']} ({att['mime_type']}, {size_str})")
+    return ", ".join(parts)
+
+
 def _header(headers: list[dict], name: str, default: str) -> str:
     return next((h["value"] for h in headers if h["name"] == name), default)
 
@@ -134,4 +166,5 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "email_thread": email_thread,
         "email_id": message["id"],
         "gmail_thread_id": message["threadId"],
+        "attachments": extract_attachments(message["payload"]),
     }

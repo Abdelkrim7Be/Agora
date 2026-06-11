@@ -27,6 +27,7 @@ class EmailInput(TypedDict):
     # manual /run path. NotRequired keeps that path valid without these fields.
     email_id: NotRequired[str]
     gmail_thread_id: NotRequired[str]
+    attachments: NotRequired[list]
 
 
 class StateInput(TypedDict):

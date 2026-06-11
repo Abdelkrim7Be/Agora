@@ -31,6 +31,7 @@ Please determine how to handle the below email thread:
 From: {author}
 To: {to}
 Subject: {subject}
+Attachments: {attachments}
 {email_thread}"""
 
 # Response agent system prompt (email-only; calendar tools added in a later slice).
