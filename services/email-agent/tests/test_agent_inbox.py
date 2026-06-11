@@ -57,8 +57,15 @@ def test_parse_decision_response_passes_feedback_string():
     assert data == "make it shorter"
 
 
-def test_parse_decision_dict_no_type_defaults_to_accept():
-    assert _parse_decision({}) == ("accept", None)
+def test_parse_decision_missing_type_fails_closed():
+    # An unparseable approval must never fall through to a send.
+    with pytest.raises(ValueError):
+        _parse_decision({})
+
+
+def test_parse_decision_unknown_type_fails_closed():
+    with pytest.raises(ValueError):
+        _parse_decision([{"type": "bogus"}])
 
 
 # --- Interrupt payload shape ---

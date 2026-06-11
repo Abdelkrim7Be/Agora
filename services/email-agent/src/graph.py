@@ -83,15 +83,21 @@ def _parse_decision(raw) -> tuple[str, object]:
     - edit:     edited args dict
     - ignore:   None
     - response: feedback string
+
+    Fails closed: an unknown or missing type raises rather than defaulting to a
+    send — an unparseable approval must never trigger the gated action.
     """
     d = raw[0] if isinstance(raw, list) else raw
-    type_ = d.get("type", "accept")
+    type_ = d.get("type")
     raw_args = d.get("args")
 
     if type_ == "approve":
         type_ = "edit" if raw_args else "accept"
     elif type_ == "reject":
         type_ = "ignore"
+
+    if type_ not in ("accept", "edit", "ignore", "response"):
+        raise ValueError(f"Unrecognized interrupt decision type: {type_!r}")
 
     if type_ == "edit":
         # Agent Inbox: {"action": "write_email", "args": {...}} — un-nest the inner args.
