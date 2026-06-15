@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Classification = Literal["benign", "suspicious", "malicious"]
+Decision = Literal["allow", "deny", "hitl"]
 
 
 class SanitizeRequest(BaseModel):
@@ -20,6 +21,17 @@ class SanitizeResponse(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     cleaned_text: str
     classifier_unavailable: bool = False
+
+
+class AuthorizeRequest(BaseModel):
+    action: str
+    args: dict = Field(default_factory=dict)
+    context: dict = Field(default_factory=dict)
+
+
+class AuthorizeResponse(BaseModel):
+    decision: Decision
+    reason: str
 
 
 class QuarantineVerdict(BaseModel):

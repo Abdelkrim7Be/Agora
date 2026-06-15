@@ -5,6 +5,14 @@ import pytest
 from src.models import QuarantineVerdict
 
 
+@pytest.fixture(autouse=True)
+def _reset_ratelimit():
+    import src.ratelimit as r
+    r.reset()
+    yield
+    r.reset()
+
+
 class _FakeQuarantineLLM:
     def __init__(self, verdict: QuarantineVerdict):
         self._v = verdict

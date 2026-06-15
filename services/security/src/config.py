@@ -16,5 +16,7 @@ class Settings:
     sanitize_always_llm: bool = os.getenv("SECURITY_SANITIZE_ALWAYS_LLM", "false").lower() == "true"
     sanitize_max_chars: int = int(os.getenv("SECURITY_SANITIZE_MAX_CHARS", "6000"))
 
+    policy_path: str = os.getenv("SECURITY_POLICY_PATH", "policy.yaml")
+
 
 settings = Settings()

@@ -1,0 +1,15 @@
+# Capability policy for the agent's tool actions. Default-deny: anything not listed is denied.
+default: deny
+
+tools:
+  Done:
+    decision: allow
+  write_email:
+    decision: hitl            # sends always go through the human approval gate
+    recipients:
+      allow_domains: []       # empty = any domain (still subject to deny_domains)
+      deny_domains: []
+    limits:
+      max_content_chars: 20000
+      max_per_run: 1          # one send per email run
+      max_per_day: 100
