@@ -16,3 +16,12 @@ server:
 gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}
+  jwt:
+    secret: ${GATEWAY_JWT_SECRET:}
+    ttl-minutes: ${GATEWAY_JWT_TTL_MINUTES:60}
+  owner:
+    username: ${GATEWAY_OWNER_USERNAME:}
+    password: ${GATEWAY_OWNER_PASSWORD:}
+  viewer:
+    username: ${GATEWAY_VIEWER_USERNAME:}
+    password: ${GATEWAY_VIEWER_PASSWORD:}
