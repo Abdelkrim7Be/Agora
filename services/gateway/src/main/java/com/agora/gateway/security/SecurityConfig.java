@@ -44,6 +44,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/audit").hasRole("OWNER")
                 .anyRequest().authenticated())
             .exceptionHandling(eh -> eh
                 .authenticationEntryPoint(restAuthEntryPoint)
