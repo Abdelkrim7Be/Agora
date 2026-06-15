@@ -19,10 +19,14 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final RestAuthEntryPoint restAuthEntryPoint;
+    private final RestAccessDeniedHandler restAccessDeniedHandler;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter, RestAuthEntryPoint restAuthEntryPoint) {
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter,
+                          RestAuthEntryPoint restAuthEntryPoint,
+                          RestAccessDeniedHandler restAccessDeniedHandler) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.restAuthEntryPoint = restAuthEntryPoint;
+        this.restAccessDeniedHandler = restAccessDeniedHandler;
     }
 
     @Bean
@@ -35,8 +39,15 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/agent/run").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
                 .anyRequest().authenticated())
-            .exceptionHandling(eh -> eh.authenticationEntryPoint(restAuthEntryPoint))
+            .exceptionHandling(eh -> eh
+                .authenticationEntryPoint(restAuthEntryPoint)
+                .accessDeniedHandler(restAccessDeniedHandler))
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
