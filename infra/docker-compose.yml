@@ -20,6 +20,17 @@ services:
       context: ../services/email-agent
     env_file:
       - ../services/email-agent/.env
+    environment:
+      AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
+      AGENT_STORE_DB: /app/data/store.db
+    volumes:
+      - agent_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - agora
 
@@ -44,12 +55,13 @@ services:
       postgres:
         condition: service_healthy
       email-agent:
-        condition: service_started
+        condition: service_healthy
     networks:
       - agora
 
 volumes:
   postgres_data:
+  agent_data:
 
 networks:
   agora:

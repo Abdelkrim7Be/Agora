@@ -70,5 +70,6 @@ curl http://localhost:8080/audit \
 ## Notes
 
 - The email-agent is reachable only from within the Docker network (`http://email-agent:8000`). Its port is not exposed to the host.
-- SQLite state files (`checkpoints.db`, `store.db`) live inside the email-agent container and are ephemeral. For durable state across restarts, mount a volume.
+- SQLite state files (`checkpoints.db`, `store.db`) are written to `/app/data`, backed by the named `agent_data` volume, so paused runs and learned memory survive container restarts.
+- The gateway waits for the agent's `/health` to pass (not just for the container to start) before it comes up.
 - Set `AGENT_DRY_RUN=false` in `services/email-agent/.env` to enable real Gmail sends (requires OAuth credentials).

@@ -131,4 +131,17 @@ class RbacTest {
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/run")));
     }
+
+    @Test
+    void owner_denied_on_unenumerated_route() throws Exception {
+        // default-deny: even an owner cannot reach an agent route that isn't explicitly allowed
+        mockMvc.perform(post("/api/agent/run/abc/unknownverb")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/unknownverb")));
+    }
 }
