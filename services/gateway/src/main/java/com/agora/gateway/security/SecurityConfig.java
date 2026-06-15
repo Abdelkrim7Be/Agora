@@ -45,7 +45,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/audit").hasRole("OWNER")
-                .anyRequest().authenticated())
+                // Default-deny: anything not explicitly allowed above is rejected, so a future
+                // unenumerated agent route is never reachable by accident.
+                .anyRequest().denyAll())
             .exceptionHandling(eh -> eh
                 .authenticationEntryPoint(restAuthEntryPoint)
                 .accessDeniedHandler(restAccessDeniedHandler))
