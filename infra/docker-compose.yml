@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agora}
+      POSTGRES_USER: ${POSTGRES_USER:-agora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agora}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - agora
+
+  email-agent:
+    build:
+      context: ../services/email-agent
+    env_file:
+      - ../services/email-agent/.env
+    networks:
+      - agora
+
+  gateway:
+    build:
+      context: ../services/gateway
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
+      GATEWAY_OWNER_USERNAME: ${GATEWAY_OWNER_USERNAME}
+      GATEWAY_OWNER_PASSWORD: ${GATEWAY_OWNER_PASSWORD}
+      GATEWAY_VIEWER_USERNAME: ${GATEWAY_VIEWER_USERNAME}
+      GATEWAY_VIEWER_PASSWORD: ${GATEWAY_VIEWER_PASSWORD}
+      GATEWAY_UPSTREAM_EMAIL_AGENT_URL: http://email-agent:8000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-agora}
+      POSTGRES_USER: ${POSTGRES_USER:-agora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      email-agent:
+        condition: service_started
+    networks:
+      - agora
+
+volumes:
+  postgres_data:
+
+networks:
+  agora:
