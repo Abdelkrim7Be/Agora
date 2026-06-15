@@ -31,6 +31,10 @@ class Settings:
     # PDF text extraction (gated — default off to avoid downloading large files).
     extract_attachments: bool = os.getenv("AGENT_EXTRACT_ATTACHMENTS", "false").lower() == "true"
     attachment_max_chars: int = int(os.getenv("AGENT_ATTACHMENT_MAX_CHARS", "3000"))
+    # Security service integration (off by default — no behavior change until opted in).
+    security_enabled: bool = os.getenv("AGENT_SECURITY_ENABLED", "false").lower() == "true"
+    security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
+    security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "10"))
 
 
 settings = Settings()

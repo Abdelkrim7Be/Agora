@@ -259,6 +259,11 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
 
 def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
+    sec = state["email_input"].get("security")
+    if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
+        print("🛡️ Classification: NOTIFY - forced by security (injection or classifier unavailable)")
+        return Command(goto=END, update={"classification_decision": "notify"})
+
     author, to, subject, email_thread = parse_email(state["email_input"])
     atts = state["email_input"].get("attachments") or []
     att_str = format_attachments(atts)

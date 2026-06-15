@@ -7,6 +7,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from src.config import settings
+from src.security_client import sanitize_email
 from src.gmail_client import (
     download_attachment,
     extract_pdf_text,
@@ -25,7 +26,10 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
 
     A run that completes (ignore/notify/sent) is marked read. A run that pauses for
     approval is left UNREAD — its pending action surfaces via the API / Agent Inbox,
-    and the email is reprocessed-free until resolved. Returns (msg_id, status, run_id).
+    and the email is reprocessed-free until resolved. An email the security service
+    flagged (injection or unavailable classifier) is also left UNREAD ("security_hold"):
+    forced-notify has no delivery surface yet, so don't archive a threat silently —
+    keep it visible in the inbox until the human handles it. Returns (msg_id, status, run_id).
     """
     resource = resource or gmail_resource()
     max_results = max_results or settings.max_emails_per_run
@@ -55,6 +59,26 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
                     "email_thread": email_input["email_thread"] + "\n\nAttachment contents:\n" + extra,
                 }
 
+        security_flagged = False
+        if settings.security_enabled:
+            verdict = await sanitize_email(
+                sender=email_input.get("author", ""),
+                subject=email_input.get("subject", ""),
+                content=email_input["email_thread"],
+            )
+            security_flagged = bool(
+                verdict["injection_detected"] or verdict["classifier_unavailable"]
+            )
+            email_input = {
+                **email_input,
+                "email_thread": verdict["cleaned_text"],
+                "security": {
+                    "injection_detected": verdict["injection_detected"],
+                    "classification": verdict["classification"],
+                    "classifier_unavailable": verdict["classifier_unavailable"],
+                },
+            }
+
         run_id = str(uuid.uuid4())
         cfg = {"configurable": {"thread_id": run_id}}
 
@@ -62,6 +86,9 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
 
         if result.get("__interrupt__"):
             outcomes.append((msg_id, "pending_approval", run_id))
+        elif security_flagged:
+            # Leave UNREAD so the threat stays visible — forced-notify isn't delivered anywhere.
+            outcomes.append((msg_id, "security_hold", run_id))
         else:
             mark_as_read(msg_id, resource=resource)
             outcomes.append((msg_id, "completed", run_id))

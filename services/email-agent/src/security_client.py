@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+import httpx
+
+from src.config import settings
+
+
+async def sanitize_email(sender: str, subject: str, content: str) -> dict:
+    """POST untrusted email content to the security service /sanitize endpoint.
+
+    Fail-safe: any failure (connection refused, timeout, non-2xx) returns a
+    cautious verdict with classifier_unavailable=True so an outage can never
+    become a silent unsanitized passthrough. cleaned_text falls back to the
+    original content.
+    """
+    payload = {"sender": sender, "subject": subject, "content": content}
+    try:
+        async with httpx.AsyncClient(timeout=settings.security_timeout) as client:
+            resp = await client.post(f"{settings.security_url}/sanitize", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return {
+            "classification": "suspicious",
+            "injection_detected": False,
+            "spam": False,
+            "reasons": ["security_service_unreachable"],
+            "cleaned_text": content,
+            "classifier_unavailable": True,
+        }
