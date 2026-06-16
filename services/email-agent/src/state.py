@@ -43,3 +43,5 @@ class State(MessagesState):
     classification_decision: Literal["ignore", "respond", "notify"]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
+    # Set when deterministic post-triage organization has run; terminal after tools.
+    auto_organized: NotRequired[bool]

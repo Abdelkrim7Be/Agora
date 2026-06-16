@@ -331,3 +331,166 @@ def test_sanitize_unaffected():
     r = client.post("/sanitize", json={"content": "hi there"})
     assert r.status_code == 200
     assert r.json()["classification"] == "benign"
+
+
+# --- Phase 5 inbox/draft/send capability policy ---
+
+def _authorize_action(action: str, args: dict | None = None, run_id: str | None = None) -> dict:
+    r = client.post(
+        "/authorize",
+        json={
+            "action": action,
+            "args": args or {},
+            "context": {"run_id": run_id or f"run-{action}"},
+        },
+    )
+    assert r.status_code == 200
+    return r.json()
+
+
+@pytest.mark.parametrize(
+    "action,args",
+    [
+        ("apply_label", {"label": "Clients"}),
+        ("remove_label", {"label": "Clients"}),
+        ("mark_read", {}),
+        ("mark_unread", {}),
+        ("archive_email", {}),
+    ],
+)
+def test_reversible_inbox_actions_are_allowed(action, args):
+    body = _authorize_action(action, args)
+    assert body["decision"] == "allow"
+
+
+@pytest.mark.parametrize("action", ["trash_email", "forward_email", "reply_all"])
+def test_risky_inbox_actions_return_hitl(action):
+    args = {"to": "bob@example.com", "note": "FYI"} if action == "forward_email" else {}
+    if action == "reply_all":
+        args = {"content": "Thanks"}
+    body = _authorize_action(action, args, run_id=f"run-hitl-{action}")
+    assert body["decision"] == "hitl"
+
+
+def test_create_draft_is_allowed_by_default_policy():
+    body = _authorize_action(
+        "create_draft",
+        {"to": "bob@example.com", "subject": "Draft", "content": "Draft body"},
+        run_id="run-create-draft-policy",
+    )
+    assert body["decision"] == "allow"
+
+
+def test_forward_email_requires_parseable_recipient():
+    body = _authorize_action("forward_email", {"to": "not-an-email", "note": "FYI"})
+    assert body["decision"] == "deny"
+    assert "parse" in body["reason"]
+
+
+def test_create_draft_requires_parseable_recipient():
+    body = _authorize_action(
+        "create_draft",
+        {"to": "not-an-email", "subject": "Draft", "content": "Draft body"},
+    )
+    assert body["decision"] == "deny"
+    assert "parse" in body["reason"]
+
+
+def test_reply_all_does_not_require_to_arg_because_recipients_are_thread_derived():
+    body = _authorize_action(
+        "reply_all",
+        {"content": "Thanks"},
+        run_id="run-reply-all-derived-recipients",
+    )
+    assert body["decision"] == "hitl"
+
+
+def test_note_field_over_max_chars_denied():
+    policy = PolicyConfig(
+        default="deny",
+        tools={
+            "forward_email": ToolPolicy(
+                decision="hitl",
+                limits=LimitsPolicy(max_content_chars=3),
+            )
+        },
+    )
+    req = AuthorizeRequest(
+        action="forward_email",
+        args={"to": "bob@example.com", "note": "abcd"},
+        context={"run_id": "run-note-cap"},
+    )
+
+    resp = authorize(req, policy=policy)
+
+    assert resp.decision == "deny"
+    assert "max_content_chars" in resp.reason
+
+
+def test_body_field_over_max_chars_denied():
+    policy = PolicyConfig(
+        default="deny",
+        tools={
+            "reply_all": ToolPolicy(
+                decision="hitl",
+                limits=LimitsPolicy(max_content_chars=3),
+            )
+        },
+    )
+    req = AuthorizeRequest(
+        action="reply_all",
+        args={"body": "abcd"},
+        context={"run_id": "run-body-cap"},
+    )
+
+    resp = authorize(req, policy=policy)
+
+    assert resp.decision == "deny"
+    assert "max_content_chars" in resp.reason
+
+
+def test_create_draft_does_not_consume_send_budget():
+    # Drafts don't send externally, so creating one must not eat into write_email's
+    # per-run send cap (default policy: write_email max_per_run=1).
+    run_id = "run-draft-then-send"
+    draft = _authorize_action(
+        "create_draft",
+        {"to": "bob@example.com", "subject": "Draft", "content": "Body"},
+        run_id=run_id,
+    )
+    assert draft["decision"] == "allow"
+
+    send = _authorize_action(
+        "write_email",
+        {"to": "bob@example.com", "subject": "Hi", "content": "Hi Bob!"},
+        run_id=run_id,
+    )
+    assert send["decision"] == "hitl"
+
+
+def test_forward_email_per_run_cap_is_enforced():
+    policy = PolicyConfig(
+        default="deny",
+        tools={
+            "forward_email": ToolPolicy(
+                decision="hitl",
+                recipients=RecipientPolicy(),
+                limits=LimitsPolicy(max_per_run=1),
+            )
+        },
+    )
+    first = AuthorizeRequest(
+        action="forward_email",
+        args={"to": "bob@example.com", "note": "FYI"},
+        context={"run_id": "run-forward-cap", "action_id": "call-1"},
+    )
+    second = AuthorizeRequest(
+        action="forward_email",
+        args={"to": "bob@example.com", "note": "FYI"},
+        context={"run_id": "run-forward-cap", "action_id": "call-2"},
+    )
+
+    assert authorize(first, policy=policy).decision == "hitl"
+    denied = authorize(second, policy=policy)
+    assert denied.decision == "deny"
+    assert "per-run" in denied.reason

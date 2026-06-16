@@ -6,13 +6,21 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
-from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
+from src.capabilities import (
+    approval_required,
+    current_email_id,
+    current_gmail_thread_id,
+    hitl_approved,
+    load_capabilities,
+    tools_by_name,
+)
 from src.config import load_config, settings
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
@@ -132,6 +140,35 @@ def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
         ),
         "tool_call_id": tool_call_id,
     }
+
+
+def _can_auto_organize() -> bool:
+    return (
+        config.auto_organize.enabled
+        and config.capabilities.get("inbox", False)
+        and "apply_label" in tools_by_name_map
+        and "archive_email" in tools_by_name_map
+    )
+
+
+def _auto_organize_message() -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "apply_label",
+                "args": {"label": config.auto_organize.ignored_label},
+                "id": "auto_apply_ignored_label",
+                "type": "tool_call",
+            },
+            {
+                "name": "archive_email",
+                "args": {},
+                "id": "auto_archive_ignored",
+                "type": "tool_call",
+            },
+        ],
+    )
 
 
 # Caches a run's authorization decisions so a HITL resume re-running tool_node does
@@ -284,14 +321,32 @@ def tool_node(state: State, store: BaseStore, config=None):
                 continue
 
         tool = tools_by_name_map[name]
-        if name in approval_set:
-            tok = hitl_approved.set(True)
-            try:
+        email_id_token = current_email_id.set(state["email_input"].get("email_id"))
+        thread_id_token = current_gmail_thread_id.set(
+            state["email_input"].get("gmail_thread_id")
+        )
+        try:
+            if name in approval_set:
+                tok = hitl_approved.set(True)
+                try:
+                    observation = tool.invoke(args)
+                finally:
+                    hitl_approved.reset(tok)
+            else:
                 observation = tool.invoke(args)
-            finally:
-                hitl_approved.reset(tok)
-        else:
-            observation = tool.invoke(args)
+        except Exception as exc:
+            # A tool failure (e.g. an inbox tool invoked without a trusted email_id
+            # on the manual /run path) must not crash the run — surface it to the
+            # agent as a tool message so it can recover and call Done.
+            result.append({
+                "role": "tool",
+                "content": f"The '{name}' action could not be completed: {exc}. Call Done.",
+                "tool_call_id": tool_call["id"],
+            })
+            continue
+        finally:
+            current_gmail_thread_id.reset(thread_id_token)
+            current_email_id.reset(email_id_token)
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
         )
@@ -305,8 +360,8 @@ def tool_node(state: State, store: BaseStore, config=None):
 
 
 def after_tools(state: State) -> Literal["llm_call", "__end__"]:
-    """Sending the email is the terminal action; otherwise keep working the loop."""
-    if state.get("email_sent"):
+    """Sending and auto-organization are terminal; other tools continue the loop."""
+    if state.get("email_sent") or state.get("auto_organized"):
         return END
     return "llm_call"
 
@@ -322,7 +377,9 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
     return END
 
 
-def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call", "__end__"]]:
+def triage_router(
+    state: State, store: BaseStore
+) -> Command[Literal["llm_call", "environment", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
     sec = state["email_input"].get("security")
     if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
@@ -371,8 +428,16 @@ def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call",
         }
     elif classification == "ignore":
         print("🚫 Classification: IGNORE - This email can be safely ignored")
-        goto = END
-        update = {"classification_decision": classification}
+        if _can_auto_organize():
+            goto = "environment"
+            update = {
+                "classification_decision": classification,
+                "auto_organized": True,
+                "messages": [_auto_organize_message()],
+            }
+        else:
+            goto = END
+            update = {"classification_decision": classification}
     elif classification == "notify":
         print("🔔 Classification: NOTIFY - This email contains important information")
         goto = END

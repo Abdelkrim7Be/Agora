@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+from email.message import EmailMessage
+from email.utils import getaddresses
 
 try:
     import pypdf as _pypdf
@@ -49,12 +51,252 @@ def get_message(msg_id: str, resource=None) -> dict:
     return resource.users().messages().get(userId="me", id=msg_id).execute()
 
 
-def mark_as_read(msg_id: str, resource=None) -> None:
-    """Remove the UNREAD label from a message."""
+def _dry_run_result(action: str, **fields) -> dict:
+    return {"dry_run": True, "action": action, **fields}
+
+
+def _encode_message(message: EmailMessage) -> str:
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def _send_email_message(
+    to: str | list[str],
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    resource=None,
+) -> dict:
     resource = resource or gmail_resource()
-    resource.users().messages().modify(
-        userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
-    ).execute()
+    recipients = to if isinstance(to, list) else [to]
+    message = EmailMessage()
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = subject
+    for name, value in (extra_headers or {}).items():
+        if value:
+            message[name] = value
+    message.set_content(body)
+    gmail_message = {"raw": _encode_message(message)}
+    if thread_id:
+        gmail_message["threadId"] = thread_id
+    return (
+        resource.users()
+        .messages()
+        .send(userId="me", body=gmail_message)
+        .execute()
+    )
+
+
+def _message_headers(message: dict) -> list[dict]:
+    return message.get("payload", {}).get("headers", [])
+
+
+def _header_value(message: dict, name: str, default: str = "") -> str:
+    return _header(_message_headers(message), name, default)
+
+
+def _prefixed_subject(prefix: str, subject: str) -> str:
+    return subject if subject.lower().startswith(prefix.lower()) else f"{prefix}{subject}"
+
+
+def _email_addresses(*values: str) -> list[str]:
+    seen: set[str] = set()
+    results: list[str] = []
+    for _name, address in getaddresses([v for v in values if v]):
+        address = address.strip()
+        key = address.lower()
+        if address and key not in seen:
+            seen.add(key)
+            results.append(address)
+    return results
+
+
+def _self_address(resource) -> str:
+    """Return the authenticated account's email address, for reply-all self-exclusion.
+
+    Degrades to "" on any failure so reply-all never crashes — worst case we keep
+    the account in the recipients (the prior behaviour) rather than failing the send.
+    """
+    try:
+        profile = resource.users().getProfile(userId="me").execute()
+        return profile.get("emailAddress", "")
+    except Exception:
+        return ""
+
+
+def modify_labels(
+    message_id: str,
+    add_label_ids: list[str] | None = None,
+    remove_label_ids: list[str] | None = None,
+    resource=None,
+    respect_dry_run: bool = True,
+) -> dict:
+    """Add/remove Gmail labels on a message.
+
+    `respect_dry_run=False` lets internal housekeeping (e.g. mark-as-read in the
+    poller) run even under AGENT_DRY_RUN — dry-run gates agent-proposed actions,
+    not the dedup bookkeeping the poller relies on.
+    """
+    add_label_ids = add_label_ids or []
+    remove_label_ids = remove_label_ids or []
+    if respect_dry_run and settings.dry_run:
+        return _dry_run_result(
+            "modify_labels",
+            message_id=message_id,
+            add_label_ids=add_label_ids,
+            remove_label_ids=remove_label_ids,
+        )
+    resource = resource or gmail_resource()
+    return (
+        resource.users()
+        .messages()
+        .modify(
+            userId="me",
+            id=message_id,
+            body={"addLabelIds": add_label_ids, "removeLabelIds": remove_label_ids},
+        )
+        .execute()
+    )
+
+
+def mark_as_read(msg_id: str, resource=None) -> None:
+    """Remove the UNREAD label from a message.
+
+    Poller housekeeping — runs even in dry-run so the poller doesn't reprocess the
+    same unread emails every cycle.
+    """
+    modify_labels(msg_id, remove_label_ids=["UNREAD"], resource=resource, respect_dry_run=False)
+
+
+def mark_as_unread(msg_id: str, resource=None) -> dict:
+    """Add the UNREAD label to a message."""
+    return modify_labels(msg_id, add_label_ids=["UNREAD"], resource=resource)
+
+
+def archive_message(msg_id: str, resource=None) -> dict:
+    """Archive a message by removing it from the inbox."""
+    return modify_labels(msg_id, remove_label_ids=["INBOX"], resource=resource)
+
+
+def trash_message(msg_id: str, resource=None) -> dict:
+    """Move a message to Gmail trash."""
+    if settings.dry_run:
+        return _dry_run_result("trash_message", message_id=msg_id)
+    resource = resource or gmail_resource()
+    return resource.users().messages().trash(userId="me", id=msg_id).execute()
+
+
+def list_labels(resource=None) -> list[dict]:
+    """Return Gmail labels for the current mailbox."""
+    resource = resource or gmail_resource()
+    results = resource.users().labels().list(userId="me").execute()
+    return results.get("labels", [])
+
+
+def ensure_label(name: str, resource=None) -> str:
+    """Return a Gmail label id, creating the label when missing."""
+    if settings.dry_run:
+        return f"dry-run-label:{name}"
+    resource = resource or gmail_resource()
+    for label in list_labels(resource=resource):
+        if label.get("name") == name:
+            return label["id"]
+    created = (
+        resource.users()
+        .labels()
+        .create(
+            userId="me",
+            body={
+                "name": name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show",
+            },
+        )
+        .execute()
+    )
+    return created["id"]
+
+
+def create_draft(
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+    resource=None,
+) -> dict:
+    """Create a Gmail draft without sending it."""
+    if settings.dry_run:
+        return _dry_run_result(
+            "create_draft",
+            to=to,
+            subject=subject,
+            thread_id=thread_id,
+        )
+    resource = resource or gmail_resource()
+    message = EmailMessage()
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
+    draft_message = {"raw": _encode_message(message)}
+    if thread_id:
+        draft_message["threadId"] = thread_id
+    return (
+        resource.users()
+        .drafts()
+        .create(userId="me", body={"message": draft_message})
+        .execute()
+    )
+
+
+def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
+    """Forward a Gmail message to a recipient, optionally with a note."""
+    if settings.dry_run:
+        return _dry_run_result("forward_message", message_id=message_id, to=to)
+    resource = resource or gmail_resource()
+    original = get_message(message_id, resource=resource)
+    subject = _prefixed_subject("Fwd: ", _header_value(original, "Subject", "No Subject"))
+    body = (
+        f"{note.strip()}\n\n" if note.strip() else ""
+    ) + (
+        "---------- Forwarded message ---------\n"
+        f"From: {_header_value(original, 'From', 'Unknown Sender')}\n"
+        f"Date: {_header_value(original, 'Date')}\n"
+        f"Subject: {_header_value(original, 'Subject', 'No Subject')}\n"
+        f"To: {_header_value(original, 'To', 'Unknown Recipient')}\n\n"
+        f"{_extract_message_part(original.get('payload', {}))}"
+    )
+    return _send_email_message(to=to, subject=subject, body=body, resource=resource)
+
+
+def reply_all_message(message_id: str, body: str, resource=None) -> dict:
+    """Reply to all participants on a Gmail message's thread."""
+    if settings.dry_run:
+        return _dry_run_result("reply_all_message", message_id=message_id)
+    resource = resource or gmail_resource()
+    original = get_message(message_id, resource=resource)
+    recipients = _email_addresses(
+        _header_value(original, "From"),
+        _header_value(original, "To"),
+        _header_value(original, "Cc"),
+    )
+    # Exclude our own address so reply-all doesn't email the agent itself (which
+    # would also land back in the inbox and risk the poller reprocessing it).
+    self_addr = _self_address(resource).lower()
+    if self_addr:
+        recipients = [r for r in recipients if r.lower() != self_addr]
+    subject = _prefixed_subject("Re: ", _header_value(original, "Subject", "No Subject"))
+    message_id_header = _header_value(original, "Message-ID")
+    extra_headers = {}
+    if message_id_header:
+        extra_headers = {"In-Reply-To": message_id_header, "References": message_id_header}
+    return _send_email_message(
+        to=recipients,
+        subject=subject,
+        body=body,
+        thread_id=original.get("threadId"),
+        extra_headers=extra_headers,
+        resource=resource,
+    )
 
 
 def fetch_thread(thread_id: str, resource=None) -> list[dict]:
