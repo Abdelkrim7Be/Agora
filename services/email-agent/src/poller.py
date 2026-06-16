@@ -31,7 +31,7 @@ from src.gmail_client import (
     search_messages,
 )
 from src.graph import overall_workflow
-from src.run_registry import upsert_run
+from src.run_registry import setup_run_registry, upsert_run
 from src.storage import open_graph_storage
 
 
@@ -84,6 +84,13 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
             {"configurable": {"thread_id": run_id}},
         )
         status = "pending_approval" if result.get("__interrupt__") else "follow_up_proposed"
+        upsert_run(
+            run_id,
+            status,
+            email_input=email_input,
+            classification=result.get("classification_decision"),
+            pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+        )
         outcomes.append((msg_id, status, run_id))
     return outcomes
 
@@ -192,6 +199,7 @@ async def poll_once(
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
     interval = settings.poll_interval_minutes * 60
+    setup_run_registry()
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
             checkpointer=storage.checkpointer, store=storage.store

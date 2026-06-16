@@ -14,7 +14,8 @@ from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow, reload_config
 from src.memory import namespace
-from src.run_registry import list_runs, upsert_run
+from src.run_registry import get_run as get_run_record
+from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.tenant import current_user_id, user_context
 from src.security_client import fetch_policy
 from src.storage import open_graph_storage
@@ -22,6 +23,7 @@ from src.storage import open_graph_storage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_run_registry()
     async with open_graph_storage() as storage:
         # The graph's nodes are sync, so LangGraph runs them in a threadpool where
         # sync store.get/put works. A future ASYNC node must use aget/aput instead.
@@ -120,6 +122,8 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
 
 
 async def _require_run(graph, run_id: str) -> dict:
+    if get_run_record(run_id, user_id=current_user_id()) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
     config = _thread_config(run_id)
     state = await graph.aget_state(config)
     if not state.values:

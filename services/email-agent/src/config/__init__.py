@@ -46,6 +46,7 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "")
     redis_url: str = os.getenv("REDIS_URL", "")
     storage_backend: str = os.getenv("AGENT_STORAGE_BACKEND", "postgres" if database_url else "sqlite")
+    run_registry_backend: str = os.getenv("AGENT_RUN_REGISTRY_BACKEND", "postgres" if database_url else "json")
     tenant_mode: str = os.getenv("TENANT_MODE", "single")
     default_user_id: str = os.getenv("AGENT_DEFAULT_USER_ID", "default")
     gmail_webhook_enabled: bool = _env_bool("GMAIL_WEBHOOK_ENABLED", "false")

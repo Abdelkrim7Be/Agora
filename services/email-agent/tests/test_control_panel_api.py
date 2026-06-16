@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from src.api import app, _run_detail
-from src.run_registry import list_runs, upsert_run
+from src.api import app, _require_run, _run_detail
+from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
 from src.tenant import normalize_user_id
 
 
@@ -34,6 +34,25 @@ def test_run_registry_filters_by_user(tmp_path):
 
     assert [run["run_id"] for run in runs] == ["run-1"]
     assert runs[0]["user_id"] == "alice@example.com"
+
+
+def test_selected_run_registry_backend_defaults_to_json(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "run_registry_backend", "json")
+
+    assert selected_run_registry_backend() == "json"
+
+
+def test_selected_run_registry_backend_requires_database_url(monkeypatch):
+    from src.config import settings
+    import pytest
+
+    monkeypatch.setattr(settings, "run_registry_backend", "postgres")
+    monkeypatch.setattr(settings, "database_url", "")
+
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required"):
+        selected_run_registry_backend()
 
 
 def test_runs_endpoint_returns_registry(monkeypatch):
@@ -239,3 +258,31 @@ digest:
     assert body["parsed"]["enabled"] is True
     assert body["parsed"]["rules"][0]["name"] == "test rule"
     assert "test rule" in rules_path.read_text()
+
+
+async def test_require_run_rejects_other_users_run(monkeypatch):
+    import pytest
+
+    class Graph:
+        async def aget_state(self, config):
+            raise AssertionError("graph state should not be read for another user")
+
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: None)
+
+    with pytest.raises(Exception) as exc:
+        await _require_run(Graph(), "run-1")
+
+    assert getattr(exc.value, "status_code", None) == 404
+
+
+async def test_require_run_allows_owned_run(monkeypatch):
+    class State:
+        values = {"email_input": {"subject": "hello"}}
+
+    class Graph:
+        async def aget_state(self, config):
+            return State()
+
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: {"run_id": run_id})
+
+    assert await _require_run(Graph(), "run-1") == {"configurable": {"thread_id": "run-1"}}
