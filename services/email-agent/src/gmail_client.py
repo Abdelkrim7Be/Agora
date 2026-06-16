@@ -45,6 +45,18 @@ def fetch_unread(max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+def list_messages_by_label(label_id: str, max_results: int, resource=None) -> list[dict]:
+    """Return message refs carrying a Gmail label id."""
+    resource = resource or gmail_resource()
+    results = (
+        resource.users()
+        .messages()
+        .list(userId="me", labelIds=[label_id], maxResults=max_results)
+        .execute()
+    )
+    return results.get("messages", [])
+
+
 def get_message(msg_id: str, resource=None) -> dict:
     """Fetch a full Gmail message by id."""
     resource = resource or gmail_resource()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from unittest.mock import MagicMock
 
-from src.automation import AutomationRule, RuleThen, RuleWhen, RulesConfig
+from src.automation import AutomationRule, RuleThen, RuleWhen, RulesConfig, SnoozeConfig
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -312,3 +312,42 @@ async def test_poll_once_rules_default_off_does_not_inject_automation(mocked_gma
     await poller.poll_once(graph, resource=object(), rules_config=RulesConfig())
 
     assert "automation" not in graph.inputs[0]["email_input"]
+
+
+async def test_poll_once_resurfaces_due_snoozed_messages(monkeypatch, mocked_gmail):
+    set_unread, _ = mocked_gmail
+    set_unread([])
+    modified: list[dict] = []
+
+    monkeypatch.setattr(
+        poller,
+        "list_labels",
+        lambda resource=None: [
+            {"id": "label_due", "name": "Snoozed/2026-06-15"},
+            {"id": "label_future", "name": "Snoozed/2999-01-01"},
+        ],
+    )
+    monkeypatch.setattr(
+        poller,
+        "list_messages_by_label",
+        lambda label_id, max_results, resource=None: [{"id": "m_snoozed"}] if label_id == "label_due" else [],
+    )
+
+    def _modify(msg_id, add_label_ids=None, remove_label_ids=None, resource=None):
+        modified.append({
+            "msg_id": msg_id,
+            "add": add_label_ids,
+            "remove": remove_label_ids,
+        })
+
+    monkeypatch.setattr(poller, "modify_labels", _modify)
+    rules = RulesConfig(snooze=SnoozeConfig(enabled=True, max_resurface_per_run=5))
+
+    outcomes = await poller.poll_once(_RecordingGraph(), resource=object(), rules_config=rules)
+
+    assert outcomes == [("m_snoozed", "snoozed_resurfaced", "Snoozed/2026-06-15")]
+    assert modified == [{
+        "msg_id": "m_snoozed",
+        "add": ["INBOX", "UNREAD"],
+        "remove": ["label_due"],
+    }]

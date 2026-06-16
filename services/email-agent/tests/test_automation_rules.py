@@ -8,8 +8,10 @@ from pydantic import ValidationError
 
 from src.automation import (
     DigestConfig,
+    SnoozeConfig,
     RulesConfig,
     build_rule_plan,
+    due_snooze_labels,
     load_rules,
     maybe_emit_daily_digest,
     record_digest_item,
@@ -194,3 +196,53 @@ def test_digest_waits_until_configured_hour(tmp_path):
         state_path=tmp_path / "digest_state.json",
         now=datetime(2026, 6, 16, 17, 59),
     ) is None
+
+
+def test_build_rule_plan_turns_snooze_days_into_label_and_archive(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        enabled: true
+        snooze:
+          enabled: true
+          label_prefix: Snoozed
+        rules:
+          - name: snooze newsletters
+            when:
+              subject_contains: ["later"]
+            then:
+              snooze_days: 2
+        """,
+    )
+
+    plan = build_rule_plan(
+        {"author": "Alice <alice@example.com>", "subject": "Read later"},
+        load_rules(path),
+        today=date(2026, 6, 16),
+    )
+
+    assert plan is not None
+    assert plan["tool_calls"] == [
+        {
+            "name": "apply_label",
+            "args": {"label": "Snoozed/2026-06-18"},
+            "id": "rule_0_snooze_label",
+            "type": "tool_call",
+        },
+        {"name": "archive_email", "args": {}, "id": "rule_0_snooze_archive", "type": "tool_call"},
+    ]
+
+
+def test_due_snooze_labels_returns_due_dates_only():
+    cfg = RulesConfig(snooze=SnoozeConfig(enabled=True, label_prefix="Snoozed"))
+    labels = [
+        {"id": "l1", "name": "Snoozed/2026-06-15"},
+        {"id": "l2", "name": "Snoozed/2026-06-16"},
+        {"id": "l3", "name": "Snoozed/2026-06-17"},
+        {"id": "l4", "name": "Other/2026-06-15"},
+        {"id": "l5", "name": "Snoozed/not-a-date"},
+    ]
+
+    due = due_snooze_labels(labels, cfg, today=date(2026, 6, 16))
+
+    assert [label["id"] for label in due] == ["l1", "l2"]

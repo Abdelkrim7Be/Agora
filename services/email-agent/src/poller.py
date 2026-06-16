@@ -9,6 +9,7 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 from src.automation import (
     RulesConfig,
     build_rule_plan,
+    due_snooze_labels,
     load_rules,
     maybe_emit_daily_digest,
     record_digest_item,
@@ -23,9 +24,35 @@ from src.gmail_client import (
     get_message,
     gmail_resource,
     gmail_to_email_input,
+    list_labels,
+    list_messages_by_label,
     mark_as_read,
+    modify_labels,
 )
 from src.graph import overall_workflow
+
+
+def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
+    """Move due snoozed messages back to INBOX/UNREAD."""
+    surfaced: list[tuple[str, str]] = []
+    for label in due_snooze_labels(list_labels(resource=resource), rules_config):
+        label_id = label["id"]
+        label_name = label.get("name", label_id)
+        refs = list_messages_by_label(
+            label_id,
+            rules_config.snooze.max_resurface_per_run,
+            resource=resource,
+        )
+        for ref in refs:
+            msg_id = ref["id"]
+            modify_labels(
+                msg_id,
+                add_label_ids=["INBOX", "UNREAD"],
+                remove_label_ids=[label_id],
+                resource=resource,
+            )
+            surfaced.append((msg_id, label_name))
+    return surfaced
 
 
 async def poll_once(
@@ -48,6 +75,10 @@ async def poll_once(
     rules_config = rules_config or load_rules()
 
     outcomes: list[tuple] = []
+    if rules_config.snooze.enabled:
+        for msg_id, label_name in resurface_due_snoozed(resource, rules_config):
+            outcomes.append((msg_id, "snoozed_resurfaced", label_name))
+
     for ref in fetch_unread(max_results, resource=resource):
         msg_id = ref["id"]
         message = get_message(msg_id, resource=resource)

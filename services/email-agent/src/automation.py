@@ -280,3 +280,31 @@ def maybe_emit_daily_digest(
     emit(digest)
     _write_json(path, {"items": [], "last_emitted": today})
     return digest
+
+
+def _parse_snooze_date(label_name: str, prefix: str) -> date | None:
+    expected = f"{prefix.rstrip('/')}/"
+    if not label_name.startswith(expected):
+        return None
+    raw = label_name.removeprefix(expected)
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def due_snooze_labels(
+    labels: list[dict],
+    rules_config: RulesConfig,
+    today: date | None = None,
+) -> list[dict]:
+    """Return Gmail labels whose Snoozed/YYYY-MM-DD date is due."""
+    if not rules_config.snooze.enabled:
+        return []
+    today = today or date.today()
+    due: list[dict] = []
+    for label in labels:
+        label_date = _parse_snooze_date(label.get("name", ""), rules_config.snooze.label_prefix)
+        if label_date and label_date <= today:
+            due.append(label)
+    return due
