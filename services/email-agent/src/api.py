@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+
+import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -10,7 +12,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from src.config import settings
-from src.config import load_config
+from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow
 from src.memory import get_memory, namespace
 from src.run_registry import list_runs, upsert_run
@@ -144,6 +146,18 @@ def _run_detail(values: dict, run_id: str) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/config")
+async def get_agent_config() -> dict:
+    return load_config().model_dump()
+
+
+@app.put("/config")
+async def update_agent_config(body: dict) -> dict:
+    cfg = AgentConfig(**body)
+    DEFAULT_CONFIG_PATH.write_text(yaml.safe_dump(cfg.model_dump(), sort_keys=False))
+    return cfg.model_dump()
 
 
 @app.get("/memory")

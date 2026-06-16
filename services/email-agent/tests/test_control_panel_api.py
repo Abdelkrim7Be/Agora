@@ -87,3 +87,26 @@ def test_memory_endpoint_contract(monkeypatch):
             "triage_preferences": "triage",
             "response_preferences": "response",
         }
+
+
+def test_update_agent_config_validates_and_writes(tmp_path, monkeypatch):
+    import src.api as api
+
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr(api, "DEFAULT_CONFIG_PATH", config_path)
+    payload = {
+        "agent": {
+            "background": "background",
+            "triage_instructions": "triage",
+            "response_preferences": "response",
+        },
+        "capabilities": {"email": True, "inbox": False},
+        "auto_organize": {"enabled": False, "ignored_label": "Auto/Ignored"},
+    }
+
+    with TestClient(app) as client:
+        response = client.put("/config", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["agent"]["background"] == "background"
+    assert "background" in config_path.read_text()
