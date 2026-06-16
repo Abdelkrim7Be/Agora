@@ -10,13 +10,14 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from src.config import SERVICE_ROOT, settings
+from src.token_store import token_file_for_user
 from src.state import EmailInput
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
 GMAIL_SCOPES = ["https://mail.google.com/"]
 
 
-def gmail_resource():
+def gmail_resource(user_id: str | None = None):
     """Build an authenticated Gmail API resource (googleapiclient discovery object)."""
     from langchain_google_community.gmail.utils import (
         build_gmail_service,
@@ -24,7 +25,7 @@ def gmail_resource():
     )
 
     creds = str(SERVICE_ROOT / settings.gmail_credentials_path)
-    token = str(SERVICE_ROOT / settings.gmail_token_path)
+    token = str(token_file_for_user(user_id))
     credentials = get_google_credentials(
         token_file=token,
         client_secrets_file=creds,
