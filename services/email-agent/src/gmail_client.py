@@ -111,6 +111,19 @@ def _email_addresses(*values: str) -> list[str]:
     return results
 
 
+def _self_address(resource) -> str:
+    """Return the authenticated account's email address, for reply-all self-exclusion.
+
+    Degrades to "" on any failure so reply-all never crashes — worst case we keep
+    the account in the recipients (the prior behaviour) rather than failing the send.
+    """
+    try:
+        profile = resource.users().getProfile(userId="me").execute()
+        return profile.get("emailAddress", "")
+    except Exception:
+        return ""
+
+
 def modify_labels(
     message_id: str,
     add_label_ids: list[str] | None = None,
@@ -266,6 +279,11 @@ def reply_all_message(message_id: str, body: str, resource=None) -> dict:
         _header_value(original, "To"),
         _header_value(original, "Cc"),
     )
+    # Exclude our own address so reply-all doesn't email the agent itself (which
+    # would also land back in the inbox and risk the poller reprocessing it).
+    self_addr = _self_address(resource).lower()
+    if self_addr:
+        recipients = [r for r in recipients if r.lower() != self_addr]
     subject = _prefixed_subject("Re: ", _header_value(original, "Subject", "No Subject"))
     message_id_header = _header_value(original, "Message-ID")
     extra_headers = {}

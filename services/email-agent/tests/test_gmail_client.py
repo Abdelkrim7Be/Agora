@@ -89,10 +89,12 @@ class _FakeUsers:
         self,
         labels: list[dict] | None = None,
         messages: dict[str, dict] | None = None,
+        profile_email: str = "me@example.com",
     ):
         self._messages = _FakeMessages(messages)
         self._labels = _FakeLabels(labels)
         self._drafts = _FakeDrafts()
+        self._profile_email = profile_email
 
     def messages(self):
         return self._messages
@@ -103,14 +105,18 @@ class _FakeUsers:
     def drafts(self):
         return self._drafts
 
+    def getProfile(self, **kwargs):
+        return _Execute({"emailAddress": self._profile_email})
+
 
 class _FakeGmailResource:
     def __init__(
         self,
         labels: list[dict] | None = None,
         messages: dict[str, dict] | None = None,
+        profile_email: str = "me@example.com",
     ):
-        self._users = _FakeUsers(labels, messages)
+        self._users = _FakeUsers(labels, messages, profile_email)
 
     def users(self):
         return self._users
@@ -392,7 +398,8 @@ def test_reply_all_message_fetches_original_and_sends_thread_reply(monkeypatch):
     sent = calls[1][1]["body"]
     assert sent["threadId"] == "thread-1"
     decoded = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
-    assert decoded["To"] == "alice@example.com, me@example.com, carol@example.com"
+    # me@example.com (the account itself) is excluded from reply-all recipients.
+    assert decoded["To"] == "alice@example.com, carol@example.com"
     assert decoded["Subject"] == "Re: Quick question"
     assert decoded["In-Reply-To"] == "<msg-1@example.com>"
     assert decoded["References"] == "<msg-1@example.com>"
