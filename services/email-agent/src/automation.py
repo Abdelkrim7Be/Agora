@@ -4,7 +4,6 @@ from datetime import date, datetime, timedelta
 from email.utils import parseaddr
 import json
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -13,17 +12,19 @@ from src.config import SERVICE_ROOT
 
 DEFAULT_RULES_PATH = SERVICE_ROOT / "rules.yaml"
 
-Classification = Literal["ignore", "notify", "respond"]
-
 
 class RuleWhen(BaseModel):
-    """Deterministic predicates for matching an email before the agent LLM runs."""
+    """Deterministic predicates for matching an email before the agent LLM runs.
+
+    Rules are evaluated pre-triage (cheap, before the LLM), so they intentionally
+    have no classification predicate — classification-driven organization is handled
+    by `auto_organize` (Phase 5) after triage.
+    """
 
     sender_contains: list[str] = Field(default_factory=list)
     sender_domain: list[str] = Field(default_factory=list)
     subject_contains: list[str] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
-    classification: Classification | None = None
 
 
 class RuleThen(BaseModel):
@@ -117,7 +118,7 @@ def _email_address(sender: str) -> str:
     return address or sender
 
 
-def _matches_rule(rule: AutomationRule, email_input: dict, classification: str | None = None) -> bool:
+def _matches_rule(rule: AutomationRule, email_input: dict) -> bool:
     when = rule.when
     sender = email_input.get("author", "")
     subject = email_input.get("subject", "")
@@ -132,8 +133,6 @@ def _matches_rule(rule: AutomationRule, email_input: dict, classification: str |
     if when.subject_contains and not _contains_any(subject, when.subject_contains):
         return False
     if when.labels and not set(when.labels).issubset(labels):
-        return False
-    if when.classification and when.classification != classification:
         return False
     return True
 
@@ -150,7 +149,6 @@ def build_rule_plan(
     email_input: dict,
     rules_config: RulesConfig,
     today: date | None = None,
-    classification: str | None = None,
 ) -> dict | None:
     """Return deterministic automation actions for matching rules."""
     if not rules_config.enabled:
@@ -162,7 +160,7 @@ def build_rule_plan(
     terminal_status: str | None = None
 
     for idx, rule in enumerate(rules_config.rules):
-        if not rule.enabled or not _matches_rule(rule, email_input, classification):
+        if not rule.enabled or not _matches_rule(rule, email_input):
             continue
         matched.append(rule.name)
         prefix = f"rule_{idx}"
