@@ -30,7 +30,8 @@ tools:
   trash_email:
     decision: hitl
 
-  # Drafts do not send externally, but recipient/content policy still applies.
+  # Drafts do not send externally, so they keep recipient/content policy but no
+  # send rate-limit — a draft must not consume the per-run/per-day send budget.
   create_draft:
     decision: allow
     recipients:
@@ -38,8 +39,6 @@ tools:
       deny_domains: []
     limits:
       max_content_chars: 20000
-      max_per_run: 5
-      max_per_day: 500
 
   # Sending actions always go through HITL and share send-like recipient/content caps.
   forward_email:

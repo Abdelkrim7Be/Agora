@@ -449,6 +449,25 @@ def test_body_field_over_max_chars_denied():
     assert "max_content_chars" in resp.reason
 
 
+def test_create_draft_does_not_consume_send_budget():
+    # Drafts don't send externally, so creating one must not eat into write_email's
+    # per-run send cap (default policy: write_email max_per_run=1).
+    run_id = "run-draft-then-send"
+    draft = _authorize_action(
+        "create_draft",
+        {"to": "bob@example.com", "subject": "Draft", "content": "Body"},
+        run_id=run_id,
+    )
+    assert draft["decision"] == "allow"
+
+    send = _authorize_action(
+        "write_email",
+        {"to": "bob@example.com", "subject": "Hi", "content": "Hi Bob!"},
+        run_id=run_id,
+    )
+    assert send["decision"] == "hitl"
+
+
 def test_forward_email_per_run_cap_is_enforced():
     policy = PolicyConfig(
         default="deny",
