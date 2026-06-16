@@ -24,6 +24,15 @@ def test_bare_policy_config_defaults_to_deny():
     assert policy.tools == {}
 
 
+def test_relative_policy_path_resolves_from_service_root(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    policy = load_policy("policy.yaml")
+
+    assert policy.default == "deny"
+    assert policy.tools["write_email"].decision == "hitl"
+
+
 def test_missing_policy_file_raises():
     with pytest.raises(FileNotFoundError):
         load_policy("/nonexistent/path/policy.yaml")

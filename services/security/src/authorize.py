@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from src import ratelimit
+from src.config import settings
 from src.models import AuthorizeRequest, AuthorizeResponse
 from src.policy import PolicyConfig, load_policy
 
@@ -41,7 +42,7 @@ def authorize(
     req: AuthorizeRequest,
     policy: PolicyConfig | None = None,
 ) -> AuthorizeResponse:
-    policy = policy or load_policy()
+    policy = policy or load_policy(settings.policy_path)
 
     tool = policy.tools.get(req.action)
     if tool is None:

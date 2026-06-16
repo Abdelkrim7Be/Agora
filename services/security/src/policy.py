@@ -43,6 +43,8 @@ class PolicyConfig(BaseModel):
 def load_policy(path: str | Path | None = None) -> PolicyConfig:
     """Load and validate policy.yaml. Fails loud on missing file or empty content."""
     policy_path = Path(path) if path else DEFAULT_POLICY_PATH
+    if not policy_path.is_absolute():
+        policy_path = SERVICE_ROOT / policy_path
     if not policy_path.is_file():
         raise FileNotFoundError(
             f"Policy config not found at {policy_path}. "
