@@ -333,6 +333,14 @@ def test_sanitize_unaffected():
     assert r.json()["classification"] == "benign"
 
 
+def test_policy_endpoint_returns_yaml():
+    r = client.get("/policy")
+    assert r.status_code == 200
+    body = r.json()
+    assert "default: deny" in body["policy_yaml"]
+    assert "write_email" in body["policy_yaml"]
+
+
 # --- Phase 5 inbox/draft/send capability policy ---
 
 def _authorize_action(action: str, args: dict | None = None, run_id: str | None = None) -> dict:

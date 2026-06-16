@@ -30,6 +30,21 @@ async def sanitize_email(sender: str, subject: str, content: str) -> dict:
         }
 
 
+async def fetch_policy() -> dict:
+    """GET the active capability policy from the security service (for the control panel).
+
+    Degrades gracefully: an outage returns empty yaml + an error flag rather than 5xx,
+    since this is a read-only view, not a security decision.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=settings.security_timeout) as client:
+            resp = await client.get(f"{settings.security_url}/policy")
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return {"policy_yaml": "", "error": "security_service_unreachable"}
+
+
 def authorize_action(action: str, args: dict, run_id: str, action_id: str = "") -> dict:
     """POST a proposed tool action to the security service /authorize endpoint.
 

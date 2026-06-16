@@ -49,6 +49,22 @@ llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 llm_memory = llm.with_structured_output(UserPreferences)
 
 
+def reload_config() -> None:
+    """Re-read config.yaml and rebuild capability-derived globals so config/capability
+    edits (e.g. via the control-panel API) take effect without recompiling the graph.
+
+    The node functions read these as module globals at call time, so reassigning them
+    is enough for the current process. Note: a separate poller process keeps its own
+    copy and must be restarted (or reload itself) to pick up the change.
+    """
+    global config, tools, tools_prompt, tools_by_name_map, approval_set, llm_with_tools
+    config = load_config()
+    tools, tools_prompt = load_capabilities(config.capabilities)
+    tools_by_name_map = tools_by_name(tools)
+    approval_set = approval_required(config.capabilities)
+    llm_with_tools = llm.bind_tools(tools, tool_choice="any")
+
+
 def automation_router(
     state: State, store: BaseStore
 ) -> Command[Literal["environment", "triage_router", "__end__"]]:
