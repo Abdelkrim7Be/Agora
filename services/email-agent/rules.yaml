@@ -1,0 +1,36 @@
+# Email automation rules — opt-in. With enabled: false this file changes nothing.
+
+enabled: false
+
+rules:
+  # - name: archive newsletters
+  #   enabled: true
+  #   when:
+  #     sender_domain: ["newsletter.example.com"]
+  #     subject_contains: ["weekly digest"]
+  #   then:
+  #     labels: ["Auto/Newsletters"]
+  #     archive: true
+
+digest:
+  enabled: false
+  hour: 18
+  statuses:
+    - notify
+    - pending_approval
+
+snooze:
+  enabled: false
+  label_prefix: Snoozed
+  max_resurface_per_run: 20
+
+follow_ups:
+  enabled: false
+  label: Awaiting Reply
+  after_days: 3
+  max_results: 10
+  nudge: Just following up on this.
+
+learning:
+  enabled: false
+  suggestions_path: rule_suggestions.jsonl
