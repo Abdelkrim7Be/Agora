@@ -81,6 +81,25 @@ When enabled, ignored emails are automatically labeled and archived:
 
 These actions still run through `tool_node`, so dry-run, trusted message context, and security authorization are reused. They are reversible `allow` actions by default and do not pause for human approval.
 
+## Automation (Phase 6)
+
+Configured in `rules.yaml`, fully opt-in (`enabled: false` everywhere by default — the
+file then changes nothing). The poller builds a deterministic plan and the graph's
+`automation_router` executes it **through the normal `tool_node` path**, so security
+authorization, HITL, dry-run, and trusted message context all still apply.
+
+- **Rules** (`when` → `then`): match on `sender_contains` / `sender_domain` /
+  `subject_contains` / `labels` and apply labels, archive, mark read, snooze, or draft a
+  human-gated response. Rules run **before** triage (cheap, no LLM), so there is no
+  `classification` predicate — classification-driven organization is `auto_organize`'s job.
+- **Daily digest**: records `notify` / `pending_approval` items and emits once per day at the
+  configured hour. Output goes to the **process logs** (`print`) for now — no email/UI channel yet.
+- **Snooze**: a `Snoozed/<YYYY-MM-DD>` label; the poller resurfaces due messages to
+  `INBOX`/`UNREAD`. Resurfacing respects `AGENT_DRY_RUN` (inert under dry-run).
+- **Follow-ups**: threads labeled "Awaiting Reply" older than N days get a HITL-gated nudge.
+- **Learning**: human corrections (ignore/edit/feedback) append **disabled** rule suggestions
+  to a JSONL log when `learning.enabled` — never auto-applied.
+
 ## Caveats
 
 - Forwarding does not include attachments from the original message.

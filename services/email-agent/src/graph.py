@@ -58,14 +58,16 @@ def automation_router(
     tool_calls = automation.get("tool_calls") or []
 
     if tool_calls:
-        return Command(
-            goto="environment",
-            update={
-                "automation_acted": True,
-                "classification_decision": terminal_status or "notify",
-                "messages": [AIMessage(content="", tool_calls=tool_calls)],
-            },
-        )
+        update = {
+            "automation_acted": True,
+            "messages": [AIMessage(content="", tool_calls=tool_calls)],
+        }
+        # Only tag a classification when the rule explicitly asks to notify/respond.
+        # Pure-organization rules (label/archive/snooze) stay untagged so they don't
+        # pollute the daily digest or get surfaced as "notify".
+        if terminal_status:
+            update["classification_decision"] = terminal_status
+        return Command(goto="environment", update=update)
     if terminal_status == "notify":
         return Command(goto=END, update={"classification_decision": "notify"})
     return Command(goto="triage_router")
@@ -232,6 +234,17 @@ def tool_node(state: State, store: BaseStore, config=None):
     sent = False
     run_id = _run_id_from_config(config)
 
+    # Load automation rules at most once per call, lazily — only when a human
+    # correction actually happens (rule learning is a no-op when disabled).
+    _rules_cache: list = []
+
+    def _suggest_rule(correction_type: str, details: dict) -> None:
+        if not _rules_cache:
+            _rules_cache.append(load_automation_rules())
+        suggest_rule_from_correction(
+            _rules_cache[0], state["email_input"], correction_type, details
+        )
+
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
         args = tool_call["args"]
@@ -284,12 +297,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                     }],
                     llm_memory,
                 )
-                suggest_rule_from_correction(
-                    load_automation_rules(),
-                    state["email_input"],
-                    "ignored_draft",
-                    {"tool": name},
-                )
+                _suggest_rule("ignored_draft", {"tool": name})
                 continue
 
             if decision_type == "response":
@@ -313,12 +321,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                     }],
                     llm_memory,
                 )
-                suggest_rule_from_correction(
-                    load_automation_rules(),
-                    state["email_input"],
-                    "draft_feedback",
-                    {"tool": name, "feedback": feedback},
-                )
+                _suggest_rule("draft_feedback", {"tool": name, "feedback": feedback})
                 continue
 
             if decision_type == "edit":
@@ -345,9 +348,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                         }],
                         llm_memory,
                     )
-                    suggest_rule_from_correction(
-                        load_automation_rules(),
-                        state["email_input"],
+                    _suggest_rule(
                         "edited_draft",
                         {"tool": name, "original": args, "edited": edited_args},
                     )
