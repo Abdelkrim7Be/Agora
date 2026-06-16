@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import yaml
 from contextlib import asynccontextmanager
@@ -56,6 +57,12 @@ class RespondInput(BaseModel):
     feedback: str
 
 
+
+
+
+
+class CapabilitiesInput(BaseModel):
+    capabilities: dict[str, bool]
 
 
 class MemoryInput(BaseModel):
@@ -146,6 +153,28 @@ def _run_detail(values: dict, run_id: str) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/capabilities")
+async def get_capabilities() -> dict:
+    return {"capabilities": load_config().capabilities}
+
+
+@app.put("/capabilities")
+async def update_capabilities(body: CapabilitiesInput) -> dict:
+    current = load_config().model_dump()
+    current["capabilities"] = body.capabilities
+    cfg = AgentConfig(**current)
+    DEFAULT_CONFIG_PATH.write_text(yaml.safe_dump(cfg.model_dump(), sort_keys=False))
+    return {"capabilities": cfg.capabilities}
+
+
+@app.get("/policy")
+async def get_policy() -> dict:
+    policy_path = Path(__file__).resolve().parents[2].parent / "security" / "policy.yaml"
+    if not policy_path.is_file():
+        raise HTTPException(status_code=404, detail="security policy not found")
+    return {"policy_yaml": policy_path.read_text()}
 
 
 @app.get("/config")

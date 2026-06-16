@@ -48,6 +48,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/agent/memory").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/config").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/config").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/capabilities").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/capabilities").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/policy").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/audit").hasRole("OWNER")
                 // Default-deny: anything not explicitly allowed above is rejected, so a future

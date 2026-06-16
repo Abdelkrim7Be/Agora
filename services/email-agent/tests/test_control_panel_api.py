@@ -110,3 +110,34 @@ def test_update_agent_config_validates_and_writes(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["agent"]["background"] == "background"
     assert "background" in config_path.read_text()
+
+
+def test_update_capabilities_preserves_valid_config(tmp_path, monkeypatch):
+    import src.api as api
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """agent:
+  background: background
+  triage_instructions: triage
+  response_preferences: response
+capabilities:
+  email: true
+  calendar: false
+auto_organize:
+  enabled: false
+  ignored_label: Auto/Ignored
+"""
+    )
+    monkeypatch.setattr(api, "DEFAULT_CONFIG_PATH", config_path)
+    monkeypatch.setattr("src.config.DEFAULT_CONFIG_PATH", config_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/capabilities",
+            json={"capabilities": {"email": True, "calendar": False, "inbox": True, "drafts": True}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["inbox"] is True
+    assert "inbox: true" in config_path.read_text()
