@@ -73,7 +73,7 @@ class FollowUpConfig(BaseModel):
 
 class LearningConfig(BaseModel):
     enabled: bool = False
-    suggestions_path: str = "rule_suggestions.jsonl"
+    suggestions_path: str = "logs/rule_suggestions.jsonl"
 
 
 class RulesConfig(BaseModel):
@@ -334,3 +334,55 @@ def build_follow_up_plan(email_input: dict, rules_config: RulesConfig) -> dict |
 def follow_up_query(rules_config: RulesConfig) -> str:
     label = rules_config.follow_ups.label.replace('"', '')
     return f'label:"{label}" older_than:{rules_config.follow_ups.after_days}d'
+
+
+def _subject_keywords(subject: str) -> list[str]:
+    words = [w.strip(' ,.:;!?()[]{}\"').lower() for w in subject.split()]
+    return [w for w in words if len(w) >= 4][:3]
+
+
+def suggest_rule_from_correction(
+    rules_config: RulesConfig,
+    email_input: dict,
+    correction_type: str,
+    details: dict | None = None,
+    state_path: str | Path | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Append a disabled rule suggestion derived from a human correction."""
+    if not rules_config.learning.enabled:
+        return False
+
+    now = now or datetime.now()
+    sender = email_input.get("author", "")
+    subject = email_input.get("subject", "")
+    domain = _sender_domain(sender)
+    when = {
+        "sender_domain": [domain] if domain else [],
+        "subject_contains": _subject_keywords(subject),
+    }
+    suggestion = {
+        "created_at": now.isoformat(timespec="seconds"),
+        "correction_type": correction_type,
+        "source": {
+            "author": sender,
+            "subject": subject,
+            "email_id": email_input.get("email_id"),
+            "gmail_thread_id": email_input.get("gmail_thread_id"),
+        },
+        "details": details or {},
+        "suggested_rule": {
+            "name": f"review {correction_type} for {domain or sender or 'sender'}",
+            "enabled": False,
+            "when": when,
+            "then": {"notify": True},
+        },
+    }
+    path = _state_path(state_path or rules_config.learning.suggestions_path, "logs/rule_suggestions.jsonl")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as fh:
+            fh.write(json.dumps(suggestion, sort_keys=True) + "\n")
+    except OSError:
+        return False
+    return True

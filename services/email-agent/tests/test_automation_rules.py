@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import textwrap
 from datetime import date, datetime
 
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 from src.automation import (
     DigestConfig,
     FollowUpConfig,
+    LearningConfig,
     SnoozeConfig,
     RulesConfig,
     build_follow_up_plan,
@@ -19,6 +21,7 @@ from src.automation import (
     maybe_emit_daily_digest,
     record_digest_item,
     snooze_label,
+    suggest_rule_from_correction,
 )
 
 
@@ -285,3 +288,49 @@ def test_build_follow_up_plan_creates_human_gated_nudge():
             "type": "tool_call",
         }
     ]
+
+
+def test_rule_suggestions_are_disabled_by_default(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+
+    assert suggest_rule_from_correction(
+        RulesConfig(),
+        {"author": "Alice <alice@example.com>", "subject": "Question"},
+        "ignored_draft",
+        state_path=path,
+    ) is False
+    assert not path.exists()
+
+
+def test_rule_suggestion_appends_disabled_candidate(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+    cfg = RulesConfig(
+        learning=LearningConfig(enabled=True, suggestions_path=str(path))
+    )
+
+    assert suggest_rule_from_correction(
+        cfg,
+        {
+            "author": "Alice <alice@example.com>",
+            "subject": "Project status question",
+            "email_id": "m1",
+            "gmail_thread_id": "t1",
+        },
+        "edited_draft",
+        {"feedback": "shorter"},
+        now=datetime(2026, 6, 16, 12, 30),
+    ) is True
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["created_at"] == "2026-06-16T12:30:00"
+    assert row["correction_type"] == "edited_draft"
+    assert row["source"]["email_id"] == "m1"
+    assert row["details"] == {"feedback": "shorter"}
+    assert row["suggested_rule"]["enabled"] is False
+    assert row["suggested_rule"]["when"] == {
+        "sender_domain": ["example.com"],
+        "subject_contains": ["project", "status", "question"],
+    }
+    assert row["suggested_rule"]["then"] == {"notify": True}

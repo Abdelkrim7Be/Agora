@@ -33,4 +33,4 @@ follow_ups:
 
 learning:
   enabled: false
-  suggestions_path: rule_suggestions.jsonl
+  suggestions_path: logs/rule_suggestions.jsonl

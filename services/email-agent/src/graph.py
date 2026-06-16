@@ -13,6 +13,7 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
+from src.automation import load_rules as load_automation_rules, suggest_rule_from_correction
 from src.capabilities import (
     approval_required,
     current_email_id,
@@ -283,6 +284,12 @@ def tool_node(state: State, store: BaseStore, config=None):
                     }],
                     llm_memory,
                 )
+                suggest_rule_from_correction(
+                    load_automation_rules(),
+                    state["email_input"],
+                    "ignored_draft",
+                    {"tool": name},
+                )
                 continue
 
             if decision_type == "response":
@@ -305,6 +312,12 @@ def tool_node(state: State, store: BaseStore, config=None):
                         ),
                     }],
                     llm_memory,
+                )
+                suggest_rule_from_correction(
+                    load_automation_rules(),
+                    state["email_input"],
+                    "draft_feedback",
+                    {"tool": name, "feedback": feedback},
                 )
                 continue
 
@@ -331,6 +344,12 @@ def tool_node(state: State, store: BaseStore, config=None):
                             ),
                         }],
                         llm_memory,
+                    )
+                    suggest_rule_from_correction(
+                        load_automation_rules(),
+                        state["email_input"],
+                        "edited_draft",
+                        {"tool": name, "original": args, "edited": edited_args},
                     )
                 args = edited_args
 
