@@ -141,10 +141,16 @@ def _authorization_cache_key(run_id: str, name: str, tool_call: dict) -> tuple[s
     return (run_id, name, tool_call.get("id", ""))
 
 
-def _authorize_tool_action(name: str, args: dict, run_id: str, tool_call: dict) -> dict:
+def _authorize_tool_action(
+    name: str,
+    args: dict,
+    run_id: str,
+    tool_call: dict,
+    refresh: bool = False,
+) -> dict:
     key = _authorization_cache_key(run_id, name, tool_call)
-    if key not in _authorization_cache:
-        authz = authorize_action(name, args, run_id)
+    if refresh or key not in _authorization_cache:
+        authz = authorize_action(name, args, run_id, tool_call.get("id", ""))
         decision = authz.get("decision", "deny")
         reason = authz.get("reason", "no reason provided")
         if decision not in ("allow", "deny", "hitl"):
@@ -264,6 +270,12 @@ def tool_node(state: State, store: BaseStore, config=None):
                 args = edited_args
 
             # accept and edit fall through to tool execution below
+
+        if settings.security_enabled and authorization_decision == "hitl" and args != tool_call["args"]:
+            authz = _authorize_tool_action(name, args, run_id, tool_call, refresh=True)
+            if authz["decision"] == "deny":
+                result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
+                continue
 
         tool = tools_by_name_map[name]
         if name in approval_set:

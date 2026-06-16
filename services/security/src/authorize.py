@@ -73,10 +73,12 @@ def authorize(
         # Rate-limit check.
         if tool.limits.max_per_run is not None or tool.limits.max_per_day is not None:
             run_id = req.context.get("run_id", "")
+            action_id = req.context.get("action_id", "")
             deny = ratelimit.would_exceed(
                 run_id,
                 tool.limits.max_per_run,
                 tool.limits.max_per_day,
+                action_id,
             )
             if deny:
                 return AuthorizeResponse(decision="deny", reason=deny)
@@ -85,7 +87,10 @@ def authorize(
     if tool.limits is not None and (
         tool.limits.max_per_run is not None or tool.limits.max_per_day is not None
     ):
-        ratelimit.record(req.context.get("run_id", ""))
+        ratelimit.record(
+            req.context.get("run_id", ""),
+            req.context.get("action_id", ""),
+        )
 
     return AuthorizeResponse(
         decision=tool.decision,

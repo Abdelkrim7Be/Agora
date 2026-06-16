@@ -19,8 +19,18 @@ def _install_authz(monkeypatch, decision: str, reason: str = "test policy") -> l
     g._authorization_cache.clear()
     monkeypatch.setattr(g.settings, "security_enabled", True)
 
-    def _fake_authorize(action: str, args: dict, run_id: str) -> dict:
-        calls.append({"action": action, "args": args, "run_id": run_id})
+    def _fake_authorize(
+        action: str,
+        args: dict,
+        run_id: str,
+        action_id: str = "",
+    ) -> dict:
+        calls.append({
+            "action": action,
+            "args": args,
+            "run_id": run_id,
+            "action_id": action_id,
+        })
         return {"decision": decision, "reason": reason}
 
     monkeypatch.setattr(g, "authorize_action", _fake_authorize)
@@ -42,7 +52,12 @@ def test_authorize_allow_executes_without_hitl(monkeypatch, fake_llms, respond_e
 
     assert "__interrupt__" not in result
     assert _email_was_sent(result["messages"])
-    assert calls == [{"action": "write_email", "args": DRAFT, "run_id": "run-allow"}]
+    assert calls == [{
+        "action": "write_email",
+        "args": DRAFT,
+        "run_id": "run-allow",
+        "action_id": "c1",
+    }]
 
 
 def test_authorize_hitl_uses_existing_approval_gate(monkeypatch, fake_llms, respond_email):
@@ -63,7 +78,12 @@ def test_authorize_hitl_uses_existing_approval_gate(monkeypatch, fake_llms, resp
     done = email_assistant.invoke(Command(resume={"type": "approve", "args": None}), cfg)
     assert "__interrupt__" not in done
     assert _email_was_sent(done["messages"])
-    assert calls == [{"action": "write_email", "args": DRAFT, "run_id": "run-hitl"}]
+    assert calls == [{
+        "action": "write_email",
+        "args": DRAFT,
+        "run_id": "run-hitl",
+        "action_id": "c1",
+    }]
 
 
 def test_authorize_deny_blocks_tool_execution(monkeypatch, fake_llms, respond_email):
@@ -84,7 +104,12 @@ def test_authorize_deny_blocks_tool_execution(monkeypatch, fake_llms, respond_em
         "Security policy denied" in (getattr(m, "content", "") or "")
         for m in result["messages"]
     )
-    assert calls == [{"action": "write_email", "args": DRAFT, "run_id": "run-deny"}]
+    assert calls == [{
+        "action": "write_email",
+        "args": DRAFT,
+        "run_id": "run-deny",
+        "action_id": "c1",
+    }]
 
 
 def test_security_disabled_does_not_call_authorize(monkeypatch, fake_llms, respond_email):
@@ -108,3 +133,40 @@ def test_security_disabled_does_not_call_authorize(monkeypatch, fake_llms, respo
     paused = email_assistant.invoke({"email_input": respond_email}, _cfg("run-disabled"))
 
     assert paused["__interrupt__"]
+
+def test_human_edit_is_reauthorized_and_can_be_denied(monkeypatch, fake_llms, respond_email):
+    import src.graph as g
+
+    edited = {"to": "blocked@example.com", "subject": "Re: question", "content": "Here you go."}
+    calls: list[dict] = []
+    g._authorization_cache.clear()
+    monkeypatch.setattr(g.settings, "security_enabled", True)
+
+    def _fake_authorize(action: str, args: dict, run_id: str, action_id: str = "") -> dict:
+        calls.append({"action": action, "args": args, "run_id": run_id, "action_id": action_id})
+        if args == edited:
+            return {"decision": "deny", "reason": "recipient blocked"}
+        return {"decision": "hitl", "reason": "needs approval"}
+
+    monkeypatch.setattr(g, "authorize_action", _fake_authorize)
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("Done", {"done": True}, "c2"),
+        ],
+    )
+    cfg = _cfg("run-edit-deny")
+
+    email_assistant.invoke({"email_input": respond_email}, cfg)
+    result = email_assistant.invoke(Command(resume={"type": "approve", "args": edited}), cfg)
+
+    assert not _email_was_sent(result["messages"])
+    assert any(
+        "Security policy denied" in (getattr(m, "content", "") or "")
+        for m in result["messages"]
+    )
+    assert calls == [
+        {"action": "write_email", "args": DRAFT, "run_id": "run-edit-deny", "action_id": "c1"},
+        {"action": "write_email", "args": edited, "run_id": "run-edit-deny", "action_id": "c1"},
+    ]

@@ -30,13 +30,16 @@ async def sanitize_email(sender: str, subject: str, content: str) -> dict:
         }
 
 
-def authorize_action(action: str, args: dict, run_id: str) -> dict:
+def authorize_action(action: str, args: dict, run_id: str, action_id: str = "") -> dict:
     """POST a proposed tool action to the security service /authorize endpoint.
 
     Fail closed: any failure denies the action so a security-service outage never
     becomes an unguarded tool execution.
     """
-    payload = {"action": action, "args": args, "context": {"run_id": run_id}}
+    context = {"run_id": run_id}
+    if action_id:
+        context["action_id"] = action_id
+    payload = {"action": action, "args": args, "context": context}
     try:
         with httpx.Client(timeout=settings.security_timeout) as client:
             resp = client.post(f"{settings.security_url}/authorize", json=payload)

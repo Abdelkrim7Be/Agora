@@ -132,12 +132,13 @@ def test_authorize_action_200_returns_verdict_and_sends_run_id(monkeypatch):
         "write_email",
         {"to": "alice@example.com", "subject": "Hi", "content": "Hello"},
         "run-123",
+        "call-1",
     )
 
     assert result == AUTHORIZE_ALLOW
     assert calls[0]["url"].endswith("/authorize")
     assert calls[0]["json"]["action"] == "write_email"
-    assert calls[0]["json"]["context"] == {"run_id": "run-123"}
+    assert calls[0]["json"]["context"] == {"run_id": "run-123", "action_id": "call-1"}
 
 
 def test_authorize_action_failure_denies_closed(monkeypatch):

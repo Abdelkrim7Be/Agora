@@ -223,6 +223,40 @@ def test_per_run_cap():
     assert "per-run" in second.reason
 
 
+def test_per_run_cap_is_idempotent_for_same_action_id():
+    policy = _policy_with_limits(max_per_run=1)
+    req = AuthorizeRequest(
+        action="write_email",
+        args={"to": "bob@example.com", "subject": "x", "content": "x"},
+        context={"run_id": "run-idempotent", "action_id": "call-1"},
+    )
+
+    first = authorize(req, policy=policy)
+    second = authorize(req, policy=policy)
+
+    assert first.decision == "hitl"
+    assert second.decision == "hitl"
+
+
+def test_per_run_cap_still_blocks_different_action_ids():
+    policy = _policy_with_limits(max_per_run=1)
+    first = AuthorizeRequest(
+        action="write_email",
+        args={"to": "bob@example.com", "subject": "x", "content": "x"},
+        context={"run_id": "run-different-actions", "action_id": "call-1"},
+    )
+    second = AuthorizeRequest(
+        action="write_email",
+        args={"to": "bob@example.com", "subject": "x", "content": "x"},
+        context={"run_id": "run-different-actions", "action_id": "call-2"},
+    )
+
+    assert authorize(first, policy=policy).decision == "hitl"
+    denied = authorize(second, policy=policy)
+    assert denied.decision == "deny"
+    assert "per-run" in denied.reason
+
+
 # --- Per-day rate cap with injectable clock ---
 
 def test_per_day_cap_and_window_reset(monkeypatch):
