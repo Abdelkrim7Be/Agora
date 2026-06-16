@@ -300,6 +300,16 @@ def tool_node(state: State, store: BaseStore, config=None):
                     hitl_approved.reset(tok)
             else:
                 observation = tool.invoke(args)
+        except Exception as exc:
+            # A tool failure (e.g. an inbox tool invoked without a trusted email_id
+            # on the manual /run path) must not crash the run — surface it to the
+            # agent as a tool message so it can recover and call Done.
+            result.append({
+                "role": "tool",
+                "content": f"The '{name}' action could not be completed: {exc}. Call Done.",
+                "tool_call_id": tool_call["id"],
+            })
+            continue
         finally:
             current_email_id.reset(email_id_token)
         result.append(

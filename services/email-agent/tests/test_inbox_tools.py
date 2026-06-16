@@ -129,3 +129,25 @@ def test_tool_node_injects_current_email_id_for_inbox_tools(monkeypatch):
             "tool_call_id": "call-inbox",
         }
     ]
+
+
+def test_tool_node_handles_missing_email_id_gracefully(monkeypatch):
+    # Inbox tool invoked without a trusted email_id (e.g. manual /run) must not crash
+    # the run — it should surface a recoverable tool message instead.
+    import src.graph as g
+
+    monkeypatch.setattr(g.settings, "security_enabled", False)
+    monkeypatch.setitem(g.tools_by_name_map, "archive_email", inbox_tools.archive_email)
+
+    state = {
+        "email_input": {},  # no email_id
+        "messages": [ai_tool_call("archive_email", {}, "call-inbox")],
+    }
+
+    result = g.tool_node(state, InMemoryStore(), config={"configurable": {"thread_id": "run"}})
+
+    assert current_email_id.get() is None
+    message = result["messages"][0]
+    assert message["tool_call_id"] == "call-inbox"
+    assert "could not be completed" in message["content"]
+    assert "Call Done" in message["content"]
