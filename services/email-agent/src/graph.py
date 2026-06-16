@@ -134,6 +134,10 @@ def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
     }
 
 
+# Caches a run's authorization decisions so a HITL resume re-running tool_node does
+# not re-call (and double-count) the rate limiter. Bounded with FIFO eviction so a
+# long-lived poller process can't grow it without limit (insertion-ordered dict).
+_AUTHORIZATION_CACHE_MAX = 512
 _authorization_cache: dict[tuple[str, str, str], dict] = {}
 
 
@@ -157,6 +161,8 @@ def _authorize_tool_action(
             reason = f"invalid authorization decision: {decision!r}"
             decision = "deny"
         _authorization_cache[key] = {"decision": decision, "reason": reason}
+        while len(_authorization_cache) > _AUTHORIZATION_CACHE_MAX:
+            del _authorization_cache[next(iter(_authorization_cache))]
     return _authorization_cache[key]
 
 
