@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import textwrap
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from src.automation import RulesConfig, build_rule_plan, load_rules, snooze_label
+from src.automation import (
+    DigestConfig,
+    RulesConfig,
+    build_rule_plan,
+    load_rules,
+    maybe_emit_daily_digest,
+    record_digest_item,
+    snooze_label,
+)
 
 
 def _write_yaml(tmp_path, body: str):
@@ -134,3 +142,55 @@ def test_build_rule_plan_can_prepare_human_gated_response(tmp_path):
         "subject": "Re: Question",
         "content": "Thanks, I received this and will follow up.",
     }
+
+
+def test_digest_records_configured_status_and_emits_once(tmp_path):
+    state_path = tmp_path / "digest_state.json"
+    cfg = RulesConfig(digest=DigestConfig(enabled=True, hour=9, statuses=["notify"]))
+    email = {"subject": "Build finished", "author": "CI <ci@example.com>"}
+
+    assert record_digest_item(
+        cfg,
+        "notify",
+        email,
+        "run-1",
+        state_path=state_path,
+        now=datetime(2026, 6, 16, 8, 0),
+    ) is True
+    assert record_digest_item(cfg, "completed", email, "run-2", state_path=state_path) is False
+
+    captured: list[str] = []
+    digest = maybe_emit_daily_digest(
+        cfg,
+        state_path=state_path,
+        now=datetime(2026, 6, 16, 9, 0),
+        emit=captured.append,
+    )
+
+    assert digest is not None
+    assert captured == [digest]
+    assert "Daily email digest for 2026-06-16" in digest
+    assert "[notify] Build finished - CI <ci@example.com> (run run-1)" in digest
+    assert maybe_emit_daily_digest(
+        cfg,
+        state_path=state_path,
+        now=datetime(2026, 6, 16, 10, 0),
+        emit=captured.append,
+    ) is None
+
+
+def test_digest_waits_until_configured_hour(tmp_path):
+    cfg = RulesConfig(digest=DigestConfig(enabled=True, hour=18))
+    record_digest_item(
+        cfg,
+        "notify",
+        {"subject": "FYI", "author": "Alice"},
+        "run-1",
+        state_path=tmp_path / "digest_state.json",
+    )
+
+    assert maybe_emit_daily_digest(
+        cfg,
+        state_path=tmp_path / "digest_state.json",
+        now=datetime(2026, 6, 16, 17, 59),
+    ) is None

@@ -6,7 +6,13 @@ import uuid
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
-from src.automation import RulesConfig, build_rule_plan, load_rules
+from src.automation import (
+    RulesConfig,
+    build_rule_plan,
+    load_rules,
+    maybe_emit_daily_digest,
+    record_digest_item,
+)
 from src.config import settings
 from src.security_client import sanitize_email
 from src.gmail_client import (
@@ -96,13 +102,18 @@ async def poll_once(
         result = await graph.ainvoke({"email_input": email_input}, cfg)
 
         if result.get("__interrupt__"):
-            outcomes.append((msg_id, "pending_approval", run_id))
+            outcome_status = "pending_approval"
         elif security_flagged:
-            # Leave UNREAD so the threat stays visible — forced-notify isn't delivered anywhere.
-            outcomes.append((msg_id, "security_hold", run_id))
+            # Leave UNREAD so the threat stays visible; forced-notify is not delivered anywhere.
+            outcome_status = "security_hold"
         else:
             mark_as_read(msg_id, resource=resource)
-            outcomes.append((msg_id, "completed", run_id))
+            outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
+
+        record_digest_item(rules_config, outcome_status, email_input, run_id)
+        outcomes.append((msg_id, outcome_status, run_id))
+
+    maybe_emit_daily_digest(rules_config)
     return outcomes
 
 

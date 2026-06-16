@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from email.utils import parseaddr
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -205,3 +206,77 @@ def build_rule_plan(
         "tool_calls": tool_calls,
         "terminal_status": terminal_status,
     }
+
+
+def _state_path(path: str | Path | None, default_name: str) -> Path:
+    if path is None:
+        return SERVICE_ROOT / default_name
+    p = Path(path)
+    return p if p.is_absolute() else SERVICE_ROOT / p
+
+
+def _read_json(path: Path, default: dict) -> dict:
+    if not path.is_file():
+        return default
+    return json.loads(path.read_text())
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def record_digest_item(
+    rules_config: RulesConfig,
+    status: str,
+    email_input: dict,
+    run_id: str,
+    state_path: str | Path | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Persist one digest candidate when daily digest is enabled for the status."""
+    if not rules_config.digest.enabled or status not in rules_config.digest.statuses:
+        return False
+    now = now or datetime.now()
+    path = _state_path(state_path, "digest_state.json")
+    state = _read_json(path, {"items": [], "last_emitted": None})
+    state.setdefault("items", []).append({
+        "status": status,
+        "run_id": run_id,
+        "subject": email_input.get("subject", "No Subject"),
+        "author": email_input.get("author", "Unknown Sender"),
+        "recorded_at": now.isoformat(timespec="seconds"),
+    })
+    _write_json(path, state)
+    return True
+
+
+def maybe_emit_daily_digest(
+    rules_config: RulesConfig,
+    state_path: str | Path | None = None,
+    now: datetime | None = None,
+    emit=print,
+) -> str | None:
+    """Emit and clear the digest once per local date when the configured hour is reached."""
+    if not rules_config.digest.enabled:
+        return None
+    now = now or datetime.now()
+    if now.hour < rules_config.digest.hour:
+        return None
+
+    path = _state_path(state_path, "digest_state.json")
+    state = _read_json(path, {"items": [], "last_emitted": None})
+    today = now.date().isoformat()
+    items = state.get("items") or []
+    if state.get("last_emitted") == today or not items:
+        return None
+
+    lines = [f"Daily email digest for {today}"]
+    for item in items:
+        lines.append(
+            f"- [{item['status']}] {item['subject']} - {item['author']} (run {item['run_id']})"
+        )
+    digest = "\n".join(lines)
+    emit(digest)
+    _write_json(path, {"items": [], "last_emitted": today})
+    return digest
