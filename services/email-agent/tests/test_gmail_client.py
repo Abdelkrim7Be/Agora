@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 import base64
+from email import message_from_bytes, policy
 
-from src.gmail_client import _extract_message_part, format_thread, gmail_to_email_input
+from src.config import settings
+from src.gmail_client import (
+    _extract_message_part,
+    archive_message,
+    create_draft,
+    ensure_label,
+    format_thread,
+    gmail_to_email_input,
+    list_labels,
+    mark_as_read,
+    mark_as_unread,
+    modify_labels,
+    trash_message,
+)
 
 
 def _b64(text: str) -> str:
@@ -13,11 +27,255 @@ def _message(headers: list[dict], payload: dict, msg_id="m1", thread_id="t1") ->
     return {"id": msg_id, "threadId": thread_id, "payload": {**payload, "headers": headers}}
 
 
+class _Execute:
+    def __init__(self, response: dict):
+        self.response = response
+
+    def execute(self) -> dict:
+        return self.response
+
+
+class _FakeMessages:
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def modify(self, **kwargs):
+        self.calls.append(("modify", kwargs))
+        return _Execute({"id": kwargs["id"], **kwargs["body"]})
+
+    def trash(self, **kwargs):
+        self.calls.append(("trash", kwargs))
+        return _Execute({"id": kwargs["id"], "labelIds": ["TRASH"]})
+
+
+class _FakeLabels:
+    def __init__(self, labels: list[dict] | None = None):
+        self.labels = labels or []
+        self.calls: list[tuple[str, dict]] = []
+
+    def list(self, **kwargs):
+        self.calls.append(("list", kwargs))
+        return _Execute({"labels": self.labels})
+
+    def create(self, **kwargs):
+        self.calls.append(("create", kwargs))
+        created = {"id": f"Label_{len(self.labels) + 1}", "name": kwargs["body"]["name"]}
+        self.labels.append(created)
+        return _Execute(created)
+
+
+class _FakeDrafts:
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def create(self, **kwargs):
+        self.calls.append(("create", kwargs))
+        return _Execute({"id": "draft-1", **kwargs["body"]})
+
+
+class _FakeUsers:
+    def __init__(self, labels: list[dict] | None = None):
+        self._messages = _FakeMessages()
+        self._labels = _FakeLabels(labels)
+        self._drafts = _FakeDrafts()
+
+    def messages(self):
+        return self._messages
+
+    def labels(self):
+        return self._labels
+
+    def drafts(self):
+        return self._drafts
+
+
+class _FakeGmailResource:
+    def __init__(self, labels: list[dict] | None = None):
+        self._users = _FakeUsers(labels)
+
+    def users(self):
+        return self._users
+
+
 HEADERS = [
     {"name": "From", "value": "Alice <alice@example.com>"},
     {"name": "To", "value": "Me <me@example.com>"},
     {"name": "Subject", "value": "Quick question"},
 ]
+
+
+# --- Gmail mutation helpers ---
+
+def test_modify_labels_dry_run_does_not_touch_resource(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    result = modify_labels("msg-1", add_label_ids=["L1"], remove_label_ids=["UNREAD"])
+
+    assert result == {
+        "dry_run": True,
+        "action": "modify_labels",
+        "message_id": "msg-1",
+        "add_label_ids": ["L1"],
+        "remove_label_ids": ["UNREAD"],
+    }
+
+
+def test_modify_labels_calls_gmail_api(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource()
+
+    result = modify_labels(
+        "msg-1",
+        add_label_ids=["Label_1"],
+        remove_label_ids=["UNREAD"],
+        resource=resource,
+    )
+
+    assert result == {
+        "id": "msg-1",
+        "addLabelIds": ["Label_1"],
+        "removeLabelIds": ["UNREAD"],
+    }
+    assert resource.users().messages().calls == [
+        (
+            "modify",
+            {
+                "userId": "me",
+                "id": "msg-1",
+                "body": {"addLabelIds": ["Label_1"], "removeLabelIds": ["UNREAD"]},
+            },
+        )
+    ]
+
+
+def test_read_and_archive_helpers_use_label_mutation(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource()
+
+    mark_as_read("msg-read", resource=resource)
+    mark_as_unread("msg-unread", resource=resource)
+    archive_message("msg-archive", resource=resource)
+
+    assert resource.users().messages().calls == [
+        (
+            "modify",
+            {
+                "userId": "me",
+                "id": "msg-read",
+                "body": {"addLabelIds": [], "removeLabelIds": ["UNREAD"]},
+            },
+        ),
+        (
+            "modify",
+            {
+                "userId": "me",
+                "id": "msg-unread",
+                "body": {"addLabelIds": ["UNREAD"], "removeLabelIds": []},
+            },
+        ),
+        (
+            "modify",
+            {
+                "userId": "me",
+                "id": "msg-archive",
+                "body": {"addLabelIds": [], "removeLabelIds": ["INBOX"]},
+            },
+        ),
+    ]
+
+
+def test_trash_message_respects_dry_run(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    assert trash_message("msg-1") == {
+        "dry_run": True,
+        "action": "trash_message",
+        "message_id": "msg-1",
+    }
+
+
+def test_trash_message_calls_gmail_api(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource()
+
+    result = trash_message("msg-1", resource=resource)
+
+    assert result == {"id": "msg-1", "labelIds": ["TRASH"]}
+    assert resource.users().messages().calls == [("trash", {"userId": "me", "id": "msg-1"})]
+
+
+def test_list_labels_returns_labels(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource(labels=[{"id": "Label_1", "name": "Clients"}])
+
+    assert list_labels(resource=resource) == [{"id": "Label_1", "name": "Clients"}]
+    assert resource.users().labels().calls == [("list", {"userId": "me"})]
+
+
+def test_ensure_label_reuses_existing_label(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource(labels=[{"id": "Label_1", "name": "Clients"}])
+
+    assert ensure_label("Clients", resource=resource) == "Label_1"
+    assert resource.users().labels().calls == [("list", {"userId": "me"})]
+
+
+def test_ensure_label_creates_missing_label(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource()
+
+    assert ensure_label("Auto/Ignored", resource=resource) == "Label_1"
+    assert resource.users().labels().calls == [
+        ("list", {"userId": "me"}),
+        (
+            "create",
+            {
+                "userId": "me",
+                "body": {
+                    "name": "Auto/Ignored",
+                    "labelListVisibility": "labelShow",
+                    "messageListVisibility": "show",
+                },
+            },
+        ),
+    ]
+
+
+def test_ensure_label_dry_run_returns_stable_id(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    assert ensure_label("Auto/Ignored") == "dry-run-label:Auto/Ignored"
+
+
+def test_create_draft_respects_dry_run(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    assert create_draft("a@example.com", "Subject", "Body", thread_id="thread-1") == {
+        "dry_run": True,
+        "action": "create_draft",
+        "to": "a@example.com",
+        "subject": "Subject",
+        "thread_id": "thread-1",
+    }
+
+
+def test_create_draft_calls_gmail_api_with_encoded_message(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource()
+
+    result = create_draft(
+        "a@example.com", "Subject", "Body text", thread_id="thread-1", resource=resource
+    )
+
+    assert result["id"] == "draft-1"
+    draft_message = resource.users().drafts().calls[0][1]["body"]["message"]
+    decoded = message_from_bytes(
+        base64.urlsafe_b64decode(draft_message["raw"]), policy=policy.default
+    )
+    assert draft_message["threadId"] == "thread-1"
+    assert decoded["To"] == "a@example.com"
+    assert decoded["Subject"] == "Subject"
+    assert decoded.get_content().strip() == "Body text"
 
 
 # --- _extract_message_part ---

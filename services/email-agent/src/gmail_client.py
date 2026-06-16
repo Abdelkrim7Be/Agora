@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from email.message import EmailMessage
 
 try:
     import pypdf as _pypdf
@@ -49,12 +50,126 @@ def get_message(msg_id: str, resource=None) -> dict:
     return resource.users().messages().get(userId="me", id=msg_id).execute()
 
 
+def _dry_run_result(action: str, **fields) -> dict:
+    return {"dry_run": True, "action": action, **fields}
+
+
+def _encode_message(message: EmailMessage) -> str:
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def modify_labels(
+    message_id: str,
+    add_label_ids: list[str] | None = None,
+    remove_label_ids: list[str] | None = None,
+    resource=None,
+) -> dict:
+    """Add/remove Gmail labels on a message."""
+    add_label_ids = add_label_ids or []
+    remove_label_ids = remove_label_ids or []
+    if settings.dry_run:
+        return _dry_run_result(
+            "modify_labels",
+            message_id=message_id,
+            add_label_ids=add_label_ids,
+            remove_label_ids=remove_label_ids,
+        )
+    resource = resource or gmail_resource()
+    return (
+        resource.users()
+        .messages()
+        .modify(
+            userId="me",
+            id=message_id,
+            body={"addLabelIds": add_label_ids, "removeLabelIds": remove_label_ids},
+        )
+        .execute()
+    )
+
+
 def mark_as_read(msg_id: str, resource=None) -> None:
     """Remove the UNREAD label from a message."""
+    modify_labels(msg_id, remove_label_ids=["UNREAD"], resource=resource)
+
+
+def mark_as_unread(msg_id: str, resource=None) -> dict:
+    """Add the UNREAD label to a message."""
+    return modify_labels(msg_id, add_label_ids=["UNREAD"], resource=resource)
+
+
+def archive_message(msg_id: str, resource=None) -> dict:
+    """Archive a message by removing it from the inbox."""
+    return modify_labels(msg_id, remove_label_ids=["INBOX"], resource=resource)
+
+
+def trash_message(msg_id: str, resource=None) -> dict:
+    """Move a message to Gmail trash."""
+    if settings.dry_run:
+        return _dry_run_result("trash_message", message_id=msg_id)
     resource = resource or gmail_resource()
-    resource.users().messages().modify(
-        userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
-    ).execute()
+    return resource.users().messages().trash(userId="me", id=msg_id).execute()
+
+
+def list_labels(resource=None) -> list[dict]:
+    """Return Gmail labels for the current mailbox."""
+    resource = resource or gmail_resource()
+    results = resource.users().labels().list(userId="me").execute()
+    return results.get("labels", [])
+
+
+def ensure_label(name: str, resource=None) -> str:
+    """Return a Gmail label id, creating the label when missing."""
+    if settings.dry_run:
+        return f"dry-run-label:{name}"
+    resource = resource or gmail_resource()
+    for label in list_labels(resource=resource):
+        if label.get("name") == name:
+            return label["id"]
+    created = (
+        resource.users()
+        .labels()
+        .create(
+            userId="me",
+            body={
+                "name": name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show",
+            },
+        )
+        .execute()
+    )
+    return created["id"]
+
+
+def create_draft(
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+    resource=None,
+) -> dict:
+    """Create a Gmail draft without sending it."""
+    if settings.dry_run:
+        return _dry_run_result(
+            "create_draft",
+            to=to,
+            subject=subject,
+            thread_id=thread_id,
+        )
+    resource = resource or gmail_resource()
+    message = EmailMessage()
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
+    draft_message = {"raw": _encode_message(message)}
+    if thread_id:
+        draft_message["threadId"] = thread_id
+    return (
+        resource.users()
+        .drafts()
+        .create(userId="me", body={"message": draft_message})
+        .execute()
+    )
 
 
 def fetch_thread(thread_id: str, resource=None) -> list[dict]:
