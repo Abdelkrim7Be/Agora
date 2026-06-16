@@ -42,6 +42,7 @@ services:
     environment:
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
+      AGENT_DRY_RUN: "true"          # explicit: no real sends from the stack until flipped
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_SECURITY_TIMEOUT: 10
