@@ -390,3 +390,31 @@ async def test_poll_once_proposes_follow_up_for_old_labeled_thread(monkeypatch, 
         "subject": "Re: Project update",
         "content": "Checking in on this.",
     }
+
+
+async def test_poll_history_processes_history_refs(monkeypatch, fake_llms):
+    messages = {
+        "m_hist": _raw_message("m_hist", "History", "hello"),
+        "m_read": {**_raw_message("m_read", "Read", "already done"), "labelIds": ["INBOX"]},
+    }
+    monkeypatch.setattr(
+        poller,
+        "fetch_history_message_refs",
+        lambda start_history_id, resource=None: [{"id": "m_hist"}, {"id": "m_read"}],
+    )
+    monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: messages[msg_id])
+    monkeypatch.setattr(
+        poller,
+        "fetch_thread",
+        lambda thread_id, resource=None: [m for m in messages.values() if m["threadId"] == thread_id],
+    )
+    marked = []
+    monkeypatch.setattr(poller, "mark_as_read", lambda msg_id, resource=None: marked.append(msg_id))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_history(_graph(), "history-1", resource=object())
+
+    assert len(outcomes) == 1
+    assert outcomes[0][0] == "m_hist"
+    assert outcomes[0][1] == "completed"
+    assert marked == ["m_hist"]

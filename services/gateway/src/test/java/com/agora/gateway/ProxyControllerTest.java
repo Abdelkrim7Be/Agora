@@ -104,6 +104,23 @@ class ProxyControllerTest {
     }
 
     @Test
+    void proxy_gmail_webhook_forwards_without_jwt() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/webhooks/gmail"))
+                .willReturn(aResponse()
+                        .withStatus(202)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"accepted\":true}")));
+
+        mockMvc.perform(post("/api/agent/webhooks/gmail?token=secret")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":{}}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.accepted").value(true));
+
+        wireMock.verify(postRequestedFor(urlPathEqualTo("/webhooks/gmail")));
+    }
+
+    @Test
     void proxy_passes_upstream_4xx_status_through() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/run"))
                 .willReturn(aResponse()

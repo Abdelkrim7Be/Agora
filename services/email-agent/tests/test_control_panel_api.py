@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import json
+
 from fastapi.testclient import TestClient
 
 from src.api import app, _require_run, _run_detail
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
-from src.tenant import normalize_user_id
+from src.tenant import current_user_id, normalize_user_id
 
 
 def test_run_registry_filters_by_status(tmp_path):
@@ -286,3 +289,62 @@ async def test_require_run_allows_owned_run(monkeypatch):
     monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: {"run_id": run_id})
 
     assert await _require_run(Graph(), "run-1") == {"configurable": {"thread_id": "run-1"}}
+
+
+def _pubsub_body(payload: dict) -> dict:
+    data = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
+    return {"message": {"data": data, "messageId": "msg-1"}}
+
+
+def test_gmail_webhook_ignored_when_disabled(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", False)
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/gmail", json=_pubsub_body({"historyId": "123"}))
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": False, "reason": "gmail webhooks disabled"}
+
+
+def test_gmail_webhook_processes_history_under_gmail_user(monkeypatch):
+    import src.api as api
+
+    captured = {}
+
+    async def fake_poll_history(graph, history_id):
+        captured["history_id"] = history_id
+        captured["user_id"] = current_user_id()
+        return [("m1", "completed", "run-1")]
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    monkeypatch.setattr(api, "poll_history", fake_poll_history)
+
+    with TestClient(app) as client:
+        client.app.state.graph = object()
+        response = client.post(
+            "/webhooks/gmail?token=secret",
+            json=_pubsub_body({"emailAddress": "alice@example.com", "historyId": "123"}),
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "accepted": True,
+        "history_id": "123",
+        "outcomes": [["m1", "completed", "run-1"]],
+    }
+    assert captured == {"history_id": "123", "user_id": "alice@example.com"}
+
+
+def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/gmail?token=wrong", json=_pubsub_body({"historyId": "123"}))
+
+    assert response.status_code == 403

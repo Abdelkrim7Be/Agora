@@ -50,6 +50,8 @@ class Settings:
     tenant_mode: str = os.getenv("TENANT_MODE", "single")
     default_user_id: str = os.getenv("AGENT_DEFAULT_USER_ID", "default")
     gmail_webhook_enabled: bool = _env_bool("GMAIL_WEBHOOK_ENABLED", "false")
+    gmail_webhook_topic: str = os.getenv("GMAIL_WEBHOOK_TOPIC", "")
+    gmail_webhook_secret: str = os.getenv("GMAIL_WEBHOOK_SECRET", "")
     polling_fallback_enabled: bool = _env_bool("GMAIL_POLLING_FALLBACK_ENABLED", "true")
 
 

@@ -149,7 +149,10 @@ def test_platform_settings_default_to_single_user_dev():
     assert settings.database_url == ""
     assert settings.redis_url == ""
     assert settings.storage_backend == "sqlite"
+    assert settings.run_registry_backend == "json"
     assert settings.tenant_mode == "single"
     assert settings.default_user_id == "default"
     assert settings.gmail_webhook_enabled is False
+    assert settings.gmail_webhook_topic == ""
+    assert settings.gmail_webhook_secret == ""
     assert settings.polling_fallback_enabled is True

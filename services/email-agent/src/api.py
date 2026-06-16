@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 
 import yaml
@@ -13,6 +15,7 @@ from src.config import settings
 from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow, reload_config
+from src.poller import poll_history
 from src.memory import namespace
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
@@ -64,10 +67,9 @@ class RespondInput(BaseModel):
     feedback: str
 
 
-
-
-
-
+class GmailWebhookInput(BaseModel):
+    message: dict = {}
+    subscription: str | None = None
 
 
 class RulesInput(BaseModel):
@@ -164,6 +166,45 @@ def _run_detail(values: dict, run_id: str) -> dict:
         "automation": email_input.get("automation"),
         "timeline": [_message_summary(m) for m in values.get("messages", [])],
     }
+
+
+def _decode_pubsub_data(message: dict) -> dict:
+    data = message.get("data")
+    if not data:
+        return {}
+    padded = data + "=" * (-len(data) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+
+
+def _require_webhook_secret(request: Request) -> None:
+    secret = settings.gmail_webhook_secret
+    if not secret:
+        raise HTTPException(status_code=503, detail="GMAIL_WEBHOOK_SECRET is required when Gmail webhooks are enabled")
+    provided = request.query_params.get("token") or request.headers.get("x-gmail-webhook-token")
+    if provided != secret:
+        raise HTTPException(status_code=403, detail="Invalid Gmail webhook token")
+
+
+@app.post("/webhooks/gmail", status_code=202)
+async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
+    if not settings.gmail_webhook_enabled:
+        return {"accepted": False, "reason": "gmail webhooks disabled"}
+    _require_webhook_secret(request)
+
+    try:
+        payload = _decode_pubsub_data(body.message)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid Pub/Sub message data") from exc
+
+    history_id = str(payload.get("historyId") or "")
+    if not history_id:
+        raise HTTPException(status_code=400, detail="Missing Gmail historyId")
+
+    email_address = payload.get("emailAddress")
+    with user_context(email_address):
+        outcomes = await poll_history(request.app.state.graph, history_id)
+
+    return {"accepted": True, "history_id": history_id, "outcomes": outcomes}
 
 
 @app.get("/health")

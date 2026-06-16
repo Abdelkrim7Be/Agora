@@ -70,6 +70,55 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
+    """Register a Gmail push notification watch for inbox changes."""
+    topic = topic_name or settings.gmail_webhook_topic
+    if not topic:
+        raise RuntimeError("GMAIL_WEBHOOK_TOPIC is required to register a Gmail watch")
+    resource = resource or gmail_resource()
+    return (
+        resource.users()
+        .watch(
+            userId="me",
+            body={
+                "topicName": topic,
+                "labelIds": ["INBOX"],
+                "labelFilterBehavior": "include",
+            },
+        )
+        .execute()
+    )
+
+
+def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dict]:
+    """Return unique message refs mentioned by Gmail history since start_history_id."""
+    resource = resource or gmail_resource()
+    refs: list[dict] = []
+    seen: set[str] = set()
+    page_token = None
+    while True:
+        kwargs = {
+            "userId": "me",
+            "startHistoryId": start_history_id,
+            "historyTypes": ["messageAdded", "labelAdded"],
+            "labelId": "INBOX",
+        }
+        if page_token:
+            kwargs["pageToken"] = page_token
+        results = resource.users().history().list(**kwargs).execute()
+        for entry in results.get("history", []):
+            events = entry.get("messagesAdded", []) + entry.get("labelsAdded", [])
+            for event in events:
+                message = event.get("message", {})
+                msg_id = message.get("id")
+                if msg_id and msg_id not in seen:
+                    seen.add(msg_id)
+                    refs.append({"id": msg_id, "threadId": message.get("threadId")})
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            return refs
+
+
 def get_message(msg_id: str, resource=None) -> dict:
     """Fetch a full Gmail message by id."""
     resource = resource or gmail_resource()

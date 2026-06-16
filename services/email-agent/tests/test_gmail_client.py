@@ -9,6 +9,7 @@ from src.gmail_client import (
     archive_message,
     create_draft,
     ensure_label,
+    fetch_history_message_refs,
     forward_message,
     format_thread,
     gmail_to_email_input,
@@ -18,6 +19,7 @@ from src.gmail_client import (
     modify_labels,
     reply_all_message,
     trash_message,
+    watch_mailbox,
 )
 
 
@@ -75,6 +77,20 @@ class _FakeLabels:
         return _Execute(created)
 
 
+class _FakeHistory:
+    def __init__(self, pages: list[dict] | None = None):
+        self.pages = pages or []
+        self.calls: list[dict] = []
+
+    def list(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("pageToken"):
+            index = int(kwargs["pageToken"])
+        else:
+            index = 0
+        return _Execute(self.pages[index] if index < len(self.pages) else {})
+
+
 class _FakeDrafts:
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
@@ -90,11 +106,14 @@ class _FakeUsers:
         labels: list[dict] | None = None,
         messages: dict[str, dict] | None = None,
         profile_email: str = "me@example.com",
+        history_pages: list[dict] | None = None,
     ):
         self._messages = _FakeMessages(messages)
         self._labels = _FakeLabels(labels)
+        self._history = _FakeHistory(history_pages)
         self._drafts = _FakeDrafts()
         self._profile_email = profile_email
+        self.watch_calls: list[dict] = []
 
     def messages(self):
         return self._messages
@@ -104,6 +123,13 @@ class _FakeUsers:
 
     def drafts(self):
         return self._drafts
+
+    def history(self):
+        return self._history
+
+    def watch(self, **kwargs):
+        self.watch_calls.append(kwargs)
+        return _Execute({"historyId": "123", "expiration": "999"})
 
     def getProfile(self, **kwargs):
         return _Execute({"emailAddress": self._profile_email})
@@ -115,8 +141,9 @@ class _FakeGmailResource:
         labels: list[dict] | None = None,
         messages: dict[str, dict] | None = None,
         profile_email: str = "me@example.com",
+        history_pages: list[dict] | None = None,
     ):
-        self._users = _FakeUsers(labels, messages, profile_email)
+        self._users = _FakeUsers(labels, messages, profile_email, history_pages)
 
     def users(self):
         return self._users
@@ -130,6 +157,60 @@ HEADERS = [
 
 
 # --- Gmail mutation helpers ---
+
+def test_watch_mailbox_registers_inbox_watch(monkeypatch):
+    monkeypatch.setattr(settings, "gmail_webhook_topic", "projects/agora/topics/gmail")
+    resource = _FakeGmailResource()
+
+    result = watch_mailbox(resource=resource)
+
+    assert result == {"historyId": "123", "expiration": "999"}
+    assert resource.users().watch_calls == [
+        {
+            "userId": "me",
+            "body": {
+                "topicName": "projects/agora/topics/gmail",
+                "labelIds": ["INBOX"],
+                "labelFilterBehavior": "include",
+            },
+        }
+    ]
+
+
+def test_fetch_history_message_refs_paginates_and_deduplicates():
+    pages = [
+        {
+            "history": [
+                {
+                    "messagesAdded": [
+                        {"message": {"id": "m1", "threadId": "t1"}},
+                        {"message": {"id": "m2", "threadId": "t2"}},
+                    ]
+                }
+            ],
+            "nextPageToken": "1",
+        },
+        {
+            "history": [
+                {
+                    "labelsAdded": [
+                        {"message": {"id": "m2", "threadId": "t2"}},
+                        {"message": {"id": "m3", "threadId": "t3"}},
+                    ]
+                }
+            ]
+        },
+    ]
+    resource = _FakeGmailResource(history_pages=pages)
+
+    assert fetch_history_message_refs("42", resource=resource) == [
+        {"id": "m1", "threadId": "t1"},
+        {"id": "m2", "threadId": "t2"},
+        {"id": "m3", "threadId": "t3"},
+    ]
+    assert resource.users().history().calls[0]["startHistoryId"] == "42"
+    assert resource.users().history().calls[1]["pageToken"] == "1"
+
 
 def test_modify_labels_dry_run_does_not_touch_resource(monkeypatch):
     monkeypatch.setattr(settings, "dry_run", True)
