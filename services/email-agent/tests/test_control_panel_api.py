@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from src.api import app, _run_detail
 from src.run_registry import list_runs, upsert_run
+from src.tenant import normalize_user_id
 
 
 def test_run_registry_filters_by_status(tmp_path):
@@ -24,17 +25,34 @@ def test_run_registry_filters_by_status(tmp_path):
     assert pending[0]["pending_action"][0]["action_request"]["action"] == "write_email"
 
 
+def test_run_registry_filters_by_user(tmp_path):
+    path = tmp_path / "runs.json"
+    upsert_run("run-1", "completed", path=path, user_id="alice@example.com")
+    upsert_run("run-2", "completed", path=path, user_id="bob@example.com")
+
+    runs = list_runs(path=path, user_id="alice@example.com")
+
+    assert [run["run_id"] for run in runs] == ["run-1"]
+    assert runs[0]["user_id"] == "alice@example.com"
+
+
 def test_runs_endpoint_returns_registry(monkeypatch):
-    monkeypatch.setattr(
-        "src.api.list_runs",
-        lambda status=None: [{"run_id": "run-1", "status": status}],
-    )
+    captured = {}
+
+    def fake_list_runs(status=None, user_id=None):
+        captured["user_id"] = user_id
+        return [{"run_id": "run-1", "status": status, "user_id": user_id}]
+
+    monkeypatch.setattr("src.api.list_runs", fake_list_runs)
 
     with TestClient(app) as client:
-        response = client.get("/runs?status=pending_approval")
+        response = client.get("/runs?status=pending_approval", headers={"X-Agora-User": "alice@example.com"})
 
     assert response.status_code == 200
-    assert response.json() == {"runs": [{"run_id": "run-1", "status": "pending_approval"}]}
+    assert captured["user_id"] == "alice@example.com"
+    assert response.json() == {
+        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": "alice@example.com"}]
+    }
 
 
 def test_run_detail_shapes_timeline_and_security():
@@ -94,6 +112,37 @@ def test_memory_put_then_get_roundtrips(monkeypatch):
             "triage_preferences": "triage",
             "response_preferences": "response",
         }
+
+
+def test_memory_is_scoped_by_forwarded_user_header(monkeypatch):
+    with TestClient(app) as client:
+        client.app.state.store = _FakeAsyncStore()
+        alice = {"X-Agora-User": "alice@example.com"}
+        bob = {"X-Agora-User": "bob@example.com"}
+
+        assert client.put(
+            "/memory",
+            headers=alice,
+            json={"triage_preferences": "alice triage", "response_preferences": "alice response"},
+        ).status_code == 200
+        assert client.put(
+            "/memory",
+            headers=bob,
+            json={"triage_preferences": "bob triage", "response_preferences": "bob response"},
+        ).status_code == 200
+
+        assert client.get("/memory", headers=alice).json() == {
+            "triage_preferences": "alice triage",
+            "response_preferences": "alice response",
+        }
+        assert client.get("/memory", headers=bob).json() == {
+            "triage_preferences": "bob triage",
+            "response_preferences": "bob response",
+        }
+
+        stored_namespaces = {ns for ns, _ in client.app.state.store.values}
+        assert ("email_agent", normalize_user_id("alice@example.com"), "triage_preferences") in stored_namespaces
+        assert ("email_agent", normalize_user_id("bob@example.com"), "triage_preferences") in stored_namespaces
 
 
 def test_policy_endpoint_proxies_security_service(monkeypatch):

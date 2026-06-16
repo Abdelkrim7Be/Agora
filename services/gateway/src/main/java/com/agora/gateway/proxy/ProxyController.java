@@ -24,11 +24,13 @@ import java.util.regex.Pattern;
 public class ProxyController {
 
     private static final String PREFIX = "/api/agent";
+    private static final String USER_HEADER = "X-Agora-User";
     private static final Pattern VERB_PATTERN = Pattern.compile("^/api/agent/run/[^/]+/([^/]+)$");
 
     private static final Set<String> HOP_BY_HOP = Set.of(
             "host", "connection", "content-length", "transfer-encoding",
-            "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade"
+            "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
+            USER_HEADER.toLowerCase()
     );
 
     private final RestClient restClient;
@@ -57,13 +59,23 @@ public class ProxyController {
 
         var spec = restClient.method(method).uri(URI.create(upstreamUrl));
 
-        // Forward safe headers (skip hop-by-hop)
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String username = auth != null ? auth.getName() : null;
+        String role = auth != null ? auth.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
+                .findFirst().orElse(null) : null;
+
+        // Forward safe headers (skip hop-by-hop and internally owned identity headers).
         var headerNames = request.getHeaderNames();
         while (headerNames.hasMoreElements()) {
             String name = headerNames.nextElement();
             if (!HOP_BY_HOP.contains(name.toLowerCase())) {
                 spec = spec.header(name, request.getHeader(name));
             }
+        }
+        if (username != null) {
+            spec = spec.header(USER_HEADER, username);
         }
 
         if (body.length > 0 && contentType != null) {
@@ -73,13 +85,6 @@ public class ProxyController {
         return spec.exchange((req, resp) -> {
             byte[] responseBody = resp.getBody().readAllBytes();
             int status = resp.getStatusCode().value();
-
-            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-            String username = auth != null ? auth.getName() : null;
-            String role = auth != null ? auth.getAuthorities().stream()
-                    .map(GrantedAuthority::getAuthority)
-                    .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
-                    .findFirst().orElse(null) : null;
 
             auditService.record(username, role, deriveAction(request), request.getMethod(),
                     downstreamPath, status, "forwarded");

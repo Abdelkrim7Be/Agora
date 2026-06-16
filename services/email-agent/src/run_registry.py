@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from src.config import SERVICE_ROOT
+from src.tenant import current_user_id, normalize_user_id
 
 DEFAULT_RUN_INDEX = SERVICE_ROOT / "logs" / "run_index.json"
 
@@ -41,13 +42,16 @@ def upsert_run(
     classification: str | None = None,
     pending_action: list | None = None,
     path: str | Path | None = None,
+    user_id: str | None = None,
 ) -> dict:
     index_path = _path(path)
     data = _read(index_path)
     runs = data.setdefault("runs", [])
     existing = next((r for r in runs if r.get("run_id") == run_id), None)
     email_input = email_input or {}
+    resolved_user_id = normalize_user_id(user_id or current_user_id())
     record = {
+        "user_id": resolved_user_id,
         "run_id": run_id,
         "status": status,
         "classification": classification,
@@ -71,8 +75,18 @@ def upsert_run(
     return saved
 
 
-def list_runs(status: str | None = None, path: str | Path | None = None) -> list[dict]:
+def list_runs(
+    status: str | None = None,
+    path: str | Path | None = None,
+    user_id: str | None = None,
+) -> list[dict]:
     runs = _read(_path(path)).get("runs", [])
+    if user_id is not None:
+        resolved_user_id = normalize_user_id(user_id)
+        runs = [
+            r for r in runs
+            if normalize_user_id(r.get("user_id")) == resolved_user_id
+        ]
     if status:
         runs = [r for r in runs if r.get("status") == status]
     return runs

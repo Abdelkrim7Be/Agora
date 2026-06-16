@@ -3,8 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from src.prompts import MEMORY_UPDATE_INSTRUCTIONS
-
-USER = "default"
+from src.tenant import current_user_id, normalize_user_id
 
 
 class UserPreferences(BaseModel):
@@ -18,8 +17,8 @@ class UserPreferences(BaseModel):
     )
 
 
-def namespace(kind: str) -> tuple[str, str, str]:
-    return ("email_agent", USER, kind)
+def namespace(kind: str, user_id: str | None = None) -> tuple[str, str, str]:
+    return ("email_agent", normalize_user_id(user_id or current_user_id()), kind)
 
 
 def get_memory(store, ns: tuple, default_content: str) -> str:

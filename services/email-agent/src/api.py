@@ -15,6 +15,7 @@ from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow, reload_config
 from src.memory import namespace
 from src.run_registry import list_runs, upsert_run
+from src.tenant import current_user_id, user_context
 from src.security_client import fetch_policy
 from src.storage import open_graph_storage
 
@@ -33,6 +34,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="email-agent", version="0.1.0", lifespan=lifespan)
+
+
+def _request_user_id(request: Request) -> str | None:
+    return request.headers.get("x-agora-user")
+
+
+@app.middleware("http")
+async def tenant_context_middleware(request: Request, call_next):
+    with user_context(_request_user_id(request)):
+        return await call_next(request)
 
 
 class EmailInput(BaseModel):
@@ -104,6 +115,7 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
         email_input=email_input,
         classification=run.classification,
         pending_action=run.pending_action,
+        user_id=current_user_id(),
     )
 
 
@@ -239,7 +251,7 @@ async def update_preferences(request: Request, body: MemoryInput) -> dict:
 
 @app.get("/runs")
 async def runs(status: str | None = Query(default=None)) -> dict:
-    return {"runs": list_runs(status=status)}
+    return {"runs": list_runs(status=status, user_id=current_user_id())}
 
 
 @app.get("/run/{run_id}", response_model=RunResponse)

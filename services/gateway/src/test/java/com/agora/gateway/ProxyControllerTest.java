@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
@@ -92,12 +93,14 @@ class ProxyControllerTest {
 
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + ownerToken())
+                        .header("X-Agora-User", "spoofed-user")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"author\":\"a@b.com\",\"to\":\"me@b.com\",\"subject\":\"Hi\",\"email_thread\":\"Hello\"}"))
                 .andExpect(status().isOk())
                 .andExpect(content().json(responseBody));
 
-        wireMock.verify(postRequestedFor(urlEqualTo("/run")));
+        wireMock.verify(postRequestedFor(urlEqualTo("/run"))
+                .withHeader("X-Agora-User", equalTo("owner")));
     }
 
     @Test
@@ -110,6 +113,7 @@ class ProxyControllerTest {
 
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + ownerToken())
+                        .header("X-Agora-User", "spoofed-user")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isUnprocessableEntity());
