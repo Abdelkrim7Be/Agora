@@ -28,3 +28,19 @@ async def sanitize_email(sender: str, subject: str, content: str) -> dict:
             "cleaned_text": content,
             "classifier_unavailable": True,
         }
+
+
+def authorize_action(action: str, args: dict, run_id: str) -> dict:
+    """POST a proposed tool action to the security service /authorize endpoint.
+
+    Fail closed: any failure denies the action so a security-service outage never
+    becomes an unguarded tool execution.
+    """
+    payload = {"action": action, "args": args, "context": {"run_id": run_id}}
+    try:
+        with httpx.Client(timeout=settings.security_timeout) as client:
+            resp = client.post(f"{settings.security_url}/authorize", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return {"decision": "deny", "reason": "security_service_unreachable"}

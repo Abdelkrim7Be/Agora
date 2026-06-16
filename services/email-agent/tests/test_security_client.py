@@ -93,3 +93,78 @@ async def test_timeout_returns_cautious_verdict(monkeypatch):
     result = await sanitize_email("sender@example.com", "Re: meeting", "Hi")
     assert result["classifier_unavailable"] is True
     assert result["cleaned_text"] == "Hi"
+
+AUTHORIZE_ALLOW = {"decision": "allow", "reason": "allowed by policy"}
+
+
+class _FakeSyncClient:
+    def __init__(self, *, response=None, raises=None, calls=None, **_kw):
+        self._response = response
+        self._raises = raises
+        self._calls = calls if calls is not None else []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        pass
+
+    def post(self, url: str, json=None):
+        if self._raises:
+            raise self._raises
+        self._calls.append({"url": url, "json": json})
+        return self._response
+
+
+def test_authorize_action_200_returns_verdict_and_sends_run_id(monkeypatch):
+    from src.security_client import authorize_action
+
+    calls = []
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: _FakeSyncClient(
+            response=_FakeResponse(AUTHORIZE_ALLOW), calls=calls, **kw
+        ),
+    )
+
+    result = authorize_action(
+        "write_email",
+        {"to": "alice@example.com", "subject": "Hi", "content": "Hello"},
+        "run-123",
+    )
+
+    assert result == AUTHORIZE_ALLOW
+    assert calls[0]["url"].endswith("/authorize")
+    assert calls[0]["json"]["action"] == "write_email"
+    assert calls[0]["json"]["context"] == {"run_id": "run-123"}
+
+
+def test_authorize_action_failure_denies_closed(monkeypatch):
+    from src.security_client import authorize_action
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: _FakeSyncClient(raises=httpx.ConnectError("refused"), **kw),
+    )
+
+    result = authorize_action("write_email", {"to": "alice@example.com"}, "run-123")
+
+    assert result["decision"] == "deny"
+    assert result["reason"] == "security_service_unreachable"
+
+
+def test_authorize_action_non_2xx_denies_closed(monkeypatch):
+    from src.security_client import authorize_action
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: _FakeSyncClient(response=_FakeResponse({}, raise_on_status=True), **kw),
+    )
+
+    result = authorize_action("write_email", {"to": "alice@example.com"}, "run-123")
+
+    assert result["decision"] == "deny"
+    assert result["reason"] == "security_service_unreachable"
