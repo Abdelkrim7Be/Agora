@@ -8,10 +8,13 @@ from pydantic import ValidationError
 
 from src.automation import (
     DigestConfig,
+    FollowUpConfig,
     SnoozeConfig,
     RulesConfig,
+    build_follow_up_plan,
     build_rule_plan,
     due_snooze_labels,
+    follow_up_query,
     load_rules,
     maybe_emit_daily_digest,
     record_digest_item,
@@ -246,3 +249,39 @@ def test_due_snooze_labels_returns_due_dates_only():
     due = due_snooze_labels(labels, cfg, today=date(2026, 6, 16))
 
     assert [label["id"] for label in due] == ["l1", "l2"]
+
+
+def test_follow_up_query_uses_label_and_age():
+    cfg = RulesConfig(follow_ups=FollowUpConfig(enabled=True, label="Awaiting Reply", after_days=5))
+
+    assert follow_up_query(cfg) == 'label:"Awaiting Reply" older_than:5d'
+
+
+def test_build_follow_up_plan_creates_human_gated_nudge():
+    cfg = RulesConfig(
+        follow_ups=FollowUpConfig(
+            enabled=True,
+            nudge="Checking in on this.",
+        )
+    )
+    email = {
+        "to": "Bob <bob@example.com>",
+        "subject": "Project update",
+    }
+
+    plan = build_follow_up_plan(email, cfg)
+
+    assert plan is not None
+    assert plan["matched_rules"] == ["follow_up"]
+    assert plan["tool_calls"] == [
+        {
+            "name": "write_email",
+            "args": {
+                "to": "bob@example.com",
+                "subject": "Re: Project update",
+                "content": "Checking in on this.",
+            },
+            "id": "follow_up_nudge",
+            "type": "tool_call",
+        }
+    ]

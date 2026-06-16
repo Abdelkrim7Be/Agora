@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from unittest.mock import MagicMock
 
-from src.automation import AutomationRule, RuleThen, RuleWhen, RulesConfig, SnoozeConfig
+from src.automation import AutomationRule, FollowUpConfig, RuleThen, RuleWhen, RulesConfig, SnoozeConfig
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -351,3 +351,42 @@ async def test_poll_once_resurfaces_due_snoozed_messages(monkeypatch, mocked_gma
         "add": ["INBOX", "UNREAD"],
         "remove": ["label_due"],
     }]
+
+
+async def test_poll_once_proposes_follow_up_for_old_labeled_thread(monkeypatch, mocked_gmail):
+    set_unread, _ = mocked_gmail
+    set_unread([])
+    message = _raw_message("m_follow", "Project update", "sent body")
+    message["payload"]["headers"] = [
+        {"name": "From", "value": "Me <me@example.com>"},
+        {"name": "To", "value": "Bob <bob@example.com>"},
+        {"name": "Subject", "value": "Project update"},
+    ]
+
+    monkeypatch.setattr(
+        poller,
+        "search_messages",
+        lambda query, max_results, resource=None: [{"id": "m_follow"}],
+    )
+    monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: message)
+    monkeypatch.setattr(poller, "fetch_thread", lambda thread_id, resource=None: [message])
+    rules = RulesConfig(
+        follow_ups=FollowUpConfig(
+            enabled=True,
+            label="Awaiting Reply",
+            after_days=4,
+            nudge="Checking in on this.",
+        )
+    )
+
+    graph = _RecordingGraph()
+    outcomes = await poller.poll_once(graph, resource=object(), rules_config=rules)
+
+    assert outcomes == [("m_follow", "follow_up_proposed", outcomes[0][2])]
+    automation = graph.inputs[0]["email_input"]["automation"]
+    assert automation["tool_calls"][0]["name"] == "write_email"
+    assert automation["tool_calls"][0]["args"] == {
+        "to": "bob@example.com",
+        "subject": "Re: Project update",
+        "content": "Checking in on this.",
+    }

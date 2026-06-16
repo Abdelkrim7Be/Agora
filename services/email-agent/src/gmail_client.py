@@ -57,6 +57,18 @@ def list_messages_by_label(label_id: str, max_results: int, resource=None) -> li
     return results.get("messages", [])
 
 
+def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
+    """Return message refs for an arbitrary Gmail search query."""
+    resource = resource or gmail_resource()
+    results = (
+        resource.users()
+        .messages()
+        .list(userId="me", q=query, maxResults=max_results)
+        .execute()
+    )
+    return results.get("messages", [])
+
+
 def get_message(msg_id: str, resource=None) -> dict:
     """Fetch a full Gmail message by id."""
     resource = resource or gmail_resource()

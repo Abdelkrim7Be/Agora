@@ -8,8 +8,10 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from src.automation import (
     RulesConfig,
+    build_follow_up_plan,
     build_rule_plan,
     due_snooze_labels,
+    follow_up_query,
     load_rules,
     maybe_emit_daily_digest,
     record_digest_item,
@@ -28,6 +30,7 @@ from src.gmail_client import (
     list_messages_by_label,
     mark_as_read,
     modify_labels,
+    search_messages,
 )
 from src.graph import overall_workflow
 
@@ -53,6 +56,36 @@ def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str
             )
             surfaced.append((msg_id, label_name))
     return surfaced
+
+
+async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tuple]:
+    """Find old awaiting-reply threads and propose a nudge through HITL."""
+    if not rules_config.follow_ups.enabled:
+        return []
+
+    outcomes: list[tuple] = []
+    refs = search_messages(
+        follow_up_query(rules_config),
+        rules_config.follow_ups.max_results,
+        resource=resource,
+    )
+    for ref in refs:
+        msg_id = ref["id"]
+        message = get_message(msg_id, resource=resource)
+        thread = fetch_thread(message["threadId"], resource=resource)
+        email_input = gmail_to_email_input(message, thread_messages=thread)
+        plan = build_follow_up_plan(email_input, rules_config)
+        if not plan:
+            continue
+        email_input = {**email_input, "automation": plan}
+        run_id = str(uuid.uuid4())
+        result = await graph.ainvoke(
+            {"email_input": email_input},
+            {"configurable": {"thread_id": run_id}},
+        )
+        status = "pending_approval" if result.get("__interrupt__") else "follow_up_proposed"
+        outcomes.append((msg_id, status, run_id))
+    return outcomes
 
 
 async def poll_once(
@@ -144,6 +177,7 @@ async def poll_once(
         record_digest_item(rules_config, outcome_status, email_input, run_id)
         outcomes.append((msg_id, outcome_status, run_id))
 
+    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
     maybe_emit_daily_digest(rules_config)
     return outcomes
 

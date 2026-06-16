@@ -308,3 +308,29 @@ def due_snooze_labels(
         if label_date and label_date <= today:
             due.append(label)
     return due
+
+
+def build_follow_up_plan(email_input: dict, rules_config: RulesConfig) -> dict | None:
+    """Build a HITL-gated nudge for a follow-up candidate thread."""
+    if not rules_config.follow_ups.enabled:
+        return None
+    return {
+        "matched_rules": ["follow_up"],
+        "tool_calls": [
+            _tool_call(
+                "write_email",
+                {
+                    "to": _email_address(email_input.get("to", "")),
+                    "subject": _re_subject(email_input.get("subject", "No Subject")),
+                    "content": rules_config.follow_ups.nudge,
+                },
+                "follow_up_nudge",
+            )
+        ],
+        "terminal_status": "respond",
+    }
+
+
+def follow_up_query(rules_config: RulesConfig) -> str:
+    label = rules_config.follow_ups.label.replace('"', '')
+    return f'label:"{label}" older_than:{rules_config.follow_ups.after_days}d'
