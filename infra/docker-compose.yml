@@ -18,6 +18,7 @@ services:
   security:
     build:
       context: ../services/security
+      network: host
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
       SECURITY_API_HOST: 0.0.0.0
@@ -35,6 +36,7 @@ services:
   email-agent:
     build:
       context: ../services/email-agent
+      network: host
     env_file:
       - ../services/email-agent/.env
     environment:
@@ -60,6 +62,7 @@ services:
   gateway:
     build:
       context: ../services/gateway
+      network: host
     ports:
       - "8080:8080"
     environment:
