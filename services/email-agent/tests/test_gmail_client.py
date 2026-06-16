@@ -148,6 +148,26 @@ def test_modify_labels_calls_gmail_api(monkeypatch):
     ]
 
 
+def test_mark_as_read_runs_even_in_dry_run(monkeypatch):
+    # Poller housekeeping must not be suppressed by dry-run, or poll_once would
+    # reprocess the same unread emails on every cycle.
+    monkeypatch.setattr(settings, "dry_run", True)
+    resource = _FakeGmailResource()
+
+    mark_as_read("msg-read", resource=resource)
+
+    assert resource.users().messages().calls == [
+        (
+            "modify",
+            {
+                "userId": "me",
+                "id": "msg-read",
+                "body": {"addLabelIds": [], "removeLabelIds": ["UNREAD"]},
+            },
+        )
+    ]
+
+
 def test_read_and_archive_helpers_use_label_mutation(monkeypatch):
     monkeypatch.setattr(settings, "dry_run", False)
     resource = _FakeGmailResource()

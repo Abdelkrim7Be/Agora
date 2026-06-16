@@ -63,11 +63,17 @@ def modify_labels(
     add_label_ids: list[str] | None = None,
     remove_label_ids: list[str] | None = None,
     resource=None,
+    respect_dry_run: bool = True,
 ) -> dict:
-    """Add/remove Gmail labels on a message."""
+    """Add/remove Gmail labels on a message.
+
+    `respect_dry_run=False` lets internal housekeeping (e.g. mark-as-read in the
+    poller) run even under AGENT_DRY_RUN — dry-run gates agent-proposed actions,
+    not the dedup bookkeeping the poller relies on.
+    """
     add_label_ids = add_label_ids or []
     remove_label_ids = remove_label_ids or []
-    if settings.dry_run:
+    if respect_dry_run and settings.dry_run:
         return _dry_run_result(
             "modify_labels",
             message_id=message_id,
@@ -88,8 +94,12 @@ def modify_labels(
 
 
 def mark_as_read(msg_id: str, resource=None) -> None:
-    """Remove the UNREAD label from a message."""
-    modify_labels(msg_id, remove_label_ids=["UNREAD"], resource=resource)
+    """Remove the UNREAD label from a message.
+
+    Poller housekeeping — runs even in dry-run so the poller doesn't reprocess the
+    same unread emails every cycle.
+    """
+    modify_labels(msg_id, remove_label_ids=["UNREAD"], resource=resource, respect_dry_run=False)
 
 
 def mark_as_unread(msg_id: str, resource=None) -> dict:
