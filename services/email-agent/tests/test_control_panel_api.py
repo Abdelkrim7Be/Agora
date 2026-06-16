@@ -61,32 +61,52 @@ def test_run_detail_shapes_timeline_and_security():
     assert detail["timeline"] == [{"role": "user", "content": "hello", "tool_calls": []}]
 
 
-def test_memory_endpoint_contract(monkeypatch):
-    class FakeStore:
-        def __init__(self):
-            self.values = {}
+class _FakeAsyncStore:
+    """Mirrors AsyncSqliteStore's async API (the production store rejects sync calls)."""
 
-        def get(self, ns, key):
-            value = self.values.get((ns, key))
-            return type("Item", (), {"value": value}) if value is not None else None
+    def __init__(self):
+        self.values = {}
 
-        def put(self, ns, key, value):
-            self.values[(ns, key)] = value
+    async def aget(self, ns, key):
+        value = self.values.get((ns, key))
+        return type("Item", (), {"value": value}) if value is not None else None
 
+    async def aput(self, ns, key, value):
+        self.values[(ns, key)] = value
+
+
+def test_memory_put_then_get_roundtrips(monkeypatch):
     with TestClient(app) as client:
-        client.app.state.store = FakeStore()
-        response = client.put(
+        client.app.state.store = _FakeAsyncStore()
+        put = client.put(
             "/memory",
-            json={
-                "triage_preferences": "triage",
-                "response_preferences": "response",
-            },
+            json={"triage_preferences": "triage", "response_preferences": "response"},
         )
-        assert response.status_code == 200
-        assert response.json() == {
+        assert put.status_code == 200
+        assert put.json() == {
             "triage_preferences": "triage",
             "response_preferences": "response",
         }
+
+        got = client.get("/memory")
+        assert got.status_code == 200
+        assert got.json() == {
+            "triage_preferences": "triage",
+            "response_preferences": "response",
+        }
+
+
+def test_policy_endpoint_proxies_security_service(monkeypatch):
+    async def fake_fetch_policy():
+        return {"policy_yaml": "default: deny\n"}
+
+    monkeypatch.setattr("src.api.fetch_policy", fake_fetch_policy)
+
+    with TestClient(app) as client:
+        response = client.get("/policy")
+
+    assert response.status_code == 200
+    assert response.json() == {"policy_yaml": "default: deny\n"}
 
 
 def test_update_agent_config_validates_and_writes(tmp_path, monkeypatch):

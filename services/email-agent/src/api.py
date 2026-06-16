@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 import yaml
 from contextlib import asynccontextmanager
@@ -15,9 +14,10 @@ from pydantic import BaseModel
 from src.config import settings
 from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
-from src.graph import overall_workflow
-from src.memory import get_memory, namespace
+from src.graph import overall_workflow, reload_config
+from src.memory import namespace
 from src.run_registry import list_runs, upsert_run
+from src.security_client import fetch_policy
 
 
 @asynccontextmanager
@@ -176,10 +176,11 @@ async def update_rules(body: RulesInput) -> dict:
     data = yaml.safe_load(body.rules_yaml) or {}
     if data.get("rules") is None:
         data["rules"] = []
-    parsed = RulesConfig(**data)
-    DEFAULT_RULES_PATH.write_text(yaml.safe_dump(parsed.model_dump(), sort_keys=False))
+    parsed = RulesConfig(**data)  # validate before persisting
+    # Persist the user's raw YAML verbatim so comments/formatting survive a round-trip.
+    DEFAULT_RULES_PATH.write_text(body.rules_yaml)
     return {
-        "rules_yaml": DEFAULT_RULES_PATH.read_text(),
+        "rules_yaml": body.rules_yaml,
         "parsed": parsed.model_dump(),
     }
 
@@ -195,15 +196,15 @@ async def update_capabilities(body: CapabilitiesInput) -> dict:
     current["capabilities"] = body.capabilities
     cfg = AgentConfig(**current)
     DEFAULT_CONFIG_PATH.write_text(yaml.safe_dump(cfg.model_dump(), sort_keys=False))
+    reload_config()  # make the toggle live in this process (graph reads module globals)
     return {"capabilities": cfg.capabilities}
 
 
 @app.get("/policy")
 async def get_policy() -> dict:
-    policy_path = Path(__file__).resolve().parents[2].parent / "security" / "policy.yaml"
-    if not policy_path.is_file():
-        raise HTTPException(status_code=404, detail="security policy not found")
-    return {"policy_yaml": policy_path.read_text()}
+    # The policy lives in the (separate) security service — fetch it over HTTP rather
+    # than reaching for a file that isn't in this container.
+    return await fetch_policy()
 
 
 @app.get("/config")
@@ -215,6 +216,7 @@ async def get_agent_config() -> dict:
 async def update_agent_config(body: dict) -> dict:
     cfg = AgentConfig(**body)
     DEFAULT_CONFIG_PATH.write_text(yaml.safe_dump(cfg.model_dump(), sort_keys=False))
+    reload_config()  # persona/triage edits take effect without a restart (this process)
     return cfg.model_dump()
 
 
@@ -222,25 +224,20 @@ async def update_agent_config(body: dict) -> dict:
 async def get_preferences(request: Request) -> dict:
     cfg = load_config()
     store = request.app.state.store
+    triage = await store.aget(namespace("triage_preferences"), "user_preferences")
+    response = await store.aget(namespace("response_preferences"), "user_preferences")
     return {
-        "triage_preferences": get_memory(
-            store,
-            namespace("triage_preferences"),
-            cfg.agent.triage_instructions,
-        ),
-        "response_preferences": get_memory(
-            store,
-            namespace("response_preferences"),
-            cfg.agent.response_preferences,
-        ),
+        "triage_preferences": triage.value if triage else cfg.agent.triage_instructions,
+        "response_preferences": response.value if response else cfg.agent.response_preferences,
     }
 
 
 @app.put("/memory")
 async def update_preferences(request: Request, body: MemoryInput) -> dict:
+    # AsyncSqliteStore: must use the async API on the event loop (sync calls raise).
     store = request.app.state.store
-    store.put(namespace("triage_preferences"), "user_preferences", body.triage_preferences)
-    store.put(namespace("response_preferences"), "user_preferences", body.response_preferences)
+    await store.aput(namespace("triage_preferences"), "user_preferences", body.triage_preferences)
+    await store.aput(namespace("response_preferences"), "user_preferences", body.response_preferences)
     return {
         "triage_preferences": body.triage_preferences,
         "response_preferences": body.response_preferences,
