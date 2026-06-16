@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from src.automation import (
     RulesConfig,
@@ -34,6 +32,7 @@ from src.gmail_client import (
 )
 from src.graph import overall_workflow
 from src.run_registry import upsert_run
+from src.storage import open_graph_storage
 
 
 def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
@@ -191,19 +190,21 @@ async def poll_once(
 
 
 async def run_forever() -> None:
-    """Poll the inbox every poll_interval_minutes against the durable sqlite graph."""
+    """Poll the inbox every poll_interval_minutes against the durable graph."""
     interval = settings.poll_interval_minutes * 60
-    async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_db) as checkpointer:
-        async with AsyncSqliteStore.from_conn_string(settings.store_db) as mem_store:
-            await checkpointer.setup()
-            await mem_store.setup()
-            graph = overall_workflow.compile(checkpointer=checkpointer, store=mem_store)
-            print(f"poller: watching inbox every {settings.poll_interval_minutes} min")
-            while True:
-                outcomes = await poll_once(graph)
-                if outcomes:
-                    print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
-                await asyncio.sleep(interval)
+    async with open_graph_storage() as storage:
+        graph = overall_workflow.compile(
+            checkpointer=storage.checkpointer, store=storage.store
+        )
+        print(
+            "poller: watching inbox every "
+            f"{settings.poll_interval_minutes} min ({storage.backend})"
+        )
+        while True:
+            outcomes = await poll_once(graph)
+            if outcomes:
+                print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
+            await asyncio.sleep(interval)
 
 
 def main() -> None:

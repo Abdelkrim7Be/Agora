@@ -6,8 +6,6 @@ import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -18,25 +16,20 @@ from src.graph import overall_workflow, reload_config
 from src.memory import namespace
 from src.run_registry import list_runs, upsert_run
 from src.security_client import fetch_policy
+from src.storage import open_graph_storage
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Separate files avoid SQLite locking between saver and store; shared with the
-    # poller (src/config Settings) so either process can resume the other's runs.
-    async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_db) as checkpointer:
-        async with AsyncSqliteStore.from_conn_string(settings.store_db) as mem_store:
-            # AsyncSqliteStore.aget/aput do NOT auto-run setup — call explicitly.
-            await checkpointer.setup()
-            await mem_store.setup()
-            # The graph's nodes are sync, so LangGraph runs them in a threadpool where
-            # sync store.get/put works. A future ASYNC node must use aget/aput instead —
-            # a sync store call on the event loop raises InvalidStateError.
-            app.state.graph = overall_workflow.compile(
-                checkpointer=checkpointer, store=mem_store
-            )
-            app.state.store = mem_store
-            yield
+    async with open_graph_storage() as storage:
+        # The graph's nodes are sync, so LangGraph runs them in a threadpool where
+        # sync store.get/put works. A future ASYNC node must use aget/aput instead.
+        app.state.graph = overall_workflow.compile(
+            checkpointer=storage.checkpointer, store=storage.store
+        )
+        app.state.store = storage.store
+        app.state.storage_backend = storage.backend
+        yield
 
 
 app = FastAPI(title="email-agent", version="0.1.0", lifespan=lifespan)
@@ -159,7 +152,7 @@ def _run_detail(values: dict, run_id: str) -> dict:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "storage_backend": settings.storage_backend}
 
 
 @app.get("/rules")

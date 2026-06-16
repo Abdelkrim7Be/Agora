@@ -19,6 +19,8 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "langgraph-checkpoint-sqlite>=2.0",
+    "langgraph-checkpoint-postgres>=2.0",
+    "psycopg[binary,pool]>=3.2",
     "pypdf>=4.0",
     "httpx>=0.27",
 ]
