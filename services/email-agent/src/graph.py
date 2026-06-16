@@ -13,9 +13,10 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
 from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
-from src.config import load_config
+from src.config import load_config, settings
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
+from src.security_client import authorize_action
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
@@ -117,15 +118,73 @@ def _parse_decision(raw) -> tuple[str, object]:
     return type_, data
 
 
-def tool_node(state: State, store: BaseStore):
+def _run_id_from_config(config) -> str:
+    configurable = (config or {}).get("configurable") or {}
+    return str(configurable.get("thread_id", ""))
+
+
+def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
+    return {
+        "role": "tool",
+        "content": (
+            f"Security policy denied the '{name}' action: {reason}. "
+            "Do not execute this action; call Done."
+        ),
+        "tool_call_id": tool_call_id,
+    }
+
+
+# Caches a run's authorization decisions so a HITL resume re-running tool_node does
+# not re-call (and double-count) the rate limiter. Bounded with FIFO eviction so a
+# long-lived poller process can't grow it without limit (insertion-ordered dict).
+_AUTHORIZATION_CACHE_MAX = 512
+_authorization_cache: dict[tuple[str, str, str], dict] = {}
+
+
+def _authorization_cache_key(run_id: str, name: str, tool_call: dict) -> tuple[str, str, str]:
+    return (run_id, name, tool_call.get("id", ""))
+
+
+def _authorize_tool_action(
+    name: str,
+    args: dict,
+    run_id: str,
+    tool_call: dict,
+    refresh: bool = False,
+) -> dict:
+    key = _authorization_cache_key(run_id, name, tool_call)
+    if refresh or key not in _authorization_cache:
+        authz = authorize_action(name, args, run_id, tool_call.get("id", ""))
+        decision = authz.get("decision", "deny")
+        reason = authz.get("reason", "no reason provided")
+        if decision not in ("allow", "deny", "hitl"):
+            reason = f"invalid authorization decision: {decision!r}"
+            decision = "deny"
+        _authorization_cache[key] = {"decision": decision, "reason": reason}
+        while len(_authorization_cache) > _AUTHORIZATION_CACHE_MAX:
+            del _authorization_cache[next(iter(_authorization_cache))]
+    return _authorization_cache[key]
+
+
+def tool_node(state: State, store: BaseStore, config=None):
     """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
     sent = False
+    run_id = _run_id_from_config(config)
+
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
         args = tool_call["args"]
+        authorization_decision = "hitl" if name in approval_set else "allow"
 
-        if name in approval_set:
+        if settings.security_enabled:
+            authz = _authorize_tool_action(name, args, run_id, tool_call)
+            authorization_decision = authz["decision"]
+            if authorization_decision == "deny":
+                result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
+                continue
+
+        if authorization_decision == "hitl":
             description = (
                 format_draft_markdown(args) if name == "write_email" else f"Approve '{name}'?"
             )
@@ -218,6 +277,12 @@ def tool_node(state: State, store: BaseStore):
 
             # accept and edit fall through to tool execution below
 
+        if settings.security_enabled and authorization_decision == "hitl" and args != tool_call["args"]:
+            authz = _authorize_tool_action(name, args, run_id, tool_call, refresh=True)
+            if authz["decision"] == "deny":
+                result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
+                continue
+
         tool = tools_by_name_map[name]
         if name in approval_set:
             tok = hitl_approved.set(True)
@@ -259,6 +324,11 @@ def should_continue(state: State) -> Literal["environment", "__end__"]:
 
 def triage_router(state: State, store: BaseStore) -> Command[Literal["llm_call", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
+    sec = state["email_input"].get("security")
+    if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
+        print("🛡️ Classification: NOTIFY - forced by security (injection or classifier unavailable)")
+        return Command(goto=END, update={"classification_decision": "notify"})
+
     author, to, subject, email_thread = parse_email(state["email_input"])
     atts = state["email_input"].get("attachments") or []
     att_str = format_attachments(atts)
