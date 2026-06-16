@@ -60,6 +60,23 @@ def test_inbox_trash_requires_approval():
     assert "archive_email" not in approval_required({"inbox": True})
 
 
+def test_drafts_enabled_adds_create_draft_tool():
+    tools, prompt = load_capabilities({"email": True, "drafts": True})
+    names = _names(tools)
+    assert "write_email" in names
+    assert "create_draft" in names
+    assert "thread_id" not in prompt
+
+
+def test_drafts_disabled_excludes_create_draft_tool():
+    tools, _ = load_capabilities({"email": True, "drafts": False})
+    assert "create_draft" not in _names(tools)
+
+
+def test_create_draft_does_not_require_approval():
+    assert "create_draft" not in approval_required({"drafts": True})
+
+
 def test_unknown_capability_fails_loud():
     with pytest.raises(ValueError, match="Unknown capability"):
         load_capabilities({"bogus": True})

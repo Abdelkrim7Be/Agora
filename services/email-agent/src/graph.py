@@ -15,6 +15,7 @@ from langgraph.types import Command, interrupt
 from src.capabilities import (
     approval_required,
     current_email_id,
+    current_gmail_thread_id,
     hitl_approved,
     load_capabilities,
     tools_by_name,
@@ -291,6 +292,9 @@ def tool_node(state: State, store: BaseStore, config=None):
 
         tool = tools_by_name_map[name]
         email_id_token = current_email_id.set(state["email_input"].get("email_id"))
+        thread_id_token = current_gmail_thread_id.set(
+            state["email_input"].get("gmail_thread_id")
+        )
         try:
             if name in approval_set:
                 tok = hitl_approved.set(True)
@@ -311,6 +315,7 @@ def tool_node(state: State, store: BaseStore, config=None):
             })
             continue
         finally:
+            current_gmail_thread_id.reset(thread_id_token)
             current_email_id.reset(email_id_token)
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
