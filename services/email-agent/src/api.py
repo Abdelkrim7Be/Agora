@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langgraph.types import Command
@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from src.config import settings
 from src.graph import overall_workflow
+from src.run_registry import list_runs, upsert_run
 
 
 @asynccontextmanager
@@ -77,6 +78,16 @@ def _format(result: dict, run_id: str) -> RunResponse:
     )
 
 
+def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
+    upsert_run(
+        run.run_id,
+        run.status,
+        email_input=email_input,
+        classification=run.classification,
+        pending_action=run.pending_action,
+    )
+
+
 async def _require_run(graph, run_id: str) -> dict:
     config = _thread_config(run_id)
     state = await graph.aget_state(config)
@@ -90,14 +101,30 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/runs")
+async def runs(status: str | None = Query(default=None)) -> dict:
+    return {"runs": list_runs(status=status)}
+
+
+@app.get("/run/{run_id}", response_model=RunResponse)
+async def get_run(request: Request, run_id: str) -> RunResponse:
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    state = await graph.aget_state(config)
+    return _format(state.values, run_id)
+
+
 @app.post("/run", response_model=RunResponse)
 async def run(request: Request, email: EmailInput) -> RunResponse:
     graph = request.app.state.graph
     run_id = str(uuid.uuid4())
+    email_input = email.model_dump()
     result = await graph.ainvoke(
-        {"email_input": email.model_dump()}, _thread_config(run_id)
+        {"email_input": email_input}, _thread_config(run_id)
     )
-    return _format(result, run_id)
+    response = _format(result, run_id)
+    _record_response(response, email_input)
+    return response
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)
@@ -107,7 +134,9 @@ async def approve(request: Request, run_id: str, approval: ApprovalInput) -> Run
     result = await graph.ainvoke(
         Command(resume={"type": "approve", "args": approval.args}), config
     )
-    return _format(result, run_id)
+    response = _format(result, run_id)
+    _record_response(response)
+    return response
 
 
 @app.post("/run/{run_id}/reject", response_model=RunResponse)
@@ -117,7 +146,9 @@ async def reject(request: Request, run_id: str) -> RunResponse:
     result = await graph.ainvoke(
         Command(resume={"type": "reject"}), config
     )
-    return _format(result, run_id)
+    response = _format(result, run_id)
+    _record_response(response)
+    return response
 
 
 @app.post("/run/{run_id}/respond", response_model=RunResponse)
@@ -127,4 +158,6 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     result = await graph.ainvoke(
         Command(resume=[{"type": "response", "args": body.feedback}]), config
     )
-    return _format(result, run_id)
+    response = _format(result, run_id)
+    _record_response(response)
+    return response

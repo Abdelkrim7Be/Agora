@@ -43,6 +43,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/runs").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/audit").hasRole("OWNER")
                 // Default-deny: anything not explicitly allowed above is rejected, so a future

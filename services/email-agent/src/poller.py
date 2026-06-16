@@ -33,6 +33,7 @@ from src.gmail_client import (
     search_messages,
 )
 from src.graph import overall_workflow
+from src.run_registry import upsert_run
 
 
 def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
@@ -175,6 +176,13 @@ async def poll_once(
             outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
 
         record_digest_item(rules_config, outcome_status, email_input, run_id)
+        upsert_run(
+            run_id,
+            outcome_status,
+            email_input=email_input,
+            classification=result.get("classification_decision"),
+            pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+        )
         outcomes.append((msg_id, outcome_status, run_id))
 
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
