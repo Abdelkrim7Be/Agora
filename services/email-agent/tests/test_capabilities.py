@@ -12,9 +12,21 @@ def _names(tools) -> list[str]:
 
 def test_email_only_loads_correct_tools():
     tools, prompt = load_capabilities({"email": True})
-    assert "write_email" in _names(tools)
-    assert "Done" in _names(tools)
+    names = _names(tools)
+    assert "write_email" in names
+    assert "forward_email" in names
+    assert "reply_all" in names
+    assert "Done" in names
     assert "write_email" in prompt
+    assert "forward_email" in prompt
+    assert "reply_all" in prompt
+
+
+def test_email_sending_tools_require_approval():
+    required = approval_required({"email": True})
+    assert "write_email" in required
+    assert "forward_email" in required
+    assert "reply_all" in required
 
 
 def test_calendar_enabled_adds_meeting_tools():

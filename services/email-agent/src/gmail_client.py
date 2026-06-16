@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from email.message import EmailMessage
+from email.utils import getaddresses
 
 try:
     import pypdf as _pypdf
@@ -56,6 +57,58 @@ def _dry_run_result(action: str, **fields) -> dict:
 
 def _encode_message(message: EmailMessage) -> str:
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def _send_email_message(
+    to: str | list[str],
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    resource=None,
+) -> dict:
+    resource = resource or gmail_resource()
+    recipients = to if isinstance(to, list) else [to]
+    message = EmailMessage()
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = subject
+    for name, value in (extra_headers or {}).items():
+        if value:
+            message[name] = value
+    message.set_content(body)
+    gmail_message = {"raw": _encode_message(message)}
+    if thread_id:
+        gmail_message["threadId"] = thread_id
+    return (
+        resource.users()
+        .messages()
+        .send(userId="me", body=gmail_message)
+        .execute()
+    )
+
+
+def _message_headers(message: dict) -> list[dict]:
+    return message.get("payload", {}).get("headers", [])
+
+
+def _header_value(message: dict, name: str, default: str = "") -> str:
+    return _header(_message_headers(message), name, default)
+
+
+def _prefixed_subject(prefix: str, subject: str) -> str:
+    return subject if subject.lower().startswith(prefix.lower()) else f"{prefix}{subject}"
+
+
+def _email_addresses(*values: str) -> list[str]:
+    seen: set[str] = set()
+    results: list[str] = []
+    for _name, address in getaddresses([v for v in values if v]):
+        address = address.strip()
+        key = address.lower()
+        if address and key not in seen:
+            seen.add(key)
+            results.append(address)
+    return results
 
 
 def modify_labels(
@@ -179,6 +232,52 @@ def create_draft(
         .drafts()
         .create(userId="me", body={"message": draft_message})
         .execute()
+    )
+
+
+def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
+    """Forward a Gmail message to a recipient, optionally with a note."""
+    if settings.dry_run:
+        return _dry_run_result("forward_message", message_id=message_id, to=to)
+    resource = resource or gmail_resource()
+    original = get_message(message_id, resource=resource)
+    subject = _prefixed_subject("Fwd: ", _header_value(original, "Subject", "No Subject"))
+    body = (
+        f"{note.strip()}\n\n" if note.strip() else ""
+    ) + (
+        "---------- Forwarded message ---------\n"
+        f"From: {_header_value(original, 'From', 'Unknown Sender')}\n"
+        f"Date: {_header_value(original, 'Date')}\n"
+        f"Subject: {_header_value(original, 'Subject', 'No Subject')}\n"
+        f"To: {_header_value(original, 'To', 'Unknown Recipient')}\n\n"
+        f"{_extract_message_part(original.get('payload', {}))}"
+    )
+    return _send_email_message(to=to, subject=subject, body=body, resource=resource)
+
+
+def reply_all_message(message_id: str, body: str, resource=None) -> dict:
+    """Reply to all participants on a Gmail message's thread."""
+    if settings.dry_run:
+        return _dry_run_result("reply_all_message", message_id=message_id)
+    resource = resource or gmail_resource()
+    original = get_message(message_id, resource=resource)
+    recipients = _email_addresses(
+        _header_value(original, "From"),
+        _header_value(original, "To"),
+        _header_value(original, "Cc"),
+    )
+    subject = _prefixed_subject("Re: ", _header_value(original, "Subject", "No Subject"))
+    message_id_header = _header_value(original, "Message-ID")
+    extra_headers = {}
+    if message_id_header:
+        extra_headers = {"In-Reply-To": message_id_header, "References": message_id_header}
+    return _send_email_message(
+        to=recipients,
+        subject=subject,
+        body=body,
+        thread_id=original.get("threadId"),
+        extra_headers=extra_headers,
+        resource=resource,
     )
 
 

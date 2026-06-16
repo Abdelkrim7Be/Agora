@@ -9,12 +9,14 @@ from src.gmail_client import (
     archive_message,
     create_draft,
     ensure_label,
+    forward_message,
     format_thread,
     gmail_to_email_input,
     list_labels,
     mark_as_read,
     mark_as_unread,
     modify_labels,
+    reply_all_message,
     trash_message,
 )
 
@@ -36,7 +38,8 @@ class _Execute:
 
 
 class _FakeMessages:
-    def __init__(self):
+    def __init__(self, messages: dict[str, dict] | None = None):
+        self.messages = messages or {}
         self.calls: list[tuple[str, dict]] = []
 
     def modify(self, **kwargs):
@@ -46,6 +49,14 @@ class _FakeMessages:
     def trash(self, **kwargs):
         self.calls.append(("trash", kwargs))
         return _Execute({"id": kwargs["id"], "labelIds": ["TRASH"]})
+
+    def get(self, **kwargs):
+        self.calls.append(("get", kwargs))
+        return _Execute(self.messages[kwargs["id"]])
+
+    def send(self, **kwargs):
+        self.calls.append(("send", kwargs))
+        return _Execute({"id": "sent-1", **kwargs["body"]})
 
 
 class _FakeLabels:
@@ -74,8 +85,12 @@ class _FakeDrafts:
 
 
 class _FakeUsers:
-    def __init__(self, labels: list[dict] | None = None):
-        self._messages = _FakeMessages()
+    def __init__(
+        self,
+        labels: list[dict] | None = None,
+        messages: dict[str, dict] | None = None,
+    ):
+        self._messages = _FakeMessages(messages)
         self._labels = _FakeLabels(labels)
         self._drafts = _FakeDrafts()
 
@@ -90,8 +105,12 @@ class _FakeUsers:
 
 
 class _FakeGmailResource:
-    def __init__(self, labels: list[dict] | None = None):
-        self._users = _FakeUsers(labels)
+    def __init__(
+        self,
+        labels: list[dict] | None = None,
+        messages: dict[str, dict] | None = None,
+    ):
+        self._users = _FakeUsers(labels, messages)
 
     def users(self):
         return self._users
@@ -296,6 +315,88 @@ def test_create_draft_calls_gmail_api_with_encoded_message(monkeypatch):
     assert decoded["To"] == "a@example.com"
     assert decoded["Subject"] == "Subject"
     assert decoded.get_content().strip() == "Body text"
+
+
+def test_forward_message_respects_dry_run(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    assert forward_message("msg-1", "bob@example.com", "FYI") == {
+        "dry_run": True,
+        "action": "forward_message",
+        "message_id": "msg-1",
+        "to": "bob@example.com",
+    }
+
+
+def test_forward_message_fetches_original_and_sends_encoded_forward(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    original = _message(
+        HEADERS + [
+            {"name": "Date", "value": "Tue"},
+            {"name": "Message-ID", "value": "<msg-1@example.com>"},
+        ],
+        {"body": {"data": _b64("Original body")}},
+        msg_id="msg-1",
+        thread_id="thread-1",
+    )
+    resource = _FakeGmailResource(messages={"msg-1": original})
+
+    result = forward_message("msg-1", "bob@example.com", "Please see below", resource=resource)
+
+    assert result["id"] == "sent-1"
+    calls = resource.users().messages().calls
+    assert calls[0] == ("get", {"userId": "me", "id": "msg-1"})
+    assert calls[1][0] == "send"
+    sent = calls[1][1]["body"]
+    decoded = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
+    assert decoded["To"] == "bob@example.com"
+    assert decoded["Subject"] == "Fwd: Quick question"
+    content = decoded.get_content()
+    assert "Please see below" in content
+    assert "Forwarded message" in content
+    assert "Original body" in content
+
+
+def test_reply_all_message_respects_dry_run(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    assert reply_all_message("msg-1", "Reply body") == {
+        "dry_run": True,
+        "action": "reply_all_message",
+        "message_id": "msg-1",
+    }
+
+
+def test_reply_all_message_fetches_original_and_sends_thread_reply(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    original = _message(
+        [
+            {"name": "From", "value": "Alice <alice@example.com>"},
+            {"name": "To", "value": "Me <me@example.com>"},
+            {"name": "Cc", "value": "Carol <carol@example.com>"},
+            {"name": "Subject", "value": "Re: Quick question"},
+            {"name": "Message-ID", "value": "<msg-1@example.com>"},
+        ],
+        {"body": {"data": _b64("Original body")}},
+        msg_id="msg-1",
+        thread_id="thread-1",
+    )
+    resource = _FakeGmailResource(messages={"msg-1": original})
+
+    result = reply_all_message("msg-1", "Reply body", resource=resource)
+
+    assert result["id"] == "sent-1"
+    calls = resource.users().messages().calls
+    assert calls[0] == ("get", {"userId": "me", "id": "msg-1"})
+    assert calls[1][0] == "send"
+    sent = calls[1][1]["body"]
+    assert sent["threadId"] == "thread-1"
+    decoded = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
+    assert decoded["To"] == "alice@example.com, me@example.com, carol@example.com"
+    assert decoded["Subject"] == "Re: Quick question"
+    assert decoded["In-Reply-To"] == "<msg-1@example.com>"
+    assert decoded["References"] == "<msg-1@example.com>"
+    assert decoded.get_content().strip() == "Reply body"
 
 
 # --- _extract_message_part ---

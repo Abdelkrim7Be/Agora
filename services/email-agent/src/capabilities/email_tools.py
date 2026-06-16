@@ -3,8 +3,24 @@ from __future__ import annotations
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
-from src.capabilities import hitl_approved
+from src.capabilities import current_email_id, hitl_approved
 from src.config import settings
+
+
+def _message_id() -> str:
+    message_id = current_email_id.get()
+    if not message_id:
+        raise RuntimeError(
+            "Email thread send tools require a trusted email_id from the graph context."
+        )
+    return message_id
+
+
+def _require_approval(tool_name: str) -> None:
+    if not hitl_approved.get():
+        raise RuntimeError(
+            f"{tool_name} requires human approval — call via the graph API, not directly."
+        )
 
 
 @tool
@@ -12,10 +28,7 @@ def write_email(to: str, subject: str, content: str) -> str:
     """Write and send an email."""
     if settings.dry_run:
         return f"Email sent to {to} with subject '{subject}' [dry run]"
-    if not hitl_approved.get():
-        raise RuntimeError(
-            "write_email requires human approval — call via the graph API, not directly."
-        )
+    _require_approval("write_email")
     from langchain_google_community import GmailToolkit
 
     from src.gmail_client import gmail_resource
@@ -26,17 +39,53 @@ def write_email(to: str, subject: str, content: str) -> str:
 
 
 @tool
+def forward_email(to: str, note: str = "") -> str:
+    """Forward the current email to a recipient."""
+    message_id = _message_id()
+    if settings.dry_run:
+        return f"Forwarded current email to {to} [dry run]"
+    _require_approval("forward_email")
+
+    from src.gmail_client import forward_message
+
+    result = forward_message(message_id, to=to, note=note)
+    sent_id = result.get("id") if isinstance(result, dict) else None
+    return f"Forwarded current email to {to}" + (
+        f" (message id: {sent_id})" if sent_id else ""
+    )
+
+
+@tool
+def reply_all(content: str) -> str:
+    """Reply to all participants on the current email thread."""
+    message_id = _message_id()
+    if settings.dry_run:
+        return "Reply-all sent on the current thread [dry run]"
+    _require_approval("reply_all")
+
+    from src.gmail_client import reply_all_message
+
+    result = reply_all_message(message_id, body=content)
+    sent_id = result.get("id") if isinstance(result, dict) else None
+    return "Reply-all sent on the current thread" + (
+        f" (message id: {sent_id})" if sent_id else ""
+    )
+
+
+@tool
 class Done(BaseModel):
     """E-mail has been sent."""
 
     done: bool
 
 
-TOOLS = [write_email, Done]
+TOOLS = [write_email, forward_email, reply_all, Done]
 TOOLS_PROMPT = """
 1. write_email(to, subject, content) - Send emails to specified recipients
-2. Done - E-mail has been sent
+2. forward_email(to, note) - Forward the current email to a recipient
+3. reply_all(content) - Reply to all participants on the current email thread
+4. Done - E-mail has been sent
 """
 
 # Tools that require human approval before executing (HITL gate).
-REQUIRES_APPROVAL = {"write_email"}
+REQUIRES_APPROVAL = {"write_email", "forward_email", "reply_all"}
