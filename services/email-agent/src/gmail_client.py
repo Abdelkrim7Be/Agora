@@ -45,6 +45,30 @@ def fetch_unread(max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+def list_messages_by_label(label_id: str, max_results: int, resource=None) -> list[dict]:
+    """Return message refs carrying a Gmail label id."""
+    resource = resource or gmail_resource()
+    results = (
+        resource.users()
+        .messages()
+        .list(userId="me", labelIds=[label_id], maxResults=max_results)
+        .execute()
+    )
+    return results.get("messages", [])
+
+
+def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
+    """Return message refs for an arbitrary Gmail search query."""
+    resource = resource or gmail_resource()
+    results = (
+        resource.users()
+        .messages()
+        .list(userId="me", q=query, maxResults=max_results)
+        .execute()
+    )
+    return results.get("messages", [])
+
+
 def get_message(msg_id: str, resource=None) -> dict:
     """Fetch a full Gmail message by id."""
     resource = resource or gmail_resource()
@@ -441,4 +465,5 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "email_id": message["id"],
         "gmail_thread_id": message["threadId"],
         "attachments": extract_attachments(message["payload"]),
+        "labels": message.get("labelIds", []),
     }

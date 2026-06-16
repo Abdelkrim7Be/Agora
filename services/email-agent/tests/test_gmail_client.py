@@ -457,6 +457,7 @@ def test_gmail_to_email_input_maps_all_fields():
         "email_id": "abc",
         "gmail_thread_id": "thr9",
         "attachments": [],
+        "labels": [],
     }
 
 

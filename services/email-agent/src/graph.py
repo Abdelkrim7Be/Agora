@@ -13,6 +13,7 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
+from src.automation import load_rules as load_automation_rules, suggest_rule_from_correction
 from src.capabilities import (
     approval_required,
     current_email_id,
@@ -46,6 +47,30 @@ llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
 llm_router = llm.with_structured_output(RouterSchema)
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 llm_memory = llm.with_structured_output(UserPreferences)
+
+
+def automation_router(
+    state: State, store: BaseStore
+) -> Command[Literal["environment", "triage_router", "__end__"]]:
+    """Execute deterministic poller-provided automation before LLM triage."""
+    automation = state["email_input"].get("automation") or {}
+    terminal_status = automation.get("terminal_status")
+    tool_calls = automation.get("tool_calls") or []
+
+    if tool_calls:
+        update = {
+            "automation_acted": True,
+            "messages": [AIMessage(content="", tool_calls=tool_calls)],
+        }
+        # Only tag a classification when the rule explicitly asks to notify/respond.
+        # Pure-organization rules (label/archive/snooze) stay untagged so they don't
+        # pollute the daily digest or get surfaced as "notify".
+        if terminal_status:
+            update["classification_decision"] = terminal_status
+        return Command(goto="environment", update=update)
+    if terminal_status == "notify":
+        return Command(goto=END, update={"classification_decision": "notify"})
+    return Command(goto="triage_router")
 
 
 def llm_call(state: State, store: BaseStore):
@@ -209,6 +234,17 @@ def tool_node(state: State, store: BaseStore, config=None):
     sent = False
     run_id = _run_id_from_config(config)
 
+    # Load automation rules at most once per call, lazily — only when a human
+    # correction actually happens (rule learning is a no-op when disabled).
+    _rules_cache: list = []
+
+    def _suggest_rule(correction_type: str, details: dict) -> None:
+        if not _rules_cache:
+            _rules_cache.append(load_automation_rules())
+        suggest_rule_from_correction(
+            _rules_cache[0], state["email_input"], correction_type, details
+        )
+
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
         args = tool_call["args"]
@@ -261,6 +297,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                     }],
                     llm_memory,
                 )
+                _suggest_rule("ignored_draft", {"tool": name})
                 continue
 
             if decision_type == "response":
@@ -284,6 +321,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                     }],
                     llm_memory,
                 )
+                _suggest_rule("draft_feedback", {"tool": name, "feedback": feedback})
                 continue
 
             if decision_type == "edit":
@@ -310,6 +348,10 @@ def tool_node(state: State, store: BaseStore, config=None):
                         }],
                         llm_memory,
                     )
+                    _suggest_rule(
+                        "edited_draft",
+                        {"tool": name, "original": args, "edited": edited_args},
+                    )
                 args = edited_args
 
             # accept and edit fall through to tool execution below
@@ -320,7 +362,15 @@ def tool_node(state: State, store: BaseStore, config=None):
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
 
-        tool = tools_by_name_map[name]
+        tool = tools_by_name_map.get(name)
+        if tool is None:
+            result.append({
+                "role": "tool",
+                "content": f"The '{name}' action is not available. Call Done.",
+                "tool_call_id": tool_call["id"],
+            })
+            continue
+
         email_id_token = current_email_id.set(state["email_input"].get("email_id"))
         thread_id_token = current_gmail_thread_id.set(
             state["email_input"].get("gmail_thread_id")
@@ -361,7 +411,7 @@ def tool_node(state: State, store: BaseStore, config=None):
 
 def after_tools(state: State) -> Literal["llm_call", "__end__"]:
     """Sending and auto-organization are terminal; other tools continue the loop."""
-    if state.get("email_sent") or state.get("auto_organized"):
+    if state.get("email_sent") or state.get("auto_organized") or state.get("automation_acted"):
         return END
     return "llm_call"
 
@@ -450,10 +500,11 @@ def triage_router(
 
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
+    .add_node("automation_router", automation_router)
     .add_node("triage_router", triage_router)
     .add_node("llm_call", llm_call)
     .add_node("environment", tool_node)
-    .add_edge(START, "triage_router")
+    .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",
         should_continue,

@@ -28,6 +28,8 @@ class EmailInput(TypedDict):
     email_id: NotRequired[str]
     gmail_thread_id: NotRequired[str]
     attachments: NotRequired[list]
+    labels: NotRequired[list[str]]
+    automation: NotRequired[dict]
     # Verdict from the security service /sanitize, attached by the poller when
     # AGENT_SECURITY_ENABLED=true. Absent on the manual /run path. triage_router reads it.
     security: NotRequired[dict]
@@ -45,3 +47,4 @@ class State(MessagesState):
     email_sent: bool
     # Set when deterministic post-triage organization has run; terminal after tools.
     auto_organized: NotRequired[bool]
+    automation_acted: NotRequired[bool]

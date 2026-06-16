@@ -127,3 +127,64 @@ def test_auto_organize_uses_authorization_when_security_enabled(
             "action_id": "auto_archive_ignored",
         },
     ]
+
+
+def test_automation_label_only_plan_runs_without_notify(monkeypatch):
+    """A label-only automation plan executes via tool_node, ends the run, and does
+    NOT force a 'notify' classification (so it won't pollute the daily digest)."""
+    import src.graph as g
+    from src.capabilities import inbox_tools
+
+    monkeypatch.setattr(g.settings, "security_enabled", False)
+    monkeypatch.setitem(g.tools_by_name_map, "apply_label", inbox_tools.apply_label)
+    applied: list[tuple] = []
+    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_x")
+    monkeypatch.setattr(
+        inbox_tools,
+        "modify_labels",
+        lambda message_id, **k: applied.append((message_id, k)) or {"id": message_id},
+    )
+
+    email = {
+        "author": "a@example.com", "to": "me@example.com", "subject": "Hi",
+        "email_thread": "body", "email_id": "msg-rule",
+        "automation": {
+            "matched_rules": ["x"],
+            "tool_calls": [
+                {"name": "apply_label", "args": {"label": "Clients"}, "id": "r0", "type": "tool_call"}
+            ],
+            "terminal_status": None,
+        },
+    }
+    result = email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert result.get("automation_acted") is True
+    assert applied == [("msg-rule", {"add_label_ids": ["Label_x"]})]
+    assert result.get("classification_decision") is None
+
+
+def test_automation_notify_rule_tags_classification(monkeypatch):
+    """A rule whose plan sets terminal_status='notify' tags the run as notify."""
+    import src.graph as g
+    from src.capabilities import inbox_tools
+
+    monkeypatch.setattr(g.settings, "security_enabled", False)
+    monkeypatch.setitem(g.tools_by_name_map, "apply_label", inbox_tools.apply_label)
+    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_x")
+    monkeypatch.setattr(inbox_tools, "modify_labels", lambda message_id, **k: {"id": message_id})
+
+    email = {
+        "author": "a@example.com", "to": "me@example.com", "subject": "Hi",
+        "email_thread": "body", "email_id": "msg-rule",
+        "automation": {
+            "matched_rules": ["x"],
+            "tool_calls": [
+                {"name": "apply_label", "args": {"label": "Clients"}, "id": "r0", "type": "tool_call"}
+            ],
+            "terminal_status": "notify",
+        },
+    }
+    result = email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert result.get("automation_acted") is True
+    assert result.get("classification_decision") == "notify"

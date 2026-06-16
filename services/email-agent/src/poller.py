@@ -6,6 +6,16 @@ import uuid
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
+from src.automation import (
+    RulesConfig,
+    build_follow_up_plan,
+    build_rule_plan,
+    due_snooze_labels,
+    follow_up_query,
+    load_rules,
+    maybe_emit_daily_digest,
+    record_digest_item,
+)
 from src.config import settings
 from src.security_client import sanitize_email
 from src.gmail_client import (
@@ -16,12 +26,74 @@ from src.gmail_client import (
     get_message,
     gmail_resource,
     gmail_to_email_input,
+    list_labels,
+    list_messages_by_label,
     mark_as_read,
+    modify_labels,
+    search_messages,
 )
 from src.graph import overall_workflow
 
 
-async def poll_once(graph, resource=None, max_results: int | None = None) -> list[tuple]:
+def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
+    """Move due snoozed messages back to INBOX/UNREAD."""
+    surfaced: list[tuple[str, str]] = []
+    for label in due_snooze_labels(list_labels(resource=resource), rules_config):
+        label_id = label["id"]
+        label_name = label.get("name", label_id)
+        refs = list_messages_by_label(
+            label_id,
+            rules_config.snooze.max_resurface_per_run,
+            resource=resource,
+        )
+        for ref in refs:
+            msg_id = ref["id"]
+            modify_labels(
+                msg_id,
+                add_label_ids=["INBOX", "UNREAD"],
+                remove_label_ids=[label_id],
+                resource=resource,
+            )
+            surfaced.append((msg_id, label_name))
+    return surfaced
+
+
+async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tuple]:
+    """Find old awaiting-reply threads and propose a nudge through HITL."""
+    if not rules_config.follow_ups.enabled:
+        return []
+
+    outcomes: list[tuple] = []
+    refs = search_messages(
+        follow_up_query(rules_config),
+        rules_config.follow_ups.max_results,
+        resource=resource,
+    )
+    for ref in refs:
+        msg_id = ref["id"]
+        message = get_message(msg_id, resource=resource)
+        thread = fetch_thread(message["threadId"], resource=resource)
+        email_input = gmail_to_email_input(message, thread_messages=thread)
+        plan = build_follow_up_plan(email_input, rules_config)
+        if not plan:
+            continue
+        email_input = {**email_input, "automation": plan}
+        run_id = str(uuid.uuid4())
+        result = await graph.ainvoke(
+            {"email_input": email_input},
+            {"configurable": {"thread_id": run_id}},
+        )
+        status = "pending_approval" if result.get("__interrupt__") else "follow_up_proposed"
+        outcomes.append((msg_id, status, run_id))
+    return outcomes
+
+
+async def poll_once(
+    graph,
+    resource=None,
+    max_results: int | None = None,
+    rules_config: RulesConfig | None = None,
+) -> list[tuple]:
     """Process one batch of unread emails through the graph.
 
     A run that completes (ignore/notify/sent) is marked read. A run that pauses for
@@ -33,8 +105,13 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
     """
     resource = resource or gmail_resource()
     max_results = max_results or settings.max_emails_per_run
+    rules_config = rules_config or load_rules()
 
     outcomes: list[tuple] = []
+    if rules_config.snooze.enabled:
+        for msg_id, label_name in resurface_due_snoozed(resource, rules_config):
+            outcomes.append((msg_id, "snoozed_resurfaced", label_name))
+
     for ref in fetch_unread(max_results, resource=resource):
         msg_id = ref["id"]
         message = get_message(msg_id, resource=resource)
@@ -79,19 +156,29 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
                 },
             }
 
+        rule_plan = build_rule_plan(email_input, rules_config)
+        if rule_plan:
+            email_input = {**email_input, "automation": rule_plan}
+
         run_id = str(uuid.uuid4())
         cfg = {"configurable": {"thread_id": run_id}}
 
         result = await graph.ainvoke({"email_input": email_input}, cfg)
 
         if result.get("__interrupt__"):
-            outcomes.append((msg_id, "pending_approval", run_id))
+            outcome_status = "pending_approval"
         elif security_flagged:
-            # Leave UNREAD so the threat stays visible — forced-notify isn't delivered anywhere.
-            outcomes.append((msg_id, "security_hold", run_id))
+            # Leave UNREAD so the threat stays visible; forced-notify is not delivered anywhere.
+            outcome_status = "security_hold"
         else:
             mark_as_read(msg_id, resource=resource)
-            outcomes.append((msg_id, "completed", run_id))
+            outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
+
+        record_digest_item(rules_config, outcome_status, email_input, run_id)
+        outcomes.append((msg_id, outcome_status, run_id))
+
+    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    maybe_emit_daily_digest(rules_config)
     return outcomes
 
 

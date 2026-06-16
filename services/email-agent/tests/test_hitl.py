@@ -120,3 +120,40 @@ def test_api_respond_returns_pending_approval_on_redraft(client, fake_llms, resp
         f"/run/{run['run_id']}/respond", json={"feedback": "make it shorter"}
     ).json()
     assert responded["status"] == "pending_approval"
+
+
+def test_reject_can_record_rule_suggestion(fake_llms, respond_email, monkeypatch):
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("Done", {"done": True}, "c2"),
+        ],
+    )
+    calls: list[dict] = []
+    rules_marker = object()
+
+    import src.graph as g
+
+    monkeypatch.setattr(g, "load_automation_rules", lambda: rules_marker)
+    monkeypatch.setattr(
+        g,
+        "suggest_rule_from_correction",
+        lambda rules, email_input, correction_type, details=None: calls.append({
+            "rules": rules,
+            "email_input": email_input,
+            "correction_type": correction_type,
+            "details": details,
+        }) or True,
+    )
+    cfg = _cfg()
+
+    email_assistant.invoke({"email_input": respond_email}, cfg)
+    email_assistant.invoke(Command(resume={"type": "reject"}), cfg)
+
+    assert calls == [{
+        "rules": rules_marker,
+        "email_input": respond_email,
+        "correction_type": "ignored_draft",
+        "details": {"tool": "write_email"},
+    }]
