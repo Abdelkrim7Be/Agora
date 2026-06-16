@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from src.api import app
+from src.api import app, _run_detail
 from src.run_registry import list_runs, upsert_run
 
 
@@ -35,3 +35,27 @@ def test_runs_endpoint_returns_registry(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"runs": [{"run_id": "run-1", "status": "pending_approval"}]}
+
+
+def test_run_detail_shapes_timeline_and_security():
+    detail = _run_detail(
+        {
+            "email_input": {
+                "author": "Alice",
+                "to": "Me",
+                "subject": "Question",
+                "security": {"classification": "benign"},
+            },
+            "classification_decision": "respond",
+            "messages": [
+                {"role": "user", "content": "hello"},
+            ],
+        },
+        "run-1",
+    )
+
+    assert detail["run_id"] == "run-1"
+    assert detail["classification"] == "respond"
+    assert detail["email"]["subject"] == "Question"
+    assert detail["security"] == {"classification": "benign"}
+    assert detail["timeline"] == [{"role": "user", "content": "hello", "tool_calls": []}]

@@ -96,6 +96,41 @@ async def _require_run(graph, run_id: str) -> dict:
     return config
 
 
+def _message_summary(message) -> dict:
+    if isinstance(message, dict):
+        role = message.get("role", message.get("type", "message"))
+        content = message.get("content", "")
+        tool_calls = message.get("tool_calls", [])
+    else:
+        role = getattr(message, "type", message.__class__.__name__)
+        content = getattr(message, "content", "")
+        tool_calls = getattr(message, "tool_calls", []) or []
+    return {
+        "role": role,
+        "content": content,
+        "tool_calls": tool_calls,
+    }
+
+
+def _run_detail(values: dict, run_id: str) -> dict:
+    email_input = values.get("email_input", {})
+    return {
+        "run_id": run_id,
+        "status": "pending_approval" if values.get("__interrupt__") else "completed",
+        "classification": values.get("classification_decision"),
+        "email": {
+            "author": email_input.get("author"),
+            "to": email_input.get("to"),
+            "subject": email_input.get("subject"),
+            "email_id": email_input.get("email_id"),
+            "gmail_thread_id": email_input.get("gmail_thread_id"),
+        },
+        "security": email_input.get("security"),
+        "automation": email_input.get("automation"),
+        "timeline": [_message_summary(m) for m in values.get("messages", [])],
+    }
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
@@ -112,6 +147,14 @@ async def get_run(request: Request, run_id: str) -> RunResponse:
     config = await _require_run(graph, run_id)
     state = await graph.aget_state(config)
     return _format(state.values, run_id)
+
+
+@app.get("/run/{run_id}/detail")
+async def get_run_detail(request: Request, run_id: str) -> dict:
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    state = await graph.aget_state(config)
+    return _run_detail(state.values, run_id)
 
 
 @app.post("/run", response_model=RunResponse)
