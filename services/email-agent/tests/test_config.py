@@ -31,6 +31,43 @@ def test_load_config_parses_yaml(tmp_path):
     assert cfg.agent.triage_instructions == "respond to direct questions."
 
 
+def test_load_config_defaults_auto_organize_off(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        agent:
+          background: I'm a test persona.
+          triage_instructions: respond to direct questions.
+          response_preferences: be concise.
+        """,
+    )
+
+    cfg = load_config(path)
+
+    assert cfg.auto_organize.enabled is False
+    assert cfg.auto_organize.ignored_label == "Auto/Ignored"
+
+
+def test_load_config_parses_auto_organize(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        agent:
+          background: I'm a test persona.
+          triage_instructions: respond to direct questions.
+          response_preferences: be concise.
+        auto_organize:
+          enabled: true
+          ignored_label: Auto/Skip
+        """,
+    )
+
+    cfg = load_config(path)
+
+    assert cfg.auto_organize.enabled is True
+    assert cfg.auto_organize.ignored_label == "Auto/Skip"
+
+
 def test_default_config_loads():
     """The committed config.yaml at the service root is valid."""
     cfg = load_config()

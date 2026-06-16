@@ -56,9 +56,17 @@ class AgentBehavior(BaseModel):
     response_preferences: str = Field(min_length=1)
 
 
+class AutoOrganizeConfig(BaseModel):
+    """Optional automatic inbox organization after triage."""
+
+    enabled: bool = False
+    ignored_label: str = "Auto/Ignored"
+
+
 class AgentConfig(BaseModel):
     agent: AgentBehavior
     capabilities: dict[str, bool] = {"email": True}
+    auto_organize: AutoOrganizeConfig = Field(default_factory=AutoOrganizeConfig)
 
 
 def load_config(path: str | Path | None = None) -> AgentConfig:

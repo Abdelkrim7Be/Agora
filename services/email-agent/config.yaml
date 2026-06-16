@@ -47,3 +47,8 @@ capabilities:
   calendar: false   # schedule_meeting + check_calendar_availability — off for now
   inbox: false      # labels, archive, read/unread, trash — off until Phase 5 is enabled
   drafts: false     # create Gmail drafts without sending — off until Phase 5 is enabled
+
+# Optional automatic organization for ignored emails. Requires the inbox capability.
+auto_organize:
+  enabled: false
+  ignored_label: Auto/Ignored
