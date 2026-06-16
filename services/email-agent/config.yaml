@@ -45,3 +45,4 @@ agent:
 capabilities:
   email: true       # write_email + Done — keep on
   calendar: false   # schedule_meeting + check_calendar_availability — off for now
+  inbox: false      # labels, archive, read/unread, trash — off until Phase 5 is enabled

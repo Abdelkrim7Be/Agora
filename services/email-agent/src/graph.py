@@ -12,7 +12,13 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
-from src.capabilities import approval_required, hitl_approved, load_capabilities, tools_by_name
+from src.capabilities import (
+    approval_required,
+    current_email_id,
+    hitl_approved,
+    load_capabilities,
+    tools_by_name,
+)
 from src.config import load_config, settings
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
@@ -284,14 +290,18 @@ def tool_node(state: State, store: BaseStore, config=None):
                 continue
 
         tool = tools_by_name_map[name]
-        if name in approval_set:
-            tok = hitl_approved.set(True)
-            try:
+        email_id_token = current_email_id.set(state["email_input"].get("email_id"))
+        try:
+            if name in approval_set:
+                tok = hitl_approved.set(True)
+                try:
+                    observation = tool.invoke(args)
+                finally:
+                    hitl_approved.reset(tok)
+            else:
                 observation = tool.invoke(args)
-            finally:
-                hitl_approved.reset(tok)
-        else:
-            observation = tool.invoke(args)
+        finally:
+            current_email_id.reset(email_id_token)
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
         )

@@ -9,9 +9,14 @@ from langchain_core.tools import BaseTool
 # Set to True by tool_node only after human approval; gated tools check this before executing.
 hitl_approved: ContextVar[bool] = ContextVar("hitl_approved", default=False)
 
+# Trusted Gmail message id for the email currently being handled. Tools read this
+# from graph context instead of accepting an LLM-supplied target id.
+current_email_id: ContextVar[str | None] = ContextVar("current_email_id", default=None)
+
 CAPABILITY_MODULES: Dict[str, str] = {
     "email": "src.capabilities.email_tools",
     "calendar": "src.capabilities.calendar_tools",
+    "inbox": "src.capabilities.inbox_tools",
 }
 
 
