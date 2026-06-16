@@ -10,7 +10,9 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from src.config import settings
+from src.config import load_config
 from src.graph import overall_workflow
+from src.memory import get_memory, namespace
 from src.run_registry import list_runs, upsert_run
 
 
@@ -29,6 +31,7 @@ async def lifespan(app: FastAPI):
             app.state.graph = overall_workflow.compile(
                 checkpointer=checkpointer, store=mem_store
             )
+            app.state.store = mem_store
             yield
 
 
@@ -49,6 +52,13 @@ class ApprovalInput(BaseModel):
 
 class RespondInput(BaseModel):
     feedback: str
+
+
+
+
+class MemoryInput(BaseModel):
+    triage_preferences: str
+    response_preferences: str
 
 
 class RunResponse(BaseModel):
@@ -134,6 +144,35 @@ def _run_detail(values: dict, run_id: str) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/memory")
+async def get_preferences(request: Request) -> dict:
+    cfg = load_config()
+    store = request.app.state.store
+    return {
+        "triage_preferences": get_memory(
+            store,
+            namespace("triage_preferences"),
+            cfg.agent.triage_instructions,
+        ),
+        "response_preferences": get_memory(
+            store,
+            namespace("response_preferences"),
+            cfg.agent.response_preferences,
+        ),
+    }
+
+
+@app.put("/memory")
+async def update_preferences(request: Request, body: MemoryInput) -> dict:
+    store = request.app.state.store
+    store.put(namespace("triage_preferences"), "user_preferences", body.triage_preferences)
+    store.put(namespace("response_preferences"), "user_preferences", body.response_preferences)
+    return {
+        "triage_preferences": body.triage_preferences,
+        "response_preferences": body.response_preferences,
+    }
 
 
 @app.get("/runs")

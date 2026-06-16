@@ -59,3 +59,31 @@ def test_run_detail_shapes_timeline_and_security():
     assert detail["email"]["subject"] == "Question"
     assert detail["security"] == {"classification": "benign"}
     assert detail["timeline"] == [{"role": "user", "content": "hello", "tool_calls": []}]
+
+
+def test_memory_endpoint_contract(monkeypatch):
+    class FakeStore:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, ns, key):
+            value = self.values.get((ns, key))
+            return type("Item", (), {"value": value}) if value is not None else None
+
+        def put(self, ns, key, value):
+            self.values[(ns, key)] = value
+
+    with TestClient(app) as client:
+        client.app.state.store = FakeStore()
+        response = client.put(
+            "/memory",
+            json={
+                "triage_preferences": "triage",
+                "response_preferences": "response",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "triage_preferences": "triage",
+            "response_preferences": "response",
+        }
