@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import textwrap
+from datetime import date
 
 import pytest
 from pydantic import ValidationError
 
-from src.automation import RulesConfig, load_rules, snooze_label
+from src.automation import RulesConfig, build_rule_plan, load_rules, snooze_label
 
 
 def _write_yaml(tmp_path, body: str):
@@ -69,4 +70,67 @@ def test_blank_response_rule_fails_validation(tmp_path):
 
 
 def test_snooze_label_uses_iso_date():
-    assert snooze_label("Snoozed", __import__("datetime").date(2026, 6, 16)) == "Snoozed/2026-06-16"
+    assert snooze_label("Snoozed", date(2026, 6, 16)) == "Snoozed/2026-06-16"
+
+
+def test_build_rule_plan_matches_sender_subject_and_labels(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        enabled: true
+        rules:
+          - name: newsletters
+            when:
+              sender_domain: ["promo.io"]
+              subject_contains: ["digest"]
+              labels: ["INBOX"]
+            then:
+              labels: ["Auto/Newsletters"]
+              archive: true
+        """,
+    )
+    email = {
+        "author": "Promotions <newsletter@promo.io>",
+        "subject": "Weekly digest",
+        "labels": ["INBOX", "UNREAD"],
+    }
+
+    plan = build_rule_plan(email, load_rules(path))
+
+    assert plan is not None
+    assert plan["matched_rules"] == ["newsletters"]
+    assert plan["tool_calls"] == [
+        {
+            "name": "apply_label",
+            "args": {"label": "Auto/Newsletters"},
+            "id": "rule_0_label_0",
+            "type": "tool_call",
+        },
+        {"name": "archive_email", "args": {}, "id": "rule_0_archive", "type": "tool_call"},
+    ]
+
+
+def test_build_rule_plan_can_prepare_human_gated_response(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        enabled: true
+        rules:
+          - name: auto ack
+            when:
+              sender_contains: ["Alice"]
+            then:
+              respond: Thanks, I received this and will follow up.
+        """,
+    )
+    email = {"author": "Alice <alice@example.com>", "subject": "Question"}
+
+    plan = build_rule_plan(email, load_rules(path))
+
+    assert plan is not None
+    assert plan["tool_calls"][0]["name"] == "write_email"
+    assert plan["tool_calls"][0]["args"] == {
+        "to": "alice@example.com",
+        "subject": "Re: Question",
+        "content": "Thanks, I received this and will follow up.",
+    }

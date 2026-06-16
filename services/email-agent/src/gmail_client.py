@@ -441,4 +441,5 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "email_id": message["id"],
         "gmail_thread_id": message["threadId"],
         "attachments": extract_attachments(message["payload"]),
+        "labels": message.get("labelIds", []),
     }

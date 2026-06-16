@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 from unittest.mock import MagicMock
 
+from src.automation import AutomationRule, RuleThen, RuleWhen, RulesConfig
+
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
@@ -42,6 +44,7 @@ def _raw_message(msg_id: str, subject: str, body: str) -> dict:
     return {
         "id": msg_id,
         "threadId": f"thread-{msg_id}",
+        "labelIds": ["INBOX", "UNREAD"],
         "payload": {
             "headers": [
                 {"name": "From", "value": "alice@example.com"},
@@ -277,3 +280,35 @@ async def test_benign_verdict_marked_read(mocked_gmail, monkeypatch, fake_llms):
 
     assert outcomes == [("m_ok", "completed", outcomes[0][2])]
     assert marked == ["m_ok"]
+
+
+async def test_poll_once_injects_rule_plan_before_graph(mocked_gmail):
+    set_unread, _ = mocked_gmail
+    set_unread([_raw_message("m_rule", "Weekly digest", "deals")])
+    rules = RulesConfig(
+        enabled=True,
+        rules=[
+            AutomationRule(
+                name="newsletter",
+                when=RuleWhen(sender_domain=["example.com"], subject_contains=["digest"]),
+                then=RuleThen(labels=["Auto/Newsletters"], archive=True),
+            )
+        ],
+    )
+
+    graph = _RecordingGraph()
+    await poller.poll_once(graph, resource=object(), rules_config=rules)
+
+    automation = graph.inputs[0]["email_input"]["automation"]
+    assert automation["matched_rules"] == ["newsletter"]
+    assert [call["name"] for call in automation["tool_calls"]] == ["apply_label", "archive_email"]
+
+
+async def test_poll_once_rules_default_off_does_not_inject_automation(mocked_gmail):
+    set_unread, _ = mocked_gmail
+    set_unread([_raw_message("m_no_rule", "Weekly digest", "deals")])
+
+    graph = _RecordingGraph()
+    await poller.poll_once(graph, resource=object(), rules_config=RulesConfig())
+
+    assert "automation" not in graph.inputs[0]["email_input"]

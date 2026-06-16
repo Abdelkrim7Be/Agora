@@ -6,6 +6,7 @@ import uuid
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
+from src.automation import RulesConfig, build_rule_plan, load_rules
 from src.config import settings
 from src.security_client import sanitize_email
 from src.gmail_client import (
@@ -21,7 +22,12 @@ from src.gmail_client import (
 from src.graph import overall_workflow
 
 
-async def poll_once(graph, resource=None, max_results: int | None = None) -> list[tuple]:
+async def poll_once(
+    graph,
+    resource=None,
+    max_results: int | None = None,
+    rules_config: RulesConfig | None = None,
+) -> list[tuple]:
     """Process one batch of unread emails through the graph.
 
     A run that completes (ignore/notify/sent) is marked read. A run that pauses for
@@ -33,6 +39,7 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
     """
     resource = resource or gmail_resource()
     max_results = max_results or settings.max_emails_per_run
+    rules_config = rules_config or load_rules()
 
     outcomes: list[tuple] = []
     for ref in fetch_unread(max_results, resource=resource):
@@ -78,6 +85,10 @@ async def poll_once(graph, resource=None, max_results: int | None = None) -> lis
                     "classifier_unavailable": verdict["classifier_unavailable"],
                 },
             }
+
+        rule_plan = build_rule_plan(email_input, rules_config)
+        if rule_plan:
+            email_input = {**email_input, "automation": rule_plan}
 
         run_id = str(uuid.uuid4())
         cfg = {"configurable": {"thread_id": run_id}}

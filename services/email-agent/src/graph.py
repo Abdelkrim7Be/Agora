@@ -48,6 +48,28 @@ llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 llm_memory = llm.with_structured_output(UserPreferences)
 
 
+def automation_router(
+    state: State, store: BaseStore
+) -> Command[Literal["environment", "triage_router", "__end__"]]:
+    """Execute deterministic poller-provided automation before LLM triage."""
+    automation = state["email_input"].get("automation") or {}
+    terminal_status = automation.get("terminal_status")
+    tool_calls = automation.get("tool_calls") or []
+
+    if tool_calls:
+        return Command(
+            goto="environment",
+            update={
+                "automation_acted": True,
+                "classification_decision": terminal_status or "notify",
+                "messages": [AIMessage(content="", tool_calls=tool_calls)],
+            },
+        )
+    if terminal_status == "notify":
+        return Command(goto=END, update={"classification_decision": "notify"})
+    return Command(goto="triage_router")
+
+
 def llm_call(state: State, store: BaseStore):
     """LLM decides which tool to call to handle the email."""
     response_prefs = get_memory(
@@ -320,7 +342,15 @@ def tool_node(state: State, store: BaseStore, config=None):
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
 
-        tool = tools_by_name_map[name]
+        tool = tools_by_name_map.get(name)
+        if tool is None:
+            result.append({
+                "role": "tool",
+                "content": f"The '{name}' action is not available. Call Done.",
+                "tool_call_id": tool_call["id"],
+            })
+            continue
+
         email_id_token = current_email_id.set(state["email_input"].get("email_id"))
         thread_id_token = current_gmail_thread_id.set(
             state["email_input"].get("gmail_thread_id")
@@ -361,7 +391,7 @@ def tool_node(state: State, store: BaseStore, config=None):
 
 def after_tools(state: State) -> Literal["llm_call", "__end__"]:
     """Sending and auto-organization are terminal; other tools continue the loop."""
-    if state.get("email_sent") or state.get("auto_organized"):
+    if state.get("email_sent") or state.get("auto_organized") or state.get("automation_acted"):
         return END
     return "llm_call"
 
@@ -450,10 +480,11 @@ def triage_router(
 
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
+    .add_node("automation_router", automation_router)
     .add_node("triage_router", triage_router)
     .add_node("llm_call", llm_call)
     .add_node("environment", tool_node)
-    .add_edge(START, "triage_router")
+    .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",
         should_continue,
