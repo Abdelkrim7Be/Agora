@@ -69,7 +69,12 @@ def authorize(
     if tool.limits is not None:
         # Content size check.
         if tool.limits.max_content_chars is not None:
-            content = req.args.get("content", "") or ""
+            content = (
+                req.args.get("content")
+                or req.args.get("body")
+                or req.args.get("note")
+                or ""
+            )
             if len(content) > tool.limits.max_content_chars:
                 return AuthorizeResponse(
                     decision="deny",

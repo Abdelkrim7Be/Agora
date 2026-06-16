@@ -16,6 +16,29 @@ def test_default_policy_loads():
     assert policy.tools["write_email"].limits.max_per_run == 1
     assert policy.tools["write_email"].limits.max_per_day == 100
     assert policy.tools["write_email"].limits.max_content_chars == 20000
+    for action in (
+        "apply_label",
+        "remove_label",
+        "mark_read",
+        "mark_unread",
+        "archive_email",
+        "trash_email",
+        "create_draft",
+        "forward_email",
+        "reply_all",
+    ):
+        assert action in policy.tools
+    assert policy.tools["apply_label"].decision == "allow"
+    assert policy.tools["remove_label"].decision == "allow"
+    assert policy.tools["mark_read"].decision == "allow"
+    assert policy.tools["mark_unread"].decision == "allow"
+    assert policy.tools["archive_email"].decision == "allow"
+    assert policy.tools["create_draft"].decision == "allow"
+    assert policy.tools["trash_email"].decision == "hitl"
+    assert policy.tools["forward_email"].decision == "hitl"
+    assert policy.tools["reply_all"].decision == "hitl"
+    assert policy.tools["forward_email"].limits.max_per_run == 1
+    assert policy.tools["reply_all"].limits.max_content_chars == 20000
 
 
 def test_bare_policy_config_defaults_to_deny():

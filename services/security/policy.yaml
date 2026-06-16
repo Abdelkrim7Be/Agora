@@ -13,3 +13,47 @@ tools:
       max_content_chars: 20000
       max_per_run: 1          # one send per email run
       max_per_day: 100
+
+  # Reversible inbox organization actions.
+  apply_label:
+    decision: allow
+  remove_label:
+    decision: allow
+  mark_read:
+    decision: allow
+  mark_unread:
+    decision: allow
+  archive_email:
+    decision: allow
+
+  # Trash is reversible for a short window, but destructive enough to ask first.
+  trash_email:
+    decision: hitl
+
+  # Drafts do not send externally, but recipient/content policy still applies.
+  create_draft:
+    decision: allow
+    recipients:
+      allow_domains: []
+      deny_domains: []
+    limits:
+      max_content_chars: 20000
+      max_per_run: 5
+      max_per_day: 500
+
+  # Sending actions always go through HITL and share send-like recipient/content caps.
+  forward_email:
+    decision: hitl
+    recipients:
+      allow_domains: []
+      deny_domains: []
+    limits:
+      max_content_chars: 20000
+      max_per_run: 1
+      max_per_day: 100
+  reply_all:
+    decision: hitl
+    limits:
+      max_content_chars: 20000
+      max_per_run: 1
+      max_per_day: 100
