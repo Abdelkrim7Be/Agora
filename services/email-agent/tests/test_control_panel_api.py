@@ -141,3 +141,32 @@ auto_organize:
     assert response.status_code == 200
     assert response.json()["capabilities"]["inbox"] is True
     assert "inbox: true" in config_path.read_text()
+
+
+def test_update_rules_validates_yaml(tmp_path, monkeypatch):
+    import src.api as api
+
+    rules_path = tmp_path / "rules.yaml"
+    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/rules",
+            json={
+                "rules_yaml": """enabled: true
+rules:
+  - name: test rule
+    then:
+      notify: true
+digest:
+  enabled: true
+  hour: 8
+"""
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["parsed"]["enabled"] is True
+    assert body["parsed"]["rules"][0]["name"] == "test rule"
+    assert "test rule" in rules_path.read_text()

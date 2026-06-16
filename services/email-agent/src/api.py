@@ -13,6 +13,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from src.config import settings
+from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow
 from src.memory import get_memory, namespace
@@ -59,6 +60,12 @@ class RespondInput(BaseModel):
 
 
 
+
+
+
+
+class RulesInput(BaseModel):
+    rules_yaml: str
 
 
 class CapabilitiesInput(BaseModel):
@@ -153,6 +160,28 @@ def _run_detail(values: dict, run_id: str) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/rules")
+async def get_rules() -> dict:
+    rules_yaml = DEFAULT_RULES_PATH.read_text() if DEFAULT_RULES_PATH.is_file() else "enabled: false\n"
+    return {
+        "rules_yaml": rules_yaml,
+        "parsed": load_rules().model_dump(),
+    }
+
+
+@app.put("/rules")
+async def update_rules(body: RulesInput) -> dict:
+    data = yaml.safe_load(body.rules_yaml) or {}
+    if data.get("rules") is None:
+        data["rules"] = []
+    parsed = RulesConfig(**data)
+    DEFAULT_RULES_PATH.write_text(yaml.safe_dump(parsed.model_dump(), sort_keys=False))
+    return {
+        "rules_yaml": DEFAULT_RULES_PATH.read_text(),
+        "parsed": parsed.model_dump(),
+    }
 
 
 @app.get("/capabilities")
