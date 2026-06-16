@@ -8,6 +8,13 @@ from src.config import SERVICE_ROOT
 
 DEFAULT_RUN_INDEX = SERVICE_ROOT / "logs" / "run_index.json"
 
+# Cap the index so a long-running poller can't grow it unbounded. Keeps the most
+# recent runs (the file is sorted newest-first before truncation).
+# NOTE: the API and the poller both write this file without locking — fine for the
+# single-user dev setup, but move run tracking into the durable store before running
+# multiple writers in production.
+MAX_RUNS = 1000
+
 
 def _path(path: str | Path | None = None) -> Path:
     if path is None:
@@ -58,6 +65,8 @@ def upsert_run(
         runs.append(record)
         saved = record
     runs.sort(key=lambda r: r.get("updated_at", ""), reverse=True)
+    if len(runs) > MAX_RUNS:
+        data["runs"] = runs[:MAX_RUNS]
     _write(index_path, data)
     return saved
 
