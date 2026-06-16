@@ -1,6 +1,6 @@
 # Agora — local stack
 
-Three services on a shared network: **postgres** (data), **email-agent** (internal), **gateway** (public ingress on port 8080). The email-agent port is never published to the host — all traffic goes through the gateway.
+Four services on a shared network: **postgres** (data), **security** (internal policy/sanitize service), **email-agent** (internal), and **gateway** (public ingress on port 8080). The email-agent and security ports are never published to the host — all external traffic goes through the gateway.
 
 ## Setup
 
@@ -11,12 +11,13 @@ cp .env.example .env
 ```
 
 Required values:
+- `GROQ_API_KEY` — used by the security service quarantined classifier
 - `GATEWAY_JWT_SECRET` — at least 32 characters, random string
 - `GATEWAY_OWNER_USERNAME` / `GATEWAY_OWNER_PASSWORD` — admin credentials
 - `GATEWAY_VIEWER_USERNAME` / `GATEWAY_VIEWER_PASSWORD` — read-only credentials (optional; leave blank to skip seeding)
 - `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` — database config
 
-The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). At minimum it needs `GROQ_API_KEY`.
+The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). At minimum it needs `GROQ_API_KEY` for its agent LLM calls. Compose enables `AGENT_SECURITY_ENABLED=true` and points the agent at `http://security:8001`.
 
 2. Start the stack:
 
@@ -30,6 +31,8 @@ docker compose up --build
 ```
 curl http://localhost:8080/health
 ```
+
+The security service is internal-only. From inside the compose network its health endpoint is `http://security:8001/health`; it is not published on the host.
 
 **Log in:**
 ```
@@ -70,6 +73,8 @@ curl http://localhost:8080/audit \
 ## Notes
 
 - The email-agent is reachable only from within the Docker network (`http://email-agent:8000`). Its port is not exposed to the host.
+- The security service is reachable only from within the Docker network (`http://security:8001`). Its port is not exposed to the host.
+- Compose enables inbound sanitization and tool-action authorization by setting `AGENT_SECURITY_ENABLED=true` for the email-agent.
 - SQLite state files (`checkpoints.db`, `store.db`) are written to `/app/data`, backed by the named `agent_data` volume, so paused runs and learned memory survive container restarts.
 - The gateway waits for the agent's `/health` to pass (not just for the container to start) before it comes up.
 - Set `AGENT_DRY_RUN=false` in `services/email-agent/.env` to enable real Gmail sends (requires OAuth credentials).
