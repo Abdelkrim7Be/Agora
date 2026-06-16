@@ -17,6 +17,15 @@ def _extract_domains(to: str) -> list[str]:
     return [addr.split("@")[1].lower() for addr in addresses]
 
 
+def _domain_matches(domain: str, entries) -> bool:
+    """True if domain equals a policy entry or is a subdomain of one.
+
+    So denying 'evil.com' also denies 'mail.evil.com', and allowing 'company.com'
+    also permits 'eu.company.com' — entries are matched at the registrable boundary.
+    """
+    return any(domain == e or domain.endswith("." + e) for e in entries)
+
+
 def _check_recipients(to: str, recipients) -> str | None:
     """Return a deny-reason string if the recipient fails policy, else None."""
     if not to or not to.strip():
@@ -27,12 +36,12 @@ def _check_recipients(to: str, recipients) -> str | None:
         return f"could not parse a valid email address from 'to': {to!r}"
 
     for domain in domains:
-        if domain in recipients.deny_domains:
+        if _domain_matches(domain, recipients.deny_domains):
             return f"recipient domain '{domain}' is on the deny list"
 
     if recipients.allow_domains:
         for domain in domains:
-            if domain not in recipients.allow_domains:
+            if not _domain_matches(domain, recipients.allow_domains):
                 return f"recipient domain '{domain}' is not on the allow list"
 
     return None

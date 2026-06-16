@@ -169,6 +169,43 @@ def test_name_addr_form_parses_correctly():
     assert resp.decision == "hitl"
 
 
+def test_deny_domain_matches_subdomain():
+    # Denying a domain also denies its subdomains.
+    policy = _policy_with_recipients(deny_domains=["evil.com"])
+    req = AuthorizeRequest(
+        action="write_email",
+        args={"to": "attacker@mail.evil.com", "subject": "x", "content": "x"},
+        context={"run_id": "r1"},
+    )
+    resp = authorize(req, policy=policy)
+    assert resp.decision == "deny"
+    assert "deny list" in resp.reason
+
+
+def test_allow_domain_permits_subdomain():
+    # Allowing a domain also permits its subdomains.
+    policy = _policy_with_recipients(allow_domains=["company.com"])
+    req = AuthorizeRequest(
+        action="write_email",
+        args={"to": "user@eu.company.com", "subject": "x", "content": "x"},
+        context={"run_id": "r1"},
+    )
+    resp = authorize(req, policy=policy)
+    assert resp.decision == "hitl"
+
+
+def test_lookalike_domain_not_matched_as_subdomain():
+    # 'notevil.com' must not be treated as a subdomain of 'evil.com'.
+    policy = _policy_with_recipients(deny_domains=["evil.com"])
+    req = AuthorizeRequest(
+        action="write_email",
+        args={"to": "user@notevil.com", "subject": "x", "content": "x"},
+        context={"run_id": "r1"},
+    )
+    resp = authorize(req, policy=policy)
+    assert resp.decision == "hitl"
+
+
 # --- Content size cap ---
 
 def _policy_with_limits(**kwargs) -> PolicyConfig:
