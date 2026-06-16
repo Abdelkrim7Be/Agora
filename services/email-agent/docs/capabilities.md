@@ -106,4 +106,4 @@ authorization, HITL, dry-run, and trusted message context all still apply.
 - `reply_all` recipients are derived from the Gmail thread and are not submitted to recipient policy checks.
 - `reply_all` sets `References` to the original `Message-ID` only.
 - Auto-organization can perform reversible allowed actions without human approval when enabled.
-- Security rate limits are still in-memory and per-process; move them out of process in Phase 4.
+- In the Phase 4 compose stack, security rate limits use Redis; local dev can still use the in-memory backend.
