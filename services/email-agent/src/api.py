@@ -18,7 +18,7 @@ from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow, reload_config
 from src.poller import poll_history
-from src.memory import namespace
+from src.memory import namespace, preferences_text, wrap_preferences
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
@@ -326,8 +326,8 @@ async def get_preferences(request: Request) -> dict:
     triage = await store.aget(namespace("triage_preferences"), "user_preferences")
     response = await store.aget(namespace("response_preferences"), "user_preferences")
     return {
-        "triage_preferences": triage.value if triage else cfg.agent.triage_instructions,
-        "response_preferences": response.value if response else cfg.agent.response_preferences,
+        "triage_preferences": preferences_text(triage.value) if triage else cfg.agent.triage_instructions,
+        "response_preferences": preferences_text(response.value) if response else cfg.agent.response_preferences,
     }
 
 
@@ -335,8 +335,8 @@ async def get_preferences(request: Request) -> dict:
 async def update_preferences(request: Request, body: MemoryInput) -> dict:
     # AsyncSqliteStore: must use the async API on the event loop (sync calls raise).
     store = request.app.state.store
-    await store.aput(namespace("triage_preferences"), "user_preferences", body.triage_preferences)
-    await store.aput(namespace("response_preferences"), "user_preferences", body.response_preferences)
+    await store.aput(namespace("triage_preferences"), "user_preferences", wrap_preferences(body.triage_preferences))
+    await store.aput(namespace("response_preferences"), "user_preferences", wrap_preferences(body.response_preferences))
     return {
         "triage_preferences": body.triage_preferences,
         "response_preferences": body.response_preferences,

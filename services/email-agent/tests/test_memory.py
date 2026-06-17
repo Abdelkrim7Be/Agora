@@ -260,3 +260,21 @@ def test_plain_approve_does_not_update_memory(fake_llms):
     # Sentinel values must be unchanged — update_memory was never called.
     assert memory_store.get(namespace("triage_preferences"), "user_preferences").value == sentinel_triage
     assert memory_store.get(namespace("response_preferences"), "user_preferences").value == sentinel_response
+
+
+def test_done_tool_accepts_stringified_argument():
+    """Groq's llama sometimes emits {"done": "true"}; the schema must not reject it."""
+    from src.capabilities.email_tools import Done
+
+    assert Done.invoke({"done": "true"}) is not None
+    assert Done.invoke({"done": True}) is not None
+    assert Done.invoke({}) is not None  # optional
+
+
+def test_memory_helpers_round_trip():
+    from src.memory import preferences_text, wrap_preferences
+
+    assert wrap_preferences("hello") == {"preferences": "hello"}
+    assert preferences_text({"preferences": "hello"}) == "hello"
+    assert preferences_text("legacy raw string") == "legacy raw string"  # sqlite back-compat
+    assert preferences_text(None) == ""
