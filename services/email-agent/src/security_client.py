@@ -51,7 +51,9 @@ def authorize_action(action: str, args: dict, run_id: str, action_id: str = "") 
     Fail closed: any failure denies the action so a security-service outage never
     becomes an unguarded tool execution.
     """
-    context = {"run_id": run_id}
+    from src.tenant import current_user_id
+
+    context = {"run_id": run_id, "user_id": current_user_id()}
     if action_id:
         context["action_id"] = action_id
     payload = {"action": action, "args": args, "context": context}

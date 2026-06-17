@@ -6,12 +6,18 @@ import uuid
 from src.config import settings
 
 # Module-level in-process state. Fine for single-user dev. Clock is monkeypatchable
-# for deterministic tests.
+# for deterministic tests. Per-day buckets are keyed by tenant so one user can't
+# exhaust another's daily budget (the per-run keys are already globally unique).
 _per_run: dict[str, int] = {}
-_per_day: list[float] = []
+_per_day: dict[str, list[float]] = {}
 _reservations: set[tuple[str, str]] = set()
 _now = time.time
 _REDIS_PREFIX = "agora:security:ratelimit"
+_client = None
+
+
+def _tenant(user_id: str) -> str:
+    return user_id or "default"
 
 
 def selected_backend() -> str:
@@ -24,11 +30,16 @@ def selected_backend() -> str:
 
 
 def _redis_client():
-    try:
-        from redis import Redis
-    except ImportError as exc:
-        raise RuntimeError("Redis rate limits require the redis package.") from exc
-    return Redis.from_url(settings.redis_url, decode_responses=True)
+    # Cached: Redis.from_url pools connections, so reuse one client across calls
+    # instead of opening a fresh pool on every authorize.
+    global _client
+    if _client is None:
+        try:
+            from redis import Redis
+        except ImportError as exc:
+            raise RuntimeError("Redis rate limits require the redis package.") from exc
+        _client = Redis.from_url(settings.redis_url, decode_responses=True)
+    return _client
 
 
 def would_exceed(
@@ -36,11 +47,12 @@ def would_exceed(
     max_per_run: int | None,
     max_per_day: int | None,
     action_id: str = "",
+    user_id: str = "",
 ) -> str | None:
     """Return a deny-reason if granting one more send would exceed a cap, else None."""
     if selected_backend() == "redis":
-        return _redis_would_exceed(run_id, max_per_run, max_per_day, action_id)
-    return _memory_would_exceed(run_id, max_per_run, max_per_day, action_id)
+        return _redis_would_exceed(run_id, max_per_run, max_per_day, action_id, user_id)
+    return _memory_would_exceed(run_id, max_per_run, max_per_day, action_id, user_id)
 
 
 def _memory_would_exceed(
@@ -48,6 +60,7 @@ def _memory_would_exceed(
     max_per_run: int | None,
     max_per_day: int | None,
     action_id: str = "",
+    user_id: str = "",
 ) -> str | None:
     if action_id and (run_id, action_id) in _reservations:
         return None
@@ -55,28 +68,28 @@ def _memory_would_exceed(
         return f"per-run send cap reached ({max_per_run})"
     if max_per_day is not None:
         cutoff = _now() - 86400
-        recent = [t for t in _per_day if t >= cutoff]
+        recent = [t for t in _per_day.get(_tenant(user_id), []) if t >= cutoff]
         if len(recent) >= max_per_day:
             return f"per-day send cap reached ({max_per_day})"
     return None
 
 
-def record(run_id: str, action_id: str = "") -> None:
+def record(run_id: str, action_id: str = "", user_id: str = "") -> None:
     """Consume one rate-limit slot for this run (called on grant, before HITL)."""
     if selected_backend() == "redis":
-        _redis_record(run_id, action_id)
+        _redis_record(run_id, action_id, user_id)
         return
-    _memory_record(run_id, action_id)
+    _memory_record(run_id, action_id, user_id)
 
 
-def _memory_record(run_id: str, action_id: str = "") -> None:
+def _memory_record(run_id: str, action_id: str = "", user_id: str = "") -> None:
     if action_id:
         key = (run_id, action_id)
         if key in _reservations:
             return
         _reservations.add(key)
     _per_run[run_id] = _per_run.get(run_id, 0) + 1
-    _per_day.append(_now())
+    _per_day.setdefault(_tenant(user_id), []).append(_now())
 
 
 def _redis_would_exceed(
@@ -84,6 +97,7 @@ def _redis_would_exceed(
     max_per_run: int | None,
     max_per_day: int | None,
     action_id: str = "",
+    user_id: str = "",
 ) -> str | None:
     client = _redis_client()
     if action_id and client.exists(_reservation_key(run_id, action_id)):
@@ -94,14 +108,14 @@ def _redis_would_exceed(
             return f"per-run send cap reached ({max_per_run})"
     if max_per_day is not None:
         cutoff = _now() - 86400
-        day_key = _day_key()
+        day_key = _day_key(user_id)
         client.zremrangebyscore(day_key, 0, cutoff)
         if client.zcard(day_key) >= max_per_day:
             return f"per-day send cap reached ({max_per_day})"
     return None
 
 
-def _redis_record(run_id: str, action_id: str = "") -> None:
+def _redis_record(run_id: str, action_id: str = "", user_id: str = "") -> None:
     client = _redis_client()
     if action_id:
         reservation_key = _reservation_key(run_id, action_id)
@@ -111,7 +125,7 @@ def _redis_record(run_id: str, action_id: str = "") -> None:
     client.incr(run_key)
     client.expire(run_key, 86400)
     now = _now()
-    day_key = _day_key()
+    day_key = _day_key(user_id)
     client.zadd(day_key, {f"{now}:{uuid.uuid4()}": now})
     client.zremrangebyscore(day_key, 0, now - 86400)
     client.expire(day_key, 86400)
@@ -125,8 +139,8 @@ def _reservation_key(run_id: str, action_id: str) -> str:
     return f"{_REDIS_PREFIX}:reservation:{run_id}:{action_id}"
 
 
-def _day_key() -> str:
-    return f"{_REDIS_PREFIX}:day"
+def _day_key(user_id: str = "") -> str:
+    return f"{_REDIS_PREFIX}:day:{_tenant(user_id)}"
 
 
 def reset() -> None:

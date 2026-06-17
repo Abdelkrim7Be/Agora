@@ -117,3 +117,30 @@ def test_redis_backend_enforces_day_cap(monkeypatch) -> None:
     assert ratelimit._redis_would_exceed("run-2", None, 1) == (
         "per-day send cap reached (1)"
     )
+
+
+def test_redis_day_cap_is_per_tenant(monkeypatch) -> None:
+    fake = FakeRedis()
+    monkeypatch.setattr(ratelimit, "_redis_client", lambda: fake)
+    monkeypatch.setattr(ratelimit, "_now", lambda: 1000.0)
+
+    # Alice exhausts her own daily budget.
+    assert ratelimit._redis_would_exceed("run-a", None, 1, "", "alice") is None
+    ratelimit._redis_record("run-a", "", "alice")
+    assert ratelimit._redis_would_exceed("run-a2", None, 1, "", "alice") == (
+        "per-day send cap reached (1)"
+    )
+
+    # Bob's budget is untouched — no cross-tenant exhaustion.
+    assert ratelimit._redis_would_exceed("run-b", None, 1, "", "bob") is None
+
+
+def test_memory_day_cap_is_per_tenant(monkeypatch) -> None:
+    monkeypatch.setattr(ratelimit, "_now", lambda: 1000.0)
+
+    assert ratelimit._memory_would_exceed("run-a", None, 1, "", "alice") is None
+    ratelimit._memory_record("run-a", "", "alice")
+    assert ratelimit._memory_would_exceed("run-a2", None, 1, "", "alice") == (
+        "per-day send cap reached (1)"
+    )
+    assert ratelimit._memory_would_exceed("run-b", None, 1, "", "bob") is None
