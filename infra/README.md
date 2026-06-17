@@ -77,7 +77,7 @@ curl http://localhost:8080/audit \
 - Compose enables inbound sanitization and tool-action authorization by setting `AGENT_SECURITY_ENABLED=true` for the email-agent.
 - Phase 4 compose runs the email-agent with `AGENT_STORAGE_BACKEND=postgres` and `AGENT_RUN_REGISTRY_BACKEND=postgres`, so checkpoints, learned memory, and run listings are shared through Postgres for multi-process deployments.
 - Redis backs the security service rate limiter with `SECURITY_RATELIMIT_BACKEND=redis`, so send caps are shared across security service processes.
-- The `agent_data` volume is still used for per-user Gmail OAuth token files.
-- Gmail push notifications can be enabled with `GMAIL_WEBHOOK_ENABLED=true`, `GMAIL_WEBHOOK_TOPIC`, and `GMAIL_WEBHOOK_SECRET`; the gateway route is `POST /api/agent/webhooks/gmail?token=<secret>` and the email-agent processes Gmail Pub/Sub envelopes by history id. Keep `GMAIL_POLLING_FALLBACK_ENABLED=true` until the webhook delivery path is verified.
+- The `agent_data` volume is still used for per-user Gmail OAuth token files. Set `AGENT_TOKEN_ENCRYPTION_KEY` to store those tokens as Fernet-encrypted blobs at rest.
+- Gmail push notifications can be enabled with `GMAIL_WEBHOOK_ENABLED=true`, `GMAIL_WEBHOOK_TOPIC`, and `GMAIL_WEBHOOK_SECRET`; the gateway route is `POST /api/agent/webhooks/gmail?token=<secret>`. The poller registers (and renews, every `GMAIL_WATCH_RENEW_HOURS`) the Gmail watch and records a per-user historyId baseline; each push is processed incrementally from that baseline, then advances it. Keep `GMAIL_POLLING_FALLBACK_ENABLED=true` until the webhook delivery path is verified.
 - The gateway waits for the agent's `/health` to pass (not just for the container to start) before it comes up.
 - Set `AGENT_DRY_RUN=false` in `services/email-agent/.env` to enable real Gmail sends (requires OAuth credentials).
