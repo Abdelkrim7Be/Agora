@@ -26,7 +26,7 @@ def test_get_memory_writes_default_to_store_on_first_call():
     get_memory(store, ns, "seed value")
     item = store.get(ns, "user_preferences")
     assert item is not None
-    assert item.value == "seed value"
+    assert item.value == {"preferences": "seed value"}
 
 
 def test_get_memory_returns_stored_value_after_put():
@@ -55,7 +55,7 @@ def test_update_memory_writes_new_preferences():
     store.put(ns, "user_preferences", "original preferences")
     llm = _FakeMemoryLLM("updated preferences")
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
-    assert store.get(ns, "user_preferences").value == "updated preferences"
+    assert store.get(ns, "user_preferences").value == {"preferences": "updated preferences"}
 
 
 def test_update_memory_works_with_empty_store():
@@ -63,7 +63,7 @@ def test_update_memory_works_with_empty_store():
     ns = namespace("triage_preferences")
     llm = _FakeMemoryLLM("fresh preferences")
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
-    assert store.get(ns, "user_preferences").value == "fresh preferences"
+    assert store.get(ns, "user_preferences").value == {"preferences": "fresh preferences"}
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ def test_reject_updates_triage_preferences(fake_llms):
 
     item = memory_store.get(namespace("triage_preferences"), "user_preferences")
     assert item is not None
-    assert item.value == "do not respond to API questions"
+    assert item.value == {"preferences": "do not respond to API questions"}
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ def test_edit_updates_response_preferences(fake_llms):
 
     item = memory_store.get(namespace("response_preferences"), "user_preferences")
     assert item is not None
-    assert item.value == "be more concise in replies"
+    assert item.value == {"preferences": "be more concise in replies"}
 
 
 # ---------------------------------------------------------------------------
