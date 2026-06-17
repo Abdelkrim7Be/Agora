@@ -10,7 +10,7 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from src.config import SERVICE_ROOT, settings
-from src.token_store import token_file_for_user
+from src.token_store import prepared_token_file
 from src.state import EmailInput
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
@@ -25,13 +25,13 @@ def gmail_resource(user_id: str | None = None):
     )
 
     creds = str(SERVICE_ROOT / settings.gmail_credentials_path)
-    token = str(token_file_for_user(user_id))
-    credentials = get_google_credentials(
-        token_file=token,
-        client_secrets_file=creds,
-        scopes=GMAIL_SCOPES,
-    )
-    return build_gmail_service(credentials=credentials)
+    with prepared_token_file(user_id) as token:
+        credentials = get_google_credentials(
+            token_file=token,
+            client_secrets_file=creds,
+            scopes=GMAIL_SCOPES,
+        )
+        return build_gmail_service(credentials=credentials)
 
 
 def fetch_unread(max_results: int, resource=None) -> list[dict]:

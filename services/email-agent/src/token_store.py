@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from src.config import SERVICE_ROOT, settings
 from src.tenant import current_user_id, normalize_user_id
@@ -25,3 +29,43 @@ def token_file_for_user(user_id: str | None = None) -> Path:
     token_dir = _token_store_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
     return token_dir / f"{resolved}.json"
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+
+    # Accept any passphrase: derive a stable 32-byte urlsafe-base64 Fernet key from it.
+    digest = hashlib.sha256(settings.token_encryption_key.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _encrypted_path(target: Path) -> Path:
+    return target.with_name(target.name + ".enc")
+
+
+@contextmanager
+def prepared_token_file(user_id: str | None = None) -> Iterator[str]:
+    """Yield a plaintext token path for the Google client, encrypting it at rest.
+
+    When AGENT_TOKEN_ENCRYPTION_KEY is unset this is a passthrough (current behavior).
+    When set, the persisted token lives as a Fernet-encrypted ``<token>.enc`` blob:
+    it is decrypted to the plaintext path for the duration of the call and the
+    plaintext is re-encrypted and removed on exit, so tokens are never left on disk
+    in the clear.
+    """
+    target = token_file_for_user(user_id)
+    if not settings.token_encryption_key:
+        yield str(target)
+        return
+
+    fernet = _fernet()
+    enc_path = _encrypted_path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if enc_path.is_file():
+        target.write_bytes(fernet.decrypt(enc_path.read_bytes()))
+    try:
+        yield str(target)
+    finally:
+        if target.is_file():
+            enc_path.write_bytes(fernet.encrypt(target.read_bytes()))
+            target.unlink()
