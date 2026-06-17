@@ -418,3 +418,29 @@ async def test_poll_history_processes_history_refs(monkeypatch, fake_llms):
     assert outcomes[0][0] == "m_hist"
     assert outcomes[0][1] == "completed"
     assert marked == ["m_hist"]
+
+
+def test_ensure_watch_seeds_baseline(monkeypatch):
+    monkeypatch.setattr(poller.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(poller, "watch_mailbox", lambda resource=None: {"historyId": "555"})
+    seeded = {}
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: seeded.update(hid=hid))
+
+    result = poller.ensure_watch(resource=object())
+
+    assert result == {"historyId": "555"}
+    assert seeded == {"hid": "555"}
+
+
+def test_ensure_watch_noop_when_webhooks_disabled(monkeypatch):
+    monkeypatch.setattr(poller.settings, "gmail_webhook_enabled", False)
+    called = {"watch": False}
+
+    def _boom(resource=None):
+        called["watch"] = True
+        raise AssertionError("watch_mailbox should not be called")
+
+    monkeypatch.setattr(poller, "watch_mailbox", _boom)
+
+    assert poller.ensure_watch() is None
+    assert called["watch"] is False

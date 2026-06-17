@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import json
 import uuid
 
@@ -19,14 +21,35 @@ from src.poller import poll_history
 from src.memory import namespace
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
-from src.tenant import current_user_id, user_context
+from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
+from src.tenant import current_user_id, resolve_user_id, user_context
 from src.security_client import fetch_policy
 from src.storage import open_graph_storage
+
+
+async def _watch_renewal_loop() -> None:
+    """Register and periodically renew the Gmail push watch from the API process.
+
+    Gmail watches expire after 7 days, so the mailbox must be re-registered well
+    inside that window for push delivery to keep working. Runs only when webhooks
+    are enabled; ensure_watch also seeds the per-user historyId baseline.
+    """
+    from src.poller import ensure_watch
+
+    setup_gmail_sync()
+    interval = settings.gmail_watch_renew_hours * 3600
+    while True:
+        try:
+            await asyncio.to_thread(ensure_watch)
+        except Exception as exc:  # network/credential issues must not kill the API
+            print(f"api: gmail watch registration failed: {exc}")
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_run_registry()
+    setup_gmail_sync()
     async with open_graph_storage() as storage:
         # The graph's nodes are sync, so LangGraph runs them in a threadpool where
         # sync store.get/put works. A future ASYNC node must use aget/aput instead.
@@ -35,7 +58,18 @@ async def lifespan(app: FastAPI):
         )
         app.state.store = storage.store
         app.state.storage_backend = storage.backend
-        yield
+        watch_task = (
+            asyncio.create_task(_watch_renewal_loop())
+            if settings.gmail_webhook_enabled
+            else None
+        )
+        try:
+            yield
+        finally:
+            if watch_task is not None:
+                watch_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watch_task
 
 
 app = FastAPI(title="email-agent", version="0.1.0", lifespan=lifespan)
@@ -196,15 +230,30 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid Pub/Sub message data") from exc
 
-    history_id = str(payload.get("historyId") or "")
-    if not history_id:
+    pushed_history_id = str(payload.get("historyId") or "")
+    if not pushed_history_id:
         raise HTTPException(status_code=400, detail="Missing Gmail historyId")
 
     email_address = payload.get("emailAddress")
-    with user_context(email_address):
-        outcomes = await poll_history(request.app.state.graph, history_id)
+    with user_context(resolve_user_id(email_address)):
+        # Gmail's history.list returns changes *after* startHistoryId, so the message
+        # that fired this push is found by querying from our previously stored baseline
+        # — not the pushed id. Without a baseline (watch not yet bootstrapped) we seed
+        # it and wait for the next push, which then covers everything since now.
+        baseline = get_last_history_id()
+        if baseline is None:
+            set_last_history_id(pushed_history_id)
+            return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
+        try:
+            outcomes = await poll_history(request.app.state.graph, baseline)
+        except Exception:
+            # Stale baseline (history older than ~1 week is purged by Gmail). Reset
+            # forward and ack so Pub/Sub stops retrying an unrecoverable window.
+            set_last_history_id(pushed_history_id)
+            return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
+        set_last_history_id(pushed_history_id)
 
-    return {"accepted": True, "history_id": history_id, "outcomes": outcomes}
+    return {"accepted": True, "history_id": pushed_history_id, "outcomes": outcomes}
 
 
 @app.get("/health")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 
@@ -30,10 +31,29 @@ from src.gmail_client import (
     mark_as_read,
     modify_labels,
     search_messages,
+    watch_mailbox,
 )
 from src.graph import overall_workflow
+from src.gmail_sync import set_last_history_id, setup_gmail_sync
 from src.run_registry import setup_run_registry, upsert_run
 from src.storage import open_graph_storage
+
+
+def ensure_watch(resource=None) -> dict | None:
+    """Register/renew the Gmail push watch and seed the sync baseline.
+
+    Seeding the baseline at watch time is what makes the first push processable:
+    the next notification queries history from this id forward (see api.gmail_webhook).
+    No-op unless Gmail webhooks are enabled.
+    """
+    if not settings.gmail_webhook_enabled:
+        return None
+    resource = resource or gmail_resource()
+    result = watch_mailbox(resource=resource)
+    history_id = str(result.get("historyId") or "")
+    if history_id:
+        set_last_history_id(history_id)
+    return result
 
 
 def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
@@ -230,23 +250,36 @@ async def poll_once(
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
     interval = settings.poll_interval_minutes * 60
+    renew = settings.gmail_watch_renew_hours * 3600
     setup_run_registry()
-    if not settings.polling_fallback_enabled:
-        print("poller: Gmail polling fallback disabled")
-        while True:
-            await asyncio.sleep(interval)
+    setup_gmail_sync()
+    last_watch = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
             checkpointer=storage.checkpointer, store=storage.store
         )
+        if settings.polling_fallback_enabled:
+            mode = "watch+poll" if settings.gmail_webhook_enabled else "poll"
+        elif settings.gmail_webhook_enabled:
+            mode = "watch-only"
+        else:
+            mode = "idle"
         print(
-            "poller: watching inbox every "
-            f"{settings.poll_interval_minutes} min ({storage.backend})"
+            f"poller: {mode} every {settings.poll_interval_minutes} min "
+            f"({storage.backend})"
         )
         while True:
-            outcomes = await poll_once(graph)
-            if outcomes:
-                print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
+            if settings.gmail_webhook_enabled and time.monotonic() - last_watch >= renew:
+                try:
+                    ensure_watch()
+                    last_watch = time.monotonic()
+                    print("poller: gmail watch registered")
+                except Exception as exc:
+                    print(f"poller: gmail watch failed: {exc}")
+            if settings.polling_fallback_enabled:
+                outcomes = await poll_once(graph)
+                if outcomes:
+                    print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
             await asyncio.sleep(interval)
 
 

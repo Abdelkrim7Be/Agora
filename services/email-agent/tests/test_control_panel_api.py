@@ -308,12 +308,15 @@ def test_gmail_webhook_ignored_when_disabled(monkeypatch):
     assert response.json() == {"accepted": False, "reason": "gmail webhooks disabled"}
 
 
-def test_gmail_webhook_processes_history_under_gmail_user(monkeypatch):
+def test_gmail_webhook_processes_history_from_stored_baseline(monkeypatch):
     import src.api as api
 
     captured = {}
+    advanced = {}
 
     async def fake_poll_history(graph, history_id):
+        # Must query from the *previous* baseline, not the just-pushed id, or the
+        # message that fired the push is excluded by Gmail's history semantics.
         captured["history_id"] = history_id
         captured["user_id"] = current_user_id()
         return [("m1", "completed", "run-1")]
@@ -321,6 +324,8 @@ def test_gmail_webhook_processes_history_under_gmail_user(monkeypatch):
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
+    monkeypatch.setattr(api, "get_last_history_id", lambda: "100")
+    monkeypatch.setattr(api, "set_last_history_id", lambda hid: advanced.update(hid=hid))
 
     with TestClient(app) as client:
         client.app.state.graph = object()
@@ -335,7 +340,44 @@ def test_gmail_webhook_processes_history_under_gmail_user(monkeypatch):
         "history_id": "123",
         "outcomes": [["m1", "completed", "run-1"]],
     }
-    assert captured == {"history_id": "123", "user_id": "alice@example.com"}
+    assert captured == {"history_id": "100", "user_id": "alice@example.com"}
+    # Baseline advanced to the pushed id once processing succeeds.
+    assert advanced == {"hid": "123"}
+
+
+def test_gmail_webhook_seeds_baseline_on_first_push(monkeypatch):
+    import src.api as api
+
+    advanced = {}
+    called = {"poll": False}
+
+    async def fake_poll_history(graph, history_id):
+        called["poll"] = True
+        return []
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    monkeypatch.setattr(api, "poll_history", fake_poll_history)
+    monkeypatch.setattr(api, "get_last_history_id", lambda: None)
+    monkeypatch.setattr(api, "set_last_history_id", lambda hid: advanced.update(hid=hid))
+
+    with TestClient(app) as client:
+        client.app.state.graph = object()
+        response = client.post(
+            "/webhooks/gmail?token=secret",
+            json=_pubsub_body({"emailAddress": "alice@example.com", "historyId": "123"}),
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "accepted": True,
+        "history_id": "123",
+        "outcomes": [],
+        "synced": False,
+    }
+    # No baseline yet → seed it and wait for the next push instead of querying blind.
+    assert advanced == {"hid": "123"}
+    assert called["poll"] is False
 
 
 def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):

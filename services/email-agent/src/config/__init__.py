@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -12,6 +13,22 @@ load_dotenv()
 
 def _env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).lower() == "true"
+
+
+def _parse_user_map() -> dict[str, str]:
+    """Map an external identity (e.g. a Gmail address) to the platform user id.
+
+    Lets webhook-scoped runs share the same tenant key the gateway propagates via
+    X-Agora-User. Empty/invalid -> {} (identity mapping, current behavior).
+    """
+    raw = os.getenv("AGENT_USER_MAP", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return {str(k).strip().lower(): str(v) for k, v in data.items()}
+    except (ValueError, AttributeError):
+        return {}
 
 
 class Settings:
@@ -52,7 +69,13 @@ class Settings:
     gmail_webhook_enabled: bool = _env_bool("GMAIL_WEBHOOK_ENABLED", "false")
     gmail_webhook_topic: str = os.getenv("GMAIL_WEBHOOK_TOPIC", "")
     gmail_webhook_secret: str = os.getenv("GMAIL_WEBHOOK_SECRET", "")
+    # Per-user last-processed Gmail historyId baseline for incremental push sync.
+    gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
+    # Gmail watches expire after 7 days; re-register well inside that window.
+    gmail_watch_renew_hours: int = int(os.getenv("GMAIL_WATCH_RENEW_HOURS", "24"))
     polling_fallback_enabled: bool = _env_bool("GMAIL_POLLING_FALLBACK_ENABLED", "true")
+    # External-identity -> platform user id (aligns webhook tenant key with the gateway).
+    user_map: dict = _parse_user_map()
 
 
 settings = Settings()
