@@ -48,6 +48,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")

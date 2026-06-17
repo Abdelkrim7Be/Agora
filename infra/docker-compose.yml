@@ -15,6 +15,18 @@ services:
     networks:
       - agora
 
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - agora
+
   security:
     build:
       context: ../services/security
@@ -24,12 +36,18 @@ services:
       SECURITY_API_HOST: 0.0.0.0
       SECURITY_API_PORT: 8001
       SECURITY_POLICY_PATH: policy.yaml
+      REDIS_URL: redis://redis:6379/0
+      SECURITY_RATELIMIT_BACKEND: redis
+      TENANT_MODE: ${TENANT_MODE:-single}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 20s
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - agora
 
@@ -40,6 +58,17 @@ services:
     env_file:
       - ../services/email-agent/.env
     environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_STORAGE_BACKEND: postgres
+      AGENT_RUN_REGISTRY_BACKEND: postgres
+      TENANT_MODE: ${TENANT_MODE:-single}
+      AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-default}
+      GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      GMAIL_WEBHOOK_ENABLED: ${GMAIL_WEBHOOK_ENABLED:-false}
+      GMAIL_WEBHOOK_TOPIC: ${GMAIL_WEBHOOK_TOPIC:-}
+      GMAIL_WEBHOOK_SECRET: ${GMAIL_WEBHOOK_SECRET:-}
+      GMAIL_POLLING_FALLBACK_ENABLED: ${GMAIL_POLLING_FALLBACK_ENABLED:-true}
+      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
       AGENT_DRY_RUN: "true"          # explicit: no real sends from the stack until flipped
@@ -55,6 +84,8 @@ services:
       retries: 10
       start_period: 20s
     depends_on:
+      postgres:
+        condition: service_healthy
       security:
         condition: service_healthy
     networks:
@@ -101,6 +132,7 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   agent_data:
 
 networks:

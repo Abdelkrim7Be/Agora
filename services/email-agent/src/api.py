@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import contextlib
+import json
 import uuid
 
 import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.store.sqlite.aio import AsyncSqliteStore
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -15,31 +17,72 @@ from src.config import settings
 from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src.graph import overall_workflow, reload_config
+from src.poller import poll_history
 from src.memory import namespace
-from src.run_registry import list_runs, upsert_run
+from src.run_registry import get_run as get_run_record
+from src.run_registry import list_runs, setup_run_registry, upsert_run
+from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
+from src.tenant import current_user_id, resolve_user_id, user_context
 from src.security_client import fetch_policy
+from src.storage import open_graph_storage
+
+
+async def _watch_renewal_loop() -> None:
+    """Register and periodically renew the Gmail push watch from the API process.
+
+    Gmail watches expire after 7 days, so the mailbox must be re-registered well
+    inside that window for push delivery to keep working. Runs only when webhooks
+    are enabled; ensure_watch also seeds the per-user historyId baseline.
+    """
+    from src.poller import ensure_watch
+
+    setup_gmail_sync()
+    interval = settings.gmail_watch_renew_hours * 3600
+    while True:
+        try:
+            await asyncio.to_thread(ensure_watch)
+        except Exception as exc:  # network/credential issues must not kill the API
+            print(f"api: gmail watch registration failed: {exc}")
+        await asyncio.sleep(interval)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Separate files avoid SQLite locking between saver and store; shared with the
-    # poller (src/config Settings) so either process can resume the other's runs.
-    async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_db) as checkpointer:
-        async with AsyncSqliteStore.from_conn_string(settings.store_db) as mem_store:
-            # AsyncSqliteStore.aget/aput do NOT auto-run setup — call explicitly.
-            await checkpointer.setup()
-            await mem_store.setup()
-            # The graph's nodes are sync, so LangGraph runs them in a threadpool where
-            # sync store.get/put works. A future ASYNC node must use aget/aput instead —
-            # a sync store call on the event loop raises InvalidStateError.
-            app.state.graph = overall_workflow.compile(
-                checkpointer=checkpointer, store=mem_store
-            )
-            app.state.store = mem_store
+    setup_run_registry()
+    setup_gmail_sync()
+    async with open_graph_storage() as storage:
+        # The graph's nodes are sync, so LangGraph runs them in a threadpool where
+        # sync store.get/put works. A future ASYNC node must use aget/aput instead.
+        app.state.graph = overall_workflow.compile(
+            checkpointer=storage.checkpointer, store=storage.store
+        )
+        app.state.store = storage.store
+        app.state.storage_backend = storage.backend
+        watch_task = (
+            asyncio.create_task(_watch_renewal_loop())
+            if settings.gmail_webhook_enabled
+            else None
+        )
+        try:
             yield
+        finally:
+            if watch_task is not None:
+                watch_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watch_task
 
 
 app = FastAPI(title="email-agent", version="0.1.0", lifespan=lifespan)
+
+
+def _request_user_id(request: Request) -> str | None:
+    return request.headers.get("x-agora-user")
+
+
+@app.middleware("http")
+async def tenant_context_middleware(request: Request, call_next):
+    with user_context(_request_user_id(request)):
+        return await call_next(request)
 
 
 class EmailInput(BaseModel):
@@ -58,10 +101,9 @@ class RespondInput(BaseModel):
     feedback: str
 
 
-
-
-
-
+class GmailWebhookInput(BaseModel):
+    message: dict = {}
+    subscription: str | None = None
 
 
 class RulesInput(BaseModel):
@@ -111,10 +153,13 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
         email_input=email_input,
         classification=run.classification,
         pending_action=run.pending_action,
+        user_id=current_user_id(),
     )
 
 
 async def _require_run(graph, run_id: str) -> dict:
+    if get_run_record(run_id, user_id=current_user_id()) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
     config = _thread_config(run_id)
     state = await graph.aget_state(config)
     if not state.values:
@@ -157,9 +202,63 @@ def _run_detail(values: dict, run_id: str) -> dict:
     }
 
 
+def _decode_pubsub_data(message: dict) -> dict:
+    data = message.get("data")
+    if not data:
+        return {}
+    padded = data + "=" * (-len(data) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+
+
+def _require_webhook_secret(request: Request) -> None:
+    secret = settings.gmail_webhook_secret
+    if not secret:
+        raise HTTPException(status_code=503, detail="GMAIL_WEBHOOK_SECRET is required when Gmail webhooks are enabled")
+    provided = request.query_params.get("token") or request.headers.get("x-gmail-webhook-token")
+    if provided != secret:
+        raise HTTPException(status_code=403, detail="Invalid Gmail webhook token")
+
+
+@app.post("/webhooks/gmail", status_code=202)
+async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
+    if not settings.gmail_webhook_enabled:
+        return {"accepted": False, "reason": "gmail webhooks disabled"}
+    _require_webhook_secret(request)
+
+    try:
+        payload = _decode_pubsub_data(body.message)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid Pub/Sub message data") from exc
+
+    pushed_history_id = str(payload.get("historyId") or "")
+    if not pushed_history_id:
+        raise HTTPException(status_code=400, detail="Missing Gmail historyId")
+
+    email_address = payload.get("emailAddress")
+    with user_context(resolve_user_id(email_address)):
+        # Gmail's history.list returns changes *after* startHistoryId, so the message
+        # that fired this push is found by querying from our previously stored baseline
+        # — not the pushed id. Without a baseline (watch not yet bootstrapped) we seed
+        # it and wait for the next push, which then covers everything since now.
+        baseline = get_last_history_id()
+        if baseline is None:
+            set_last_history_id(pushed_history_id)
+            return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
+        try:
+            outcomes = await poll_history(request.app.state.graph, baseline)
+        except Exception:
+            # Stale baseline (history older than ~1 week is purged by Gmail). Reset
+            # forward and ack so Pub/Sub stops retrying an unrecoverable window.
+            set_last_history_id(pushed_history_id)
+            return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
+        set_last_history_id(pushed_history_id)
+
+    return {"accepted": True, "history_id": pushed_history_id, "outcomes": outcomes}
+
+
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "storage_backend": settings.storage_backend}
 
 
 @app.get("/rules")
@@ -246,7 +345,7 @@ async def update_preferences(request: Request, body: MemoryInput) -> dict:
 
 @app.get("/runs")
 async def runs(status: str | None = Query(default=None)) -> dict:
-    return {"runs": list_runs(status=status)}
+    return {"runs": list_runs(status=status, user_id=current_user_id())}
 
 
 @app.get("/run/{run_id}", response_model=RunResponse)

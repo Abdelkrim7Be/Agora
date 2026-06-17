@@ -4,6 +4,7 @@ import pytest
 from langgraph.store.memory import InMemoryStore
 
 from src.memory import UserPreferences, get_memory, namespace, update_memory
+from src.tenant import user_context
 from tests.conftest import _FakeMemoryLLM
 
 
@@ -75,6 +76,15 @@ def test_namespace_structure():
 
     ns2 = namespace("response_preferences")
     assert ns2 == ("email_agent", "default", "response_preferences")
+
+
+def test_namespace_uses_current_user_context():
+    with user_context("alice@example.com"):
+        assert namespace("triage_preferences") == (
+            "email_agent",
+            "alice@example.com",
+            "triage_preferences",
+        )
 
 
 # ---------------------------------------------------------------------------

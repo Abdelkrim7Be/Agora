@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from src.automation import (
     RulesConfig,
@@ -21,6 +20,7 @@ from src.security_client import sanitize_email
 from src.gmail_client import (
     download_attachment,
     extract_pdf_text,
+    fetch_history_message_refs,
     fetch_thread,
     fetch_unread,
     get_message,
@@ -31,9 +31,29 @@ from src.gmail_client import (
     mark_as_read,
     modify_labels,
     search_messages,
+    watch_mailbox,
 )
 from src.graph import overall_workflow
-from src.run_registry import upsert_run
+from src.gmail_sync import set_last_history_id, setup_gmail_sync
+from src.run_registry import setup_run_registry, upsert_run
+from src.storage import open_graph_storage
+
+
+def ensure_watch(resource=None) -> dict | None:
+    """Register/renew the Gmail push watch and seed the sync baseline.
+
+    Seeding the baseline at watch time is what makes the first push processable:
+    the next notification queries history from this id forward (see api.gmail_webhook).
+    No-op unless Gmail webhooks are enabled.
+    """
+    if not settings.gmail_webhook_enabled:
+        return None
+    resource = resource or gmail_resource()
+    result = watch_mailbox(resource=resource)
+    history_id = str(result.get("historyId") or "")
+    if history_id:
+        set_last_history_id(history_id)
+    return result
 
 
 def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
@@ -85,7 +105,113 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
             {"configurable": {"thread_id": run_id}},
         )
         status = "pending_approval" if result.get("__interrupt__") else "follow_up_proposed"
+        upsert_run(
+            run_id,
+            status,
+            email_input=email_input,
+            classification=result.get("classification_decision"),
+            pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+        )
         outcomes.append((msg_id, status, run_id))
+    return outcomes
+
+
+async def process_message(
+    graph,
+    msg_id: str,
+    resource,
+    rules_config: RulesConfig,
+) -> tuple:
+    message = get_message(msg_id, resource=resource)
+    labels = message.get("labelIds")
+    if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
+        return (msg_id, "skipped", "")
+
+    thread = fetch_thread(message["threadId"], resource=resource)
+    email_input = gmail_to_email_input(message, thread_messages=thread)
+
+    if settings.extract_attachments:
+        pdf_blocks = []
+        for att in email_input.get("attachments", []):
+            if att["mime_type"] == "application/pdf" and att.get("attachment_id"):
+                try:
+                    raw = download_attachment(msg_id, att["attachment_id"], resource=resource)
+                    text = extract_pdf_text(raw, settings.attachment_max_chars)
+                    if text:
+                        pdf_blocks.append(f"--- {att['filename']} ---\n{text}")
+                except Exception:
+                    pass
+        if pdf_blocks:
+            extra = "\n\n".join(pdf_blocks)
+            email_input = {
+                **email_input,
+                "email_thread": email_input["email_thread"] + "\n\nAttachment contents:\n" + extra,
+            }
+
+    security_flagged = False
+    if settings.security_enabled:
+        verdict = await sanitize_email(
+            sender=email_input.get("author", ""),
+            subject=email_input.get("subject", ""),
+            content=email_input["email_thread"],
+        )
+        security_flagged = bool(
+            verdict["injection_detected"] or verdict["classifier_unavailable"]
+        )
+        email_input = {
+            **email_input,
+            "email_thread": verdict["cleaned_text"],
+            "security": {
+                "injection_detected": verdict["injection_detected"],
+                "classification": verdict["classification"],
+                "classifier_unavailable": verdict["classifier_unavailable"],
+            },
+        }
+
+    rule_plan = build_rule_plan(email_input, rules_config)
+    if rule_plan:
+        email_input = {**email_input, "automation": rule_plan}
+
+    run_id = str(uuid.uuid4())
+    cfg = {"configurable": {"thread_id": run_id}}
+
+    result = await graph.ainvoke({"email_input": email_input}, cfg)
+
+    if result.get("__interrupt__"):
+        outcome_status = "pending_approval"
+    elif security_flagged:
+        # Leave UNREAD so the threat stays visible; forced-notify is not delivered anywhere.
+        outcome_status = "security_hold"
+    else:
+        mark_as_read(msg_id, resource=resource)
+        outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
+
+    record_digest_item(rules_config, outcome_status, email_input, run_id)
+    upsert_run(
+        run_id,
+        outcome_status,
+        email_input=email_input,
+        classification=result.get("classification_decision"),
+        pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+    )
+    return (msg_id, outcome_status, run_id)
+
+
+async def poll_history(
+    graph,
+    start_history_id: str,
+    resource=None,
+    rules_config: RulesConfig | None = None,
+) -> list[tuple]:
+    """Process Gmail messages referenced by push-notification history events."""
+    resource = resource or gmail_resource()
+    rules_config = rules_config or load_rules()
+    outcomes: list[tuple] = []
+    for ref in fetch_history_message_refs(start_history_id, resource=resource):
+        outcome = await process_message(graph, ref["id"], resource, rules_config)
+        if outcome[1] != "skipped":
+            outcomes.append(outcome)
+    maybe_emit_daily_digest(rules_config)
     return outcomes
 
 
@@ -114,76 +240,7 @@ async def poll_once(
             outcomes.append((msg_id, "snoozed_resurfaced", label_name))
 
     for ref in fetch_unread(max_results, resource=resource):
-        msg_id = ref["id"]
-        message = get_message(msg_id, resource=resource)
-        thread = fetch_thread(message["threadId"], resource=resource)
-        email_input = gmail_to_email_input(message, thread_messages=thread)
-
-        if settings.extract_attachments:
-            pdf_blocks = []
-            for att in email_input.get("attachments", []):
-                if att["mime_type"] == "application/pdf" and att.get("attachment_id"):
-                    try:
-                        raw = download_attachment(msg_id, att["attachment_id"], resource=resource)
-                        text = extract_pdf_text(raw, settings.attachment_max_chars)
-                        if text:
-                            pdf_blocks.append(f"--- {att['filename']} ---\n{text}")
-                    except Exception:
-                        pass
-            if pdf_blocks:
-                extra = "\n\n".join(pdf_blocks)
-                email_input = {
-                    **email_input,
-                    "email_thread": email_input["email_thread"] + "\n\nAttachment contents:\n" + extra,
-                }
-
-        security_flagged = False
-        if settings.security_enabled:
-            verdict = await sanitize_email(
-                sender=email_input.get("author", ""),
-                subject=email_input.get("subject", ""),
-                content=email_input["email_thread"],
-            )
-            security_flagged = bool(
-                verdict["injection_detected"] or verdict["classifier_unavailable"]
-            )
-            email_input = {
-                **email_input,
-                "email_thread": verdict["cleaned_text"],
-                "security": {
-                    "injection_detected": verdict["injection_detected"],
-                    "classification": verdict["classification"],
-                    "classifier_unavailable": verdict["classifier_unavailable"],
-                },
-            }
-
-        rule_plan = build_rule_plan(email_input, rules_config)
-        if rule_plan:
-            email_input = {**email_input, "automation": rule_plan}
-
-        run_id = str(uuid.uuid4())
-        cfg = {"configurable": {"thread_id": run_id}}
-
-        result = await graph.ainvoke({"email_input": email_input}, cfg)
-
-        if result.get("__interrupt__"):
-            outcome_status = "pending_approval"
-        elif security_flagged:
-            # Leave UNREAD so the threat stays visible; forced-notify is not delivered anywhere.
-            outcome_status = "security_hold"
-        else:
-            mark_as_read(msg_id, resource=resource)
-            outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
-
-        record_digest_item(rules_config, outcome_status, email_input, run_id)
-        upsert_run(
-            run_id,
-            outcome_status,
-            email_input=email_input,
-            classification=result.get("classification_decision"),
-            pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
-        )
-        outcomes.append((msg_id, outcome_status, run_id))
+        outcomes.append(await process_message(graph, ref["id"], resource, rules_config))
 
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
     maybe_emit_daily_digest(rules_config)
@@ -191,19 +248,39 @@ async def poll_once(
 
 
 async def run_forever() -> None:
-    """Poll the inbox every poll_interval_minutes against the durable sqlite graph."""
+    """Poll the inbox every poll_interval_minutes against the durable graph."""
     interval = settings.poll_interval_minutes * 60
-    async with AsyncSqliteSaver.from_conn_string(settings.checkpoints_db) as checkpointer:
-        async with AsyncSqliteStore.from_conn_string(settings.store_db) as mem_store:
-            await checkpointer.setup()
-            await mem_store.setup()
-            graph = overall_workflow.compile(checkpointer=checkpointer, store=mem_store)
-            print(f"poller: watching inbox every {settings.poll_interval_minutes} min")
-            while True:
+    renew = settings.gmail_watch_renew_hours * 3600
+    setup_run_registry()
+    setup_gmail_sync()
+    last_watch = 0.0
+    async with open_graph_storage() as storage:
+        graph = overall_workflow.compile(
+            checkpointer=storage.checkpointer, store=storage.store
+        )
+        if settings.polling_fallback_enabled:
+            mode = "watch+poll" if settings.gmail_webhook_enabled else "poll"
+        elif settings.gmail_webhook_enabled:
+            mode = "watch-only"
+        else:
+            mode = "idle"
+        print(
+            f"poller: {mode} every {settings.poll_interval_minutes} min "
+            f"({storage.backend})"
+        )
+        while True:
+            if settings.gmail_webhook_enabled and time.monotonic() - last_watch >= renew:
+                try:
+                    ensure_watch()
+                    last_watch = time.monotonic()
+                    print("poller: gmail watch registered")
+                except Exception as exc:
+                    print(f"poller: gmail watch failed: {exc}")
+            if settings.polling_fallback_enabled:
                 outcomes = await poll_once(graph)
                 if outcomes:
                     print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
-                await asyncio.sleep(interval)
+            await asyncio.sleep(interval)
 
 
 def main() -> None:

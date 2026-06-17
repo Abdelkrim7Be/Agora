@@ -10,13 +10,14 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from src.config import SERVICE_ROOT, settings
+from src.token_store import prepared_token_file
 from src.state import EmailInput
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
 GMAIL_SCOPES = ["https://mail.google.com/"]
 
 
-def gmail_resource():
+def gmail_resource(user_id: str | None = None):
     """Build an authenticated Gmail API resource (googleapiclient discovery object)."""
     from langchain_google_community.gmail.utils import (
         build_gmail_service,
@@ -24,13 +25,13 @@ def gmail_resource():
     )
 
     creds = str(SERVICE_ROOT / settings.gmail_credentials_path)
-    token = str(SERVICE_ROOT / settings.gmail_token_path)
-    credentials = get_google_credentials(
-        token_file=token,
-        client_secrets_file=creds,
-        scopes=GMAIL_SCOPES,
-    )
-    return build_gmail_service(credentials=credentials)
+    with prepared_token_file(user_id) as token:
+        credentials = get_google_credentials(
+            token_file=token,
+            client_secrets_file=creds,
+            scopes=GMAIL_SCOPES,
+        )
+        return build_gmail_service(credentials=credentials)
 
 
 def fetch_unread(max_results: int, resource=None) -> list[dict]:
@@ -67,6 +68,55 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
         .execute()
     )
     return results.get("messages", [])
+
+
+def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
+    """Register a Gmail push notification watch for inbox changes."""
+    topic = topic_name or settings.gmail_webhook_topic
+    if not topic:
+        raise RuntimeError("GMAIL_WEBHOOK_TOPIC is required to register a Gmail watch")
+    resource = resource or gmail_resource()
+    return (
+        resource.users()
+        .watch(
+            userId="me",
+            body={
+                "topicName": topic,
+                "labelIds": ["INBOX"],
+                "labelFilterBehavior": "include",
+            },
+        )
+        .execute()
+    )
+
+
+def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dict]:
+    """Return unique message refs mentioned by Gmail history since start_history_id."""
+    resource = resource or gmail_resource()
+    refs: list[dict] = []
+    seen: set[str] = set()
+    page_token = None
+    while True:
+        kwargs = {
+            "userId": "me",
+            "startHistoryId": start_history_id,
+            "historyTypes": ["messageAdded", "labelAdded"],
+            "labelId": "INBOX",
+        }
+        if page_token:
+            kwargs["pageToken"] = page_token
+        results = resource.users().history().list(**kwargs).execute()
+        for entry in results.get("history", []):
+            events = entry.get("messagesAdded", []) + entry.get("labelsAdded", [])
+            for event in events:
+                message = event.get("message", {})
+                msg_id = message.get("id")
+                if msg_id and msg_id not in seen:
+                    seen.add(msg_id)
+                    refs.append({"id": msg_id, "threadId": message.get("threadId")})
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            return refs
 
 
 def get_message(msg_id: str, resource=None) -> dict:

@@ -390,3 +390,57 @@ async def test_poll_once_proposes_follow_up_for_old_labeled_thread(monkeypatch, 
         "subject": "Re: Project update",
         "content": "Checking in on this.",
     }
+
+
+async def test_poll_history_processes_history_refs(monkeypatch, fake_llms):
+    messages = {
+        "m_hist": _raw_message("m_hist", "History", "hello"),
+        "m_read": {**_raw_message("m_read", "Read", "already done"), "labelIds": ["INBOX"]},
+    }
+    monkeypatch.setattr(
+        poller,
+        "fetch_history_message_refs",
+        lambda start_history_id, resource=None: [{"id": "m_hist"}, {"id": "m_read"}],
+    )
+    monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: messages[msg_id])
+    monkeypatch.setattr(
+        poller,
+        "fetch_thread",
+        lambda thread_id, resource=None: [m for m in messages.values() if m["threadId"] == thread_id],
+    )
+    marked = []
+    monkeypatch.setattr(poller, "mark_as_read", lambda msg_id, resource=None: marked.append(msg_id))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_history(_graph(), "history-1", resource=object())
+
+    assert len(outcomes) == 1
+    assert outcomes[0][0] == "m_hist"
+    assert outcomes[0][1] == "completed"
+    assert marked == ["m_hist"]
+
+
+def test_ensure_watch_seeds_baseline(monkeypatch):
+    monkeypatch.setattr(poller.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(poller, "watch_mailbox", lambda resource=None: {"historyId": "555"})
+    seeded = {}
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: seeded.update(hid=hid))
+
+    result = poller.ensure_watch(resource=object())
+
+    assert result == {"historyId": "555"}
+    assert seeded == {"hid": "555"}
+
+
+def test_ensure_watch_noop_when_webhooks_disabled(monkeypatch):
+    monkeypatch.setattr(poller.settings, "gmail_webhook_enabled", False)
+    called = {"watch": False}
+
+    def _boom(resource=None):
+        called["watch"] = True
+        raise AssertionError("watch_mailbox should not be called")
+
+    monkeypatch.setattr(poller, "watch_mailbox", _boom)
+
+    assert poller.ensure_watch() is None
+    assert called["watch"] is False

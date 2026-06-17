@@ -1,6 +1,6 @@
 # Agora — local stack
 
-Four services on a shared network: **postgres** (data), **security** (internal policy/sanitize service), **email-agent** (internal), and **gateway** (public ingress on port 8080). The email-agent and security ports are never published to the host — all external traffic goes through the gateway.
+Five services on a shared network: **postgres** (durable agent/gateway data), **redis** (shared security rate limits), **security** (internal policy/sanitize service), **email-agent** (internal), and **gateway** (public ingress on port 8080). The email-agent and security ports are never published to the host — all external traffic goes through the gateway.
 
 ## Setup
 
@@ -17,7 +17,7 @@ Required values:
 - `GATEWAY_VIEWER_USERNAME` / `GATEWAY_VIEWER_PASSWORD` — read-only credentials (optional; leave blank to skip seeding)
 - `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` — database config
 
-The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). At minimum it needs `GROQ_API_KEY` for its agent LLM calls. Compose enables `AGENT_SECURITY_ENABLED=true` and points the agent at `http://security:8001`.
+The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). At minimum it needs `GROQ_API_KEY` for its agent LLM calls. Compose enables `AGENT_SECURITY_ENABLED=true`, points the agent at `http://security:8001`, stores agent graph/run state in Postgres, and stores security rate limits in Redis.
 
 2. Start the stack:
 
@@ -75,6 +75,9 @@ curl http://localhost:8080/audit \
 - The email-agent is reachable only from within the Docker network (`http://email-agent:8000`). Its port is not exposed to the host.
 - The security service is reachable only from within the Docker network (`http://security:8001`). Its port is not exposed to the host.
 - Compose enables inbound sanitization and tool-action authorization by setting `AGENT_SECURITY_ENABLED=true` for the email-agent.
-- SQLite state files (`checkpoints.db`, `store.db`) are written to `/app/data`, backed by the named `agent_data` volume, so paused runs and learned memory survive container restarts.
+- Phase 4 compose runs the email-agent with `AGENT_STORAGE_BACKEND=postgres` and `AGENT_RUN_REGISTRY_BACKEND=postgres`, so checkpoints, learned memory, and run listings are shared through Postgres for multi-process deployments.
+- Redis backs the security service rate limiter with `SECURITY_RATELIMIT_BACKEND=redis`, so send caps are shared across security service processes.
+- The `agent_data` volume is still used for per-user Gmail OAuth token files. Set `AGENT_TOKEN_ENCRYPTION_KEY` to store those tokens as Fernet-encrypted blobs at rest.
+- Gmail push notifications can be enabled with `GMAIL_WEBHOOK_ENABLED=true`, `GMAIL_WEBHOOK_TOPIC`, and `GMAIL_WEBHOOK_SECRET`; the gateway route is `POST /api/agent/webhooks/gmail?token=<secret>`. The poller registers (and renews, every `GMAIL_WATCH_RENEW_HOURS`) the Gmail watch and records a per-user historyId baseline; each push is processed incrementally from that baseline, then advances it. Keep `GMAIL_POLLING_FALLBACK_ENABLED=true` until the webhook delivery path is verified.
 - The gateway waits for the agent's `/health` to pass (not just for the container to start) before it comes up.
 - Set `AGENT_DRY_RUN=false` in `services/email-agent/.env` to enable real Gmail sends (requires OAuth credentials).

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
+import json
+
 from fastapi.testclient import TestClient
 
-from src.api import app, _run_detail
-from src.run_registry import list_runs, upsert_run
+from src.api import app, _require_run, _run_detail
+from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
+from src.tenant import current_user_id, normalize_user_id
 
 
 def test_run_registry_filters_by_status(tmp_path):
@@ -24,17 +28,53 @@ def test_run_registry_filters_by_status(tmp_path):
     assert pending[0]["pending_action"][0]["action_request"]["action"] == "write_email"
 
 
+def test_run_registry_filters_by_user(tmp_path):
+    path = tmp_path / "runs.json"
+    upsert_run("run-1", "completed", path=path, user_id="alice@example.com")
+    upsert_run("run-2", "completed", path=path, user_id="bob@example.com")
+
+    runs = list_runs(path=path, user_id="alice@example.com")
+
+    assert [run["run_id"] for run in runs] == ["run-1"]
+    assert runs[0]["user_id"] == "alice@example.com"
+
+
+def test_selected_run_registry_backend_defaults_to_json(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "run_registry_backend", "json")
+
+    assert selected_run_registry_backend() == "json"
+
+
+def test_selected_run_registry_backend_requires_database_url(monkeypatch):
+    from src.config import settings
+    import pytest
+
+    monkeypatch.setattr(settings, "run_registry_backend", "postgres")
+    monkeypatch.setattr(settings, "database_url", "")
+
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required"):
+        selected_run_registry_backend()
+
+
 def test_runs_endpoint_returns_registry(monkeypatch):
-    monkeypatch.setattr(
-        "src.api.list_runs",
-        lambda status=None: [{"run_id": "run-1", "status": status}],
-    )
+    captured = {}
+
+    def fake_list_runs(status=None, user_id=None):
+        captured["user_id"] = user_id
+        return [{"run_id": "run-1", "status": status, "user_id": user_id}]
+
+    monkeypatch.setattr("src.api.list_runs", fake_list_runs)
 
     with TestClient(app) as client:
-        response = client.get("/runs?status=pending_approval")
+        response = client.get("/runs?status=pending_approval", headers={"X-Agora-User": "alice@example.com"})
 
     assert response.status_code == 200
-    assert response.json() == {"runs": [{"run_id": "run-1", "status": "pending_approval"}]}
+    assert captured["user_id"] == "alice@example.com"
+    assert response.json() == {
+        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": "alice@example.com"}]
+    }
 
 
 def test_run_detail_shapes_timeline_and_security():
@@ -94,6 +134,37 @@ def test_memory_put_then_get_roundtrips(monkeypatch):
             "triage_preferences": "triage",
             "response_preferences": "response",
         }
+
+
+def test_memory_is_scoped_by_forwarded_user_header(monkeypatch):
+    with TestClient(app) as client:
+        client.app.state.store = _FakeAsyncStore()
+        alice = {"X-Agora-User": "alice@example.com"}
+        bob = {"X-Agora-User": "bob@example.com"}
+
+        assert client.put(
+            "/memory",
+            headers=alice,
+            json={"triage_preferences": "alice triage", "response_preferences": "alice response"},
+        ).status_code == 200
+        assert client.put(
+            "/memory",
+            headers=bob,
+            json={"triage_preferences": "bob triage", "response_preferences": "bob response"},
+        ).status_code == 200
+
+        assert client.get("/memory", headers=alice).json() == {
+            "triage_preferences": "alice triage",
+            "response_preferences": "alice response",
+        }
+        assert client.get("/memory", headers=bob).json() == {
+            "triage_preferences": "bob triage",
+            "response_preferences": "bob response",
+        }
+
+        stored_namespaces = {ns for ns, _ in client.app.state.store.values}
+        assert ("email_agent", normalize_user_id("alice@example.com"), "triage_preferences") in stored_namespaces
+        assert ("email_agent", normalize_user_id("bob@example.com"), "triage_preferences") in stored_namespaces
 
 
 def test_policy_endpoint_proxies_security_service(monkeypatch):
@@ -190,3 +261,132 @@ digest:
     assert body["parsed"]["enabled"] is True
     assert body["parsed"]["rules"][0]["name"] == "test rule"
     assert "test rule" in rules_path.read_text()
+
+
+async def test_require_run_rejects_other_users_run(monkeypatch):
+    import pytest
+
+    class Graph:
+        async def aget_state(self, config):
+            raise AssertionError("graph state should not be read for another user")
+
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: None)
+
+    with pytest.raises(Exception) as exc:
+        await _require_run(Graph(), "run-1")
+
+    assert getattr(exc.value, "status_code", None) == 404
+
+
+async def test_require_run_allows_owned_run(monkeypatch):
+    class State:
+        values = {"email_input": {"subject": "hello"}}
+
+    class Graph:
+        async def aget_state(self, config):
+            return State()
+
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: {"run_id": run_id})
+
+    assert await _require_run(Graph(), "run-1") == {"configurable": {"thread_id": "run-1"}}
+
+
+def _pubsub_body(payload: dict) -> dict:
+    data = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
+    return {"message": {"data": data, "messageId": "msg-1"}}
+
+
+def test_gmail_webhook_ignored_when_disabled(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", False)
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/gmail", json=_pubsub_body({"historyId": "123"}))
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": False, "reason": "gmail webhooks disabled"}
+
+
+def test_gmail_webhook_processes_history_from_stored_baseline(monkeypatch):
+    import src.api as api
+
+    captured = {}
+    advanced = {}
+
+    async def fake_poll_history(graph, history_id):
+        # Must query from the *previous* baseline, not the just-pushed id, or the
+        # message that fired the push is excluded by Gmail's history semantics.
+        captured["history_id"] = history_id
+        captured["user_id"] = current_user_id()
+        return [("m1", "completed", "run-1")]
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    monkeypatch.setattr(api, "poll_history", fake_poll_history)
+    monkeypatch.setattr(api, "get_last_history_id", lambda: "100")
+    monkeypatch.setattr(api, "set_last_history_id", lambda hid: advanced.update(hid=hid))
+
+    with TestClient(app) as client:
+        client.app.state.graph = object()
+        response = client.post(
+            "/webhooks/gmail?token=secret",
+            json=_pubsub_body({"emailAddress": "alice@example.com", "historyId": "123"}),
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "accepted": True,
+        "history_id": "123",
+        "outcomes": [["m1", "completed", "run-1"]],
+    }
+    assert captured == {"history_id": "100", "user_id": "alice@example.com"}
+    # Baseline advanced to the pushed id once processing succeeds.
+    assert advanced == {"hid": "123"}
+
+
+def test_gmail_webhook_seeds_baseline_on_first_push(monkeypatch):
+    import src.api as api
+
+    advanced = {}
+    called = {"poll": False}
+
+    async def fake_poll_history(graph, history_id):
+        called["poll"] = True
+        return []
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    monkeypatch.setattr(api, "poll_history", fake_poll_history)
+    monkeypatch.setattr(api, "get_last_history_id", lambda: None)
+    monkeypatch.setattr(api, "set_last_history_id", lambda hid: advanced.update(hid=hid))
+
+    with TestClient(app) as client:
+        client.app.state.graph = object()
+        response = client.post(
+            "/webhooks/gmail?token=secret",
+            json=_pubsub_body({"emailAddress": "alice@example.com", "historyId": "123"}),
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "accepted": True,
+        "history_id": "123",
+        "outcomes": [],
+        "synced": False,
+    }
+    # No baseline yet → seed it and wait for the next push instead of querying blind.
+    assert advanced == {"hid": "123"}
+    assert called["poll"] is False
+
+
+def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/gmail?token=wrong", json=_pubsub_body({"historyId": "123"}))
+
+    assert response.status_code == 403
