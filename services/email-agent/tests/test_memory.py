@@ -278,3 +278,27 @@ def test_memory_helpers_round_trip():
     assert preferences_text({"preferences": "hello"}) == "hello"
     assert preferences_text("legacy raw string") == "legacy raw string"  # sqlite back-compat
     assert preferences_text(None) == ""
+
+
+def test_update_memory_skips_llm_failure_without_overwriting():
+    class Store:
+        def __init__(self):
+            self.value = {"preferences": "existing"}
+            self.put_calls = []
+
+        def get(self, ns, key):
+            return type("Item", (), {"value": self.value})()
+
+        def put(self, ns, key, value):
+            self.put_calls.append((ns, key, value))
+
+    class FailingLlm:
+        def invoke(self, messages):
+            raise RuntimeError("network unavailable")
+
+    store = Store()
+    ns = ("email_agent", "owner", "response_preferences")
+
+    update_memory(store, ns, [{"role": "user", "content": "feedback"}], FailingLlm())
+
+    assert store.put_calls == []

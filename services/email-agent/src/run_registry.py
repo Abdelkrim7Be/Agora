@@ -74,7 +74,9 @@ def _json_upsert(record: dict, path: str | Path | None = None) -> dict:
     runs = data.setdefault("runs", [])
     existing = next((r for r in runs if r.get("run_id") == record["run_id"]), None)
     if existing:
-        existing.update({k: v for k, v in record.items() if v is not None})
+        for key, value in record.items():
+            if value is not None or key in {"status", "pending_action", "updated_at", "user_id"}:
+                existing[key] = value
         saved = existing
     else:
         runs.append(record)
@@ -176,7 +178,7 @@ def _postgres_upsert(record: dict) -> dict:
                     user_id = EXCLUDED.user_id,
                     status = EXCLUDED.status,
                     classification = COALESCE(EXCLUDED.classification, agent_runs.classification),
-                    pending_action = COALESCE(EXCLUDED.pending_action, agent_runs.pending_action),
+                    pending_action = EXCLUDED.pending_action,
                     subject = COALESCE(EXCLUDED.subject, agent_runs.subject),
                     author = COALESCE(EXCLUDED.author, agent_runs.author),
                     email_id = COALESCE(EXCLUDED.email_id, agent_runs.email_id),
@@ -287,3 +289,26 @@ def get_run(
     if selected_run_registry_backend(path) == "postgres":
         return _postgres_get(run_id=run_id, user_id=user_id)
     return _json_get(run_id=run_id, path=path, user_id=user_id)
+
+
+# Statuses where the email is still awaiting a human and is left UNREAD on purpose.
+ACTIVE_RUN_STATUSES = ("pending_approval", "security_hold")
+
+
+def find_run_by_email(
+    email_id: str,
+    path: str | Path | None = None,
+    user_id: str | None = None,
+) -> dict | None:
+    """Return the most recent run for a Gmail message id, or None.
+
+    Lets the poller avoid reprocessing an email that already has a run: a pending
+    or held run must not spawn duplicates every cycle, and a resolved run means the
+    message was already handled. list_runs is newest-first, so the first match wins.
+    """
+    if not email_id:
+        return None
+    for record in list_runs(path=path, user_id=user_id):
+        if record.get("email_id") == email_id:
+            return record
+    return None

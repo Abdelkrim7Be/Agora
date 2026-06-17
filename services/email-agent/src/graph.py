@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -47,6 +48,84 @@ llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
 llm_router = llm.with_structured_output(RouterSchema)
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 llm_memory = llm.with_structured_output(UserPreferences)
+
+
+def _failed_generation_from_exception(exc: Exception) -> str | None:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("failed_generation"), str):
+            return error["failed_generation"]
+        if isinstance(body.get("failed_generation"), str):
+            return body["failed_generation"]
+
+    text = str(exc)
+    start = text.find("{")
+    if start == -1:
+        return None
+    try:
+        parsed = json.loads(text[start:])
+    except json.JSONDecodeError:
+        try:
+            import ast
+
+            parsed = ast.literal_eval(text[start:])
+        except (SyntaxError, ValueError):
+            return None
+
+    if not isinstance(parsed, dict):
+        return None
+    error = parsed.get("error")
+    if isinstance(error, dict) and isinstance(error.get("failed_generation"), str):
+        return error["failed_generation"]
+    return None
+
+
+def _recover_tool_call_from_failed_generation(exc: Exception) -> AIMessage | None:
+    """Recover valid tool args from Groq tool-parser failures.
+
+    Groq sometimes rejects a llama tool call before LangChain receives it, even
+    when the model produced a usable payload, e.g.
+    `<function=write_email {"to": "...", ...}</function>`. Recovering that keeps
+    the graph on the normal HITL path instead of returning a 500.
+    """
+    failed = _failed_generation_from_exception(exc)
+    if not failed or "<function=" not in failed:
+        return None
+
+    marker = "<function="
+    marker_index = failed.find(marker)
+    name_start = marker_index + len(marker)
+    name_end = len(failed)
+    for delimiter in (" ", ">", "{"):
+        delimiter_index = failed.find(delimiter, name_start)
+        if delimiter_index != -1:
+            name_end = min(name_end, delimiter_index)
+    name = failed[name_start:name_end].strip()
+    if not name or name not in tools_by_name_map:
+        return None
+
+    args_start = failed.find("{", name_end)
+    if args_start == -1:
+        return None
+    try:
+        args, _ = json.JSONDecoder().raw_decode(failed[args_start:])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(args, dict):
+        return None
+
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": name,
+                "args": args,
+                "id": f"groq_recovered_{uuid.uuid4().hex}",
+                "type": "tool_call",
+            }
+        ],
+    )
 
 
 def reload_config() -> None:
@@ -96,23 +175,23 @@ def llm_call(state: State, store: BaseStore):
         namespace("response_preferences"),
         config.agent.response_preferences,
     )
-    return {
-        "messages": [
-            llm_with_tools.invoke(
-                [
-                    {
-                        "role": "system",
-                        "content": agent_system_prompt.format(
-                            tools_prompt=tools_prompt,
-                            background=config.agent.background,
-                            response_preferences=response_prefs,
-                        ),
-                    }
-                ]
-                + state["messages"]
-            )
-        ]
-    }
+    messages = [
+        {
+            "role": "system",
+            "content": agent_system_prompt.format(
+                tools_prompt=tools_prompt,
+                background=config.agent.background,
+                response_preferences=response_prefs,
+            ),
+        }
+    ] + state["messages"]
+    try:
+        response = llm_with_tools.invoke(messages)
+    except Exception as exc:
+        response = _recover_tool_call_from_failed_generation(exc)
+        if response is None:
+            raise
+    return {"messages": [response]}
 
 
 def _parse_decision(raw) -> tuple[str, object]:
@@ -248,6 +327,8 @@ def tool_node(state: State, store: BaseStore, config=None):
     """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
     sent = False
+    redraft_requested = False
+    redraft_cleared = False
     run_id = _run_id_from_config(config)
 
     # Load automation rules at most once per call, lazily — only when a human
@@ -291,6 +372,7 @@ def tool_node(state: State, store: BaseStore, config=None):
             decision_type, decision_data = _parse_decision(raw)
 
             if decision_type == "ignore":
+                redraft_cleared = True
                 # Answer the tool call FIRST (dangling-tool-call discipline: Groq
                 # rejects an unanswered tool_call in the message sequence).
                 result.append({
@@ -318,9 +400,14 @@ def tool_node(state: State, store: BaseStore, config=None):
 
             if decision_type == "response":
                 feedback = decision_data
+                redraft_requested = True
                 result.append({
                     "role": "tool",
-                    "content": f"User gave feedback to incorporate: {feedback}",
+                    "content": (
+                        f"The user requested changes to this draft: {feedback}. "
+                        "Revise the draft by calling write_email again for approval. "
+                        "Do not call Done until a revised draft has been approved and sent."
+                    ),
                     "tool_call_id": tool_call["id"],
                 })
                 update_memory(
@@ -401,14 +488,17 @@ def tool_node(state: State, store: BaseStore, config=None):
             else:
                 observation = tool.invoke(args)
         except Exception as exc:
-            # A tool failure (e.g. an inbox tool invoked without a trusted email_id
-            # on the manual /run path) must not crash the run — surface it to the
-            # agent as a tool message so it can recover and call Done.
+            # A send failure after human approval must be terminal and visible to
+            # the UI/API. Otherwise the LLM can call Done and make a failed Gmail
+            # send look like a completed delivery.
+            message = f"The '{name}' action could not be completed: {exc}."
             result.append({
                 "role": "tool",
-                "content": f"The '{name}' action could not be completed: {exc}. Call Done.",
+                "content": f"{message} Call Done.",
                 "tool_call_id": tool_call["id"],
             })
+            if name in approval_set:
+                return {"messages": result, "email_send_failed": message}
             continue
         finally:
             current_gmail_thread_id.reset(thread_id_token)
@@ -420,26 +510,62 @@ def tool_node(state: State, store: BaseStore, config=None):
             sent = True
 
     update = {"messages": result}
+    if redraft_requested:
+        update["redraft_requested"] = True
+    elif redraft_cleared:
+        update["redraft_requested"] = False
     if sent:
         update["email_sent"] = True
     return update
 
 
+def force_redraft_after_feedback(state: State) -> dict:
+    """Keep feedback runs pending until the model produces a revised draft."""
+    last_message = state["messages"][-1]
+    messages = []
+    for tool_call in getattr(last_message, "tool_calls", []) or []:
+        if tool_call["name"] == "Done":
+            messages.append({
+                "role": "tool",
+                "content": (
+                    "The user requested changes, so this run is still waiting for a revised draft. "
+                    "Call write_email with the updated draft for approval; do not call Done yet."
+                ),
+                "tool_call_id": tool_call["id"],
+            })
+    if not messages:
+        messages.append({
+            "role": "user",
+            "content": (
+                "A human gave feedback on the previous draft. Call write_email with a revised "
+                "draft for approval; do not call Done until that draft has been approved and sent."
+            ),
+        })
+    return {"messages": messages}
+
+
 def after_tools(state: State) -> Literal["llm_call", "__end__"]:
-    """Sending and auto-organization are terminal; other tools continue the loop."""
-    if state.get("email_sent") or state.get("auto_organized") or state.get("automation_acted"):
+    """Sending, send failures, and auto-organization are terminal."""
+    if (
+        state.get("email_sent")
+        or state.get("email_send_failed")
+        or state.get("auto_organized")
+        or state.get("automation_acted")
+    ):
         return END
     return "llm_call"
 
 
-def should_continue(state: State) -> Literal["environment", "__end__"]:
-    """Route to tools, or end once the Done tool is called."""
+def should_continue(state: State) -> Literal["environment", "force_redraft", "__end__"]:
+    """Route to tools, or keep feedback runs alive until a revised draft exists."""
     last_message = state["messages"][-1]
     if last_message.tool_calls:
         for tool_call in last_message.tool_calls:
             if tool_call["name"] == "Done":
-                return END
+                return "force_redraft" if state.get("redraft_requested") else END
             return "environment"
+    if state.get("redraft_requested"):
+        return "force_redraft"
     return END
 
 
@@ -520,12 +646,14 @@ overall_workflow = (
     .add_node("triage_router", triage_router)
     .add_node("llm_call", llm_call)
     .add_node("environment", tool_node)
+    .add_node("force_redraft", force_redraft_after_feedback)
     .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",
         should_continue,
-        {"environment": "environment", END: END},
+        {"environment": "environment", "force_redraft": "force_redraft", END: END},
     )
+    .add_edge("force_redraft", "llm_call")
     .add_conditional_edges(
         "environment",
         after_tools,

@@ -45,6 +45,11 @@ class State(MessagesState):
     classification_decision: Literal["ignore", "respond", "notify"]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
+    # Set when an approved send action fails after the human decision.
+    email_send_failed: NotRequired[str]
     # Set when deterministic post-triage organization has run; terminal after tools.
     auto_organized: NotRequired[bool]
     automation_acted: NotRequired[bool]
+    # Set after human feedback asks for a revised draft; the run must not finish
+    # until a new gated write_email draft has been produced and approved.
+    redraft_requested: NotRequired[bool]

@@ -35,8 +35,14 @@ from src.gmail_client import (
 )
 from src.graph import overall_workflow
 from src.gmail_sync import set_last_history_id, setup_gmail_sync
-from src.run_registry import setup_run_registry, upsert_run
+from src.run_registry import (
+    ACTIVE_RUN_STATUSES,
+    find_run_by_email,
+    setup_run_registry,
+    upsert_run,
+)
 from src.storage import open_graph_storage
+from src.tenant import current_user_id
 
 
 def ensure_watch(resource=None) -> dict | None:
@@ -126,6 +132,16 @@ async def process_message(
     labels = message.get("labelIds")
     if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
         return (msg_id, "skipped", "")
+
+    # An email left UNREAD because it already has a run must not be reprocessed:
+    # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
+    # an approved reply the API sent but couldn't mark read) just needs housekeeping.
+    existing = find_run_by_email(message.get("id"), user_id=current_user_id())
+    if existing:
+        if existing["status"] in ACTIVE_RUN_STATUSES:
+            return (msg_id, existing["status"], existing["run_id"])
+        mark_as_read(msg_id, resource=resource)
+        return (msg_id, "skipped", existing["run_id"])
 
     thread = fetch_thread(message["threadId"], resource=resource)
     email_input = gmail_to_email_input(message, thread_messages=thread)
@@ -277,9 +293,13 @@ async def run_forever() -> None:
                 except Exception as exc:
                     print(f"poller: gmail watch failed: {exc}")
             if settings.polling_fallback_enabled:
-                outcomes = await poll_once(graph)
-                if outcomes:
-                    print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
+                try:
+                    outcomes = await poll_once(graph)
+                except Exception as exc:
+                    print(f"poller: poll failed: {exc}")
+                else:
+                    if outcomes:
+                        print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
             await asyncio.sleep(interval)
 
 

@@ -4,13 +4,36 @@ import uuid
 
 from conftest import ai_tool_call
 
-from src.graph import email_assistant
+from src.graph import _recover_tool_call_from_failed_generation, email_assistant
 from src.config import AutoOrganizeConfig
 from src.utils import extract_tool_call_names
 
 
 def _cfg() -> dict:
     return {"configurable": {"thread_id": str(uuid.uuid4())}}
+
+
+class _GroqToolUseError(Exception):
+    body = {
+        "error": {
+            "failed_generation": (
+                '<function=write_email {"to": "alice@example.com", '
+                '"subject": "Re: question", "content": "Here you go."}</function>'
+            )
+        }
+    }
+
+
+def test_recovers_groq_failed_write_email_tool_call():
+    message = _recover_tool_call_from_failed_generation(_GroqToolUseError())
+
+    assert message is not None
+    assert message.tool_calls[0]["name"] == "write_email"
+    assert message.tool_calls[0]["args"] == {
+        "to": "alice@example.com",
+        "subject": "Re: question",
+        "content": "Here you go.",
+    }
 
 
 def test_respond_email_routes_to_agent(fake_llms, respond_email):

@@ -56,6 +56,20 @@ def _raw_message(msg_id: str, subject: str, body: str) -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_run_registry(tmp_path, monkeypatch):
+    """Give each poller test a fresh JSON run registry.
+
+    process_message reads/writes the registry (dedup + upsert), so without isolation
+    the persisted logs/run_index.json would leak state between test runs.
+    """
+    import src.run_registry as rr
+
+    monkeypatch.setattr(rr, "DEFAULT_RUN_INDEX", tmp_path / "runs.json")
+    monkeypatch.setattr(rr.settings, "run_registry_backend", "json")
+    monkeypatch.setattr(rr.settings, "database_url", "")
+
+
 @pytest.fixture
 def mocked_gmail(monkeypatch):
     """Patch the Gmail calls poll_once uses; record mark_as_read invocations."""
@@ -114,6 +128,27 @@ async def test_poll_once_leaves_paused_runs_unread(mocked_gmail, fake_llms):
 
     assert outcomes == [("m3", "pending_approval", outcomes[0][2])]
     assert marked == []  # paused run must stay unread
+
+
+async def test_poll_once_skips_email_with_active_run(mocked_gmail, fake_llms):
+    """A pending email reprocessed on the next cycle must reuse its run, not duplicate it."""
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m_dup", "Quick question", "can you help?")])
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, "c1"),
+        ],
+    )
+    graph = _graph()
+
+    first = await poller.poll_once(graph, resource=object())
+    assert first[0][1] == "pending_approval"
+    first_run_id = first[0][2]
+
+    second = await poller.poll_once(graph, resource=object())
+    assert second == [("m_dup", "pending_approval", first_run_id)]
+    assert marked == []  # still awaiting a human → never marked read
 
 
 async def test_poll_once_empty_inbox(mocked_gmail, fake_llms):

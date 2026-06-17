@@ -70,6 +70,49 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+def list_inbox(max_results: int, resource=None) -> list[dict]:
+    """Return summarized inbox messages (newest first) for the management view.
+
+    Uses the lightweight metadata format (headers + snippet, no body) so the UI can
+    list many messages cheaply. Read and unread are both returned; the UNREAD label
+    is surfaced so the caller can render state and drive mark read/unread actions.
+    """
+    resource = resource or gmail_resource()
+    refs = (
+        resource.users()
+        .messages()
+        .list(userId="me", q="in:inbox", maxResults=max_results)
+        .execute()
+        .get("messages", [])
+    )
+    summaries: list[dict] = []
+    for ref in refs:
+        message = (
+            resource.users()
+            .messages()
+            .get(
+                userId="me",
+                id=ref["id"],
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            )
+            .execute()
+        )
+        labels = message.get("labelIds", [])
+        summaries.append(
+            {
+                "id": message["id"],
+                "thread_id": message.get("threadId"),
+                "from": _header_value(message, "From"),
+                "subject": _header_value(message, "Subject"),
+                "snippet": message.get("snippet", ""),
+                "date": _header_value(message, "Date"),
+                "unread": "UNREAD" in labels,
+            }
+        )
+    return summaries
+
+
 def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
     """Register a Gmail push notification watch for inbox changes."""
     topic = topic_name or settings.gmail_webhook_topic

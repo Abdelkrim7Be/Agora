@@ -41,7 +41,7 @@ class Settings:
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
-    poll_interval_minutes: int = int(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
+    poll_interval_minutes: float = float(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")

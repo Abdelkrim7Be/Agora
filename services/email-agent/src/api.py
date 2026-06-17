@@ -16,12 +16,23 @@ from pydantic import BaseModel
 from src.config import settings
 from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
+from src import graph as graph_module
+from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
 from src.poller import poll_history
 from src.memory import namespace, preferences_text, wrap_preferences
+from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
+from src.gmail_client import (
+    archive_message,
+    gmail_resource,
+    list_inbox,
+    mark_as_read,
+    mark_as_unread,
+    trash_message,
+)
 from src.tenant import current_user_id, resolve_user_id, user_context
 from src.security_client import fetch_policy
 from src.storage import open_graph_storage
@@ -163,6 +174,101 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
         pending_action=run.pending_action,
         user_id=current_user_id(),
     )
+
+def _pending_response_after_decision_error(run_id: str, exc: Exception, action: str) -> RunResponse | None:
+    record = get_run_record(run_id, user_id=current_user_id())
+    if not record or record.get("status") != "pending_approval":
+        return None
+    print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
+    return RunResponse(
+        run_id=run_id,
+        status="pending_approval",
+        classification=record.get("classification"),
+        pending_action=record.get("pending_action"),
+        error=f"Could not complete {action}; draft is still pending. {type(exc).__name__}: {exc}",
+    )
+
+
+def _pending_action(record: dict) -> tuple[str, dict] | None:
+    pending = record.get("pending_action") or []
+    if not pending or not isinstance(pending[0], dict):
+        return None
+    request = pending[0].get("action_request") or {}
+    action = request.get("action")
+    args = request.get("args") or {}
+    if not action or not isinstance(args, dict):
+        return None
+    return action, args
+
+
+def _record_email_input(record: dict) -> dict:
+    return {
+        "subject": record.get("subject"),
+        "author": record.get("author"),
+        "email_id": record.get("email_id"),
+        "gmail_thread_id": record.get("gmail_thread_id"),
+    }
+
+
+def _complete_pending_rejection(run_id: str) -> RunResponse | None:
+    record = get_run_record(run_id, user_id=current_user_id())
+    if not record or record.get("status") != "pending_approval":
+        return None
+    response = RunResponse(
+        run_id=run_id,
+        status="completed",
+        classification=record.get("classification"),
+    )
+    _record_response(response, email_input=_record_email_input(record))
+    return response
+
+
+def _execute_pending_action(run_id: str, args_override: dict | None = None) -> RunResponse | None:
+    record = get_run_record(run_id, user_id=current_user_id())
+    if not record or record.get("status") != "pending_approval":
+        return None
+    pending = _pending_action(record)
+    if pending is None:
+        return None
+    action, args = pending
+    if args_override is not None:
+        args = args_override
+    tool = graph_module.tools_by_name_map.get(action)
+    if tool is None:
+        response = RunResponse(
+            run_id=run_id,
+            status="failed",
+            classification=record.get("classification"),
+            error=f"The '{action}' action is not available.",
+        )
+        _record_response(response, email_input=_record_email_input(record))
+        return response
+
+    email_id_token = current_email_id.set(record.get("email_id"))
+    thread_id_token = current_gmail_thread_id.set(record.get("gmail_thread_id"))
+    approval_token = hitl_approved.set(True)
+    try:
+        tool.invoke(args)
+    except Exception as exc:
+        response = RunResponse(
+            run_id=run_id,
+            status="failed",
+            classification=record.get("classification"),
+            error=f"The '{action}' action could not be completed: {exc}.",
+        )
+    else:
+        response = RunResponse(
+            run_id=run_id,
+            status="completed",
+            classification=record.get("classification"),
+        )
+    finally:
+        hitl_approved.reset(approval_token)
+        current_gmail_thread_id.reset(thread_id_token)
+        current_email_id.reset(email_id_token)
+
+    _record_response(response, email_input=_record_email_input(record))
+    return response
 
 
 async def _require_run(graph, run_id: str) -> dict:
@@ -370,6 +476,105 @@ async def runs(
     return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
 
 
+def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
+    """Build inbox rows from agent-known runs when Gmail is temporarily unreachable."""
+    messages: list[dict] = []
+    seen: set[str] = set()
+    for record in runs:
+        email_id = record.get("email_id")
+        if not email_id or email_id in seen:
+            continue
+        seen.add(email_id)
+        messages.append(
+            {
+                "id": email_id,
+                "thread_id": record.get("gmail_thread_id"),
+                "from": record.get("author") or "Unknown",
+                "subject": record.get("subject") or "(no subject)",
+                "snippet": "Gmail is temporarily unavailable; showing the last agent-known message.",
+                "date": record.get("updated_at") or "",
+                "unread": record.get("status") in ACTIVE_RUN_STATUSES,
+                "run_id": record.get("run_id"),
+                "run_status": record.get("status"),
+                "classification": record.get("classification"),
+                "stale": True,
+            }
+        )
+        if len(messages) >= limit:
+            break
+    return messages
+
+
+@app.get("/inbox")
+async def inbox(limit: int = Query(default=25, ge=1, le=100)) -> dict:
+    """List the tenant's recent inbox messages with the agent's verdict attached.
+
+    The Gmail calls are blocking (googleapiclient), so they run in a worker thread to
+    keep the event loop free. Each message is matched to an agent run by Gmail message
+    id so the UI can show the classification and link straight to the run.
+    """
+    user_id = current_user_id()
+    try:
+        resource = await asyncio.to_thread(gmail_resource, user_id)
+        messages = await asyncio.to_thread(list_inbox, limit, resource)
+    except Exception as exc:
+        print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
+        runs = await asyncio.to_thread(list_runs, user_id=user_id, limit=500)
+        return {
+            "messages": _fallback_inbox_messages(runs, limit),
+            "warning": (
+                "Gmail inbox is unavailable. Check OAuth credentials and container network access. "
+                "Showing last known agent messages."
+            ),
+        }
+    runs = await asyncio.to_thread(list_runs, user_id=user_id, limit=500)
+    by_email: dict[str, dict] = {}
+    for record in runs:
+        email_id = record.get("email_id")
+        if email_id and email_id not in by_email:
+            by_email[email_id] = record
+    for message in messages:
+        record = by_email.get(message["id"])
+        if record:
+            message["run_id"] = record["run_id"]
+            message["run_status"] = record["status"]
+            message["classification"] = record.get("classification")
+    return {"messages": messages}
+
+
+async def _inbox_action(fn, msg_id: str, action: str) -> dict:
+    try:
+        resource = await asyncio.to_thread(gmail_resource, current_user_id())
+        await asyncio.to_thread(fn, msg_id, resource)
+    except Exception as exc:
+        print(f"api: gmail inbox action {action} unavailable for {msg_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+    return {"ok": True, "msg_id": msg_id, "action": action}
+
+
+@app.post("/inbox/{msg_id}/archive")
+async def inbox_archive(msg_id: str) -> dict:
+    return await _inbox_action(archive_message, msg_id, "archive")
+
+
+@app.post("/inbox/{msg_id}/trash")
+async def inbox_trash(msg_id: str) -> dict:
+    return await _inbox_action(trash_message, msg_id, "trash")
+
+
+@app.post("/inbox/{msg_id}/read")
+async def inbox_read(msg_id: str) -> dict:
+    return await _inbox_action(mark_as_read, msg_id, "read")
+
+
+@app.post("/inbox/{msg_id}/unread")
+async def inbox_unread(msg_id: str) -> dict:
+    return await _inbox_action(mark_as_unread, msg_id, "unread")
+
+
 @app.get("/run/{run_id}", response_model=RunResponse)
 async def get_run(request: Request, run_id: str) -> RunResponse:
     graph = request.app.state.graph
@@ -403,9 +608,19 @@ async def run(request: Request, email: EmailInput) -> RunResponse:
 async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
-    result = await graph.ainvoke(
-        Command(resume={"type": "approve", "args": approval.args}), config
-    )
+    try:
+        result = await graph.ainvoke(
+            Command(resume={"type": "approve", "args": approval.args}), config
+        )
+    except Exception as exc:
+        response = _execute_pending_action(run_id, approval.args)
+        if response is not None:
+            print(f"api: approve graph resume failed for run {run_id}; used pending action fallback: {exc}")
+            return response
+        response = _pending_response_after_decision_error(run_id, exc, "approve")
+        if response is not None:
+            return response
+        raise
     response = _format(result, run_id)
     _record_response(response)
     return response
@@ -415,9 +630,19 @@ async def approve(request: Request, run_id: str, approval: ApprovalInput) -> Run
 async def reject(request: Request, run_id: str) -> RunResponse:
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
-    result = await graph.ainvoke(
-        Command(resume={"type": "reject"}), config
-    )
+    try:
+        result = await graph.ainvoke(
+            Command(resume={"type": "reject"}), config
+        )
+    except Exception as exc:
+        response = _complete_pending_rejection(run_id)
+        if response is not None:
+            print(f"api: reject graph resume failed for run {run_id}; completed pending rejection fallback: {exc}")
+            return response
+        response = _pending_response_after_decision_error(run_id, exc, "reject")
+        if response is not None:
+            return response
+        raise
     response = _format(result, run_id)
     _record_response(response)
     return response
@@ -427,9 +652,15 @@ async def reject(request: Request, run_id: str) -> RunResponse:
 async def respond(request: Request, run_id: str, body: RespondInput) -> RunResponse:
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
-    result = await graph.ainvoke(
-        Command(resume=[{"type": "response", "args": body.feedback}]), config
-    )
+    try:
+        result = await graph.ainvoke(
+            Command(resume=[{"type": "response", "args": body.feedback}]), config
+        )
+    except Exception as exc:
+        response = _pending_response_after_decision_error(run_id, exc, "regenerate draft")
+        if response is not None:
+            return response
+        raise
     response = _format(result, run_id)
     _record_response(response)
     return response

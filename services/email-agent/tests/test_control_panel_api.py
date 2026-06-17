@@ -28,6 +28,22 @@ def test_run_registry_filters_by_status(tmp_path):
     assert pending[0]["pending_action"][0]["action_request"]["action"] == "write_email"
 
 
+def test_run_registry_clears_pending_action_on_terminal_status(tmp_path):
+    path = tmp_path / "runs.json"
+    upsert_run(
+        "run-1",
+        "pending_approval",
+        pending_action=[{"action_request": {"action": "write_email", "args": {}}}],
+        path=path,
+    )
+
+    saved = upsert_run("run-1", "completed", path=path)
+
+    assert saved["status"] == "completed"
+    assert saved["pending_action"] is None
+    assert list_runs(status="pending_approval", path=path) == []
+
+
 def test_run_registry_filters_by_user(tmp_path):
     path = tmp_path / "runs.json"
     upsert_run("run-1", "completed", path=path, user_id="alice@example.com")
@@ -296,6 +312,89 @@ async def test_require_run_allows_owned_run(monkeypatch):
     assert await _require_run(Graph(), "run-1") == {"configurable": {"thread_id": "run-1"}}
 
 
+def test_respond_keeps_pending_when_redraft_fails(monkeypatch):
+    pending_action = [{"action_request": {"action": "write_email", "args": {"content": "draft"}}}]
+
+    class State:
+        values = {"email_input": {"subject": "hello"}}
+
+    class Graph:
+        async def aget_state(self, config):
+            return State()
+
+        async def ainvoke(self, command, config):
+            raise RuntimeError("network unreachable")
+
+    def fake_get_run(run_id, user_id=None):
+        return {
+            "run_id": run_id,
+            "status": "pending_approval",
+            "classification": "respond",
+            "pending_action": pending_action,
+        }
+
+    monkeypatch.setattr("src.api.get_run_record", fake_get_run)
+
+    with TestClient(app) as client:
+        client.app.state.graph = Graph()
+        response = client.post("/run/run-1/respond", json={"feedback": "shorter"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending_approval"
+    assert body["pending_action"] == pending_action
+    assert "draft is still pending" in body["error"]
+
+
+def test_decision_completes_from_pending_action_when_graph_fails(monkeypatch):
+    import src.api as api
+
+    draft = {"to": "alice@example.com", "subject": "Re", "content": "draft"}
+    pending_action = [{"action_request": {"action": "write_email", "args": draft}}]
+    tool_calls = []
+    saved = []
+
+    class Tool:
+        def invoke(self, args):
+            tool_calls.append(args)
+            return "sent"
+
+    class State:
+        values = {"email_input": {"subject": "hello"}}
+
+    class Graph:
+        async def aget_state(self, config):
+            return State()
+
+        async def ainvoke(self, command, config):
+            raise RuntimeError("rate limited")
+
+    monkeypatch.setitem(api.graph_module.tools_by_name_map, "write_email", Tool())
+    monkeypatch.setattr(api, "_record_response", lambda response, email_input=None: saved.append((response, email_input)))
+    monkeypatch.setattr(api, "get_run_record", lambda run_id, user_id=None: {
+        "run_id": run_id,
+        "status": "pending_approval",
+        "classification": "respond",
+        "pending_action": pending_action,
+        "subject": "hello",
+        "author": "Alice",
+        "email_id": "msg-1",
+        "gmail_thread_id": "thread-1",
+    })
+
+    with TestClient(app) as client:
+        client.app.state.graph = Graph()
+        approve = client.post("/run/run-1/approve", json={})
+        reject = client.post("/run/run-1/reject")
+
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "completed"
+    assert tool_calls == [draft]
+    assert reject.status_code == 200
+    assert reject.json()["status"] == "completed"
+    assert [item[0].status for item in saved] == ["completed", "completed"]
+
+
 def _pubsub_body(payload: dict) -> dict:
     data = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
     return {"message": {"data": data, "messageId": "msg-1"}}
@@ -395,3 +494,70 @@ def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
         response = client.post("/webhooks/gmail?token=wrong", json=_pubsub_body({"historyId": "123"}))
 
     assert response.status_code == 403
+
+
+def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
+    import src.api as api
+
+    def unavailable(_user_id=None):
+        raise RuntimeError("network unavailable")
+
+    def runs(**_kwargs):
+        return [
+            {
+                "run_id": "run-1",
+                "status": "pending_approval",
+                "email_id": "msg-1",
+                "gmail_thread_id": "thread-1",
+                "author": "Alice <alice@example.com>",
+                "subject": "Need approval",
+                "updated_at": "2026-06-17T12:00:00Z",
+                "classification": {"urgency": "high"},
+            }
+        ]
+
+    monkeypatch.setattr(api, "gmail_resource", unavailable)
+    monkeypatch.setattr(api, "list_runs", runs)
+
+    with TestClient(app) as client:
+        response = client.get("/inbox", headers={"X-Agora-User": "owner"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "messages": [
+            {
+                "id": "msg-1",
+                "thread_id": "thread-1",
+                "from": "Alice <alice@example.com>",
+                "subject": "Need approval",
+                "snippet": "Gmail is temporarily unavailable; showing the last agent-known message.",
+                "date": "2026-06-17T12:00:00Z",
+                "unread": True,
+                "run_id": "run-1",
+                "run_status": "pending_approval",
+                "classification": {"urgency": "high"},
+                "stale": True,
+            }
+        ],
+        "warning": (
+            "Gmail inbox is unavailable. Check OAuth credentials and container network access. "
+            "Showing last known agent messages."
+        ),
+    }
+
+
+def test_inbox_action_returns_503_when_gmail_unavailable(monkeypatch):
+    import src.api as api
+
+    def unavailable(_user_id=None):
+        raise RuntimeError("network unavailable")
+
+    monkeypatch.setattr(api, "gmail_resource", unavailable)
+
+    with TestClient(app) as client:
+        response = client.post("/inbox/msg-1/archive", headers={"X-Agora-User": "owner"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Gmail inbox is unavailable. Check OAuth credentials and container network access."
+    }
