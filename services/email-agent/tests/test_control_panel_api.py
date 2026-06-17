@@ -61,8 +61,10 @@ def test_selected_run_registry_backend_requires_database_url(monkeypatch):
 def test_runs_endpoint_returns_registry(monkeypatch):
     captured = {}
 
-    def fake_list_runs(status=None, user_id=None):
+    def fake_list_runs(status=None, user_id=None, limit=None, offset=0):
         captured["user_id"] = user_id
+        captured["limit"] = limit
+        captured["offset"] = offset
         return [{"run_id": "run-1", "status": status, "user_id": user_id}]
 
     monkeypatch.setattr("src.api.list_runs", fake_list_runs)
@@ -73,7 +75,10 @@ def test_runs_endpoint_returns_registry(monkeypatch):
     assert response.status_code == 200
     assert captured["user_id"] == "alice@example.com"
     assert response.json() == {
-        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": "alice@example.com"}]
+        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": "alice@example.com"}],
+        "limit": 50,
+        "offset": 0,
+        "has_more": False,
     }
 
 

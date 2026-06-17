@@ -86,13 +86,21 @@ def _json_upsert(record: dict, path: str | Path | None = None) -> dict:
     return saved
 
 
-def _json_list(status: str | None, path: str | Path | None, user_id: str | None) -> list[dict]:
+def _json_list(
+    status: str | None,
+    path: str | Path | None,
+    user_id: str | None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
     runs = _read(_path(path)).get("runs", [])
     if user_id is not None:
         resolved_user_id = normalize_user_id(user_id)
         runs = [r for r in runs if normalize_user_id(r.get("user_id")) == resolved_user_id]
     if status:
         runs = [r for r in runs if r.get("status") == status]
+    if limit is not None:
+        return runs[offset:offset + limit]
     return runs
 
 
@@ -182,7 +190,12 @@ def _postgres_upsert(record: dict) -> dict:
             return _postgres_row(cur.fetchone())
 
 
-def _postgres_list(status: str | None, user_id: str | None) -> list[dict]:
+def _postgres_list(
+    status: str | None,
+    user_id: str | None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
     from psycopg.rows import dict_row
 
     setup_run_registry()
@@ -196,6 +209,8 @@ def _postgres_list(status: str | None, user_id: str | None) -> list[dict]:
         clauses.append("status = %(status)s")
         params["status"] = status
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    params["limit"] = MAX_RUNS if limit is None else limit
+    params["offset"] = max(offset, 0)
     with _connect() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
@@ -205,8 +220,8 @@ def _postgres_list(status: str | None, user_id: str | None) -> list[dict]:
                 FROM agent_runs
                 """
                 + where
-                + " ORDER BY updated_at DESC LIMIT %(limit)s",
-                {**params, "limit": MAX_RUNS},
+                + " ORDER BY updated_at DESC LIMIT %(limit)s OFFSET %(offset)s",
+                params,
             )
             return [_postgres_row(row) for row in cur.fetchall()]
 
@@ -256,10 +271,12 @@ def list_runs(
     status: str | None = None,
     path: str | Path | None = None,
     user_id: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict]:
     if selected_run_registry_backend(path) == "postgres":
-        return _postgres_list(status=status, user_id=user_id)
-    return _json_list(status=status, path=path, user_id=user_id)
+        return _postgres_list(status=status, user_id=user_id, limit=limit, offset=offset)
+    return _json_list(status=status, path=path, user_id=user_id, limit=limit, offset=offset)
 
 
 def get_run(

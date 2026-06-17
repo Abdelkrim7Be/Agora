@@ -121,8 +121,9 @@ class MemoryInput(BaseModel):
 
 class RunResponse(BaseModel):
     run_id: str
-    status: str  # "pending_approval" | "completed"
+    status: str  # "pending_approval" | "completed" | "failed"
     classification: str | None = None
+    error: str | None = None
     pending_action: list | None = None  # list of Agent Inbox request objects when paused
 
 
@@ -138,6 +139,13 @@ def _format(result: dict, run_id: str) -> RunResponse:
             run_id=run_id,
             status="pending_approval",
             pending_action=interrupts[0].value,
+        )
+    if result.get("email_send_failed"):
+        return RunResponse(
+            run_id=run_id,
+            status="failed",
+            classification=result.get("classification_decision", "unknown"),
+            error=result.get("email_send_failed"),
         )
     return RunResponse(
         run_id=run_id,
@@ -187,8 +195,15 @@ def _run_detail(values: dict, run_id: str) -> dict:
     email_input = values.get("email_input", {})
     return {
         "run_id": run_id,
-        "status": "pending_approval" if values.get("__interrupt__") else "completed",
+        "status": (
+            "pending_approval"
+            if values.get("__interrupt__")
+            else "failed"
+            if values.get("email_send_failed")
+            else "completed"
+        ),
         "classification": values.get("classification_decision"),
+        "error": values.get("email_send_failed"),
         "email": {
             "author": email_input.get("author"),
             "to": email_input.get("to"),
@@ -344,8 +359,15 @@ async def update_preferences(request: Request, body: MemoryInput) -> dict:
 
 
 @app.get("/runs")
-async def runs(status: str | None = Query(default=None)) -> dict:
-    return {"runs": list_runs(status=status, user_id=current_user_id())}
+async def runs(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    # Fetch one extra row to tell the UI whether a next page exists.
+    page = list_runs(status=status, user_id=current_user_id(), limit=limit + 1, offset=offset)
+    has_more = len(page) > limit
+    return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
 
 
 @app.get("/run/{run_id}", response_model=RunResponse)
