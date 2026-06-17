@@ -76,7 +76,11 @@ def reply_all(content: str) -> str:
 class Done(BaseModel):
     """E-mail has been sent."""
 
-    done: bool
+    # Accept bool OR str with a default: Groq's llama intermittently emits the
+    # stringified "true" instead of a boolean, and Groq rejects the tool call before
+    # we ever see it. Routing only checks the tool name, so the value is irrelevant —
+    # a permissive, optional schema just avoids the 400 tool-validation error.
+    done: bool | str = True
 
 
 TOOLS = [write_email, forward_email, reply_all, Done]
