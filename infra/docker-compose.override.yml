@@ -1,0 +1,63 @@
+# Demo-only overrides (auto-merged by `docker compose`). Not committed-critical:
+#   - mounts the real Gmail OAuth files into the agent so it can send
+#   - enables REAL sends (AGENT_DRY_RUN=false) so an approved reply actually arrives
+#   - 1-minute poll so a live-sent email is picked up fast
+# Remove this file (or set AGENT_DRY_RUN=true) to go back to safe dry-run mode.
+services:
+  # Host port 8080 is taken by another project (edun7), so expose the gateway on
+  # 8090 instead. `!override` replaces the base port list (otherwise it'd merge).
+  gateway:
+    ports: !override
+      - "8090:8080"
+
+  # Host port 3000 is also taken by another project; serve the UI on 3001.
+  web:
+    ports: !override
+      - "3001:80"
+
+  email-agent:
+    environment:
+      AGENT_DRY_RUN: "false"
+      AGENT_POLL_INTERVAL_MIN: "0.333"
+    volumes:
+      - ../services/email-agent/token.json:/app/token.json
+      - ../services/email-agent/credentials.json:/app/credentials.json
+
+  # Live demo poller: watches agora.test.inbox and turns real incoming mail into
+  # pending-approval runs in the same Postgres the API serves the UI from.
+  poller:
+    build:
+      context: ../services/email-agent
+      network: host
+    command: ["python", "-m", "src.poller"]
+    env_file:
+      - ../services/email-agent/.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_STORAGE_BACKEND: postgres
+      AGENT_RUN_REGISTRY_BACKEND: postgres
+      TENANT_MODE: ${TENANT_MODE:-single}
+      # Align the poller's default tenant with the gateway's owner login so the
+      # runs it creates are visible to that user and it resolves /app/token.json.
+      AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
+      GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
+      AGENT_SECURITY_ENABLED: "true"
+      AGENT_SECURITY_URL: http://security:8001
+      AGENT_DRY_RUN: "false"
+      AGENT_POLL_INTERVAL_MIN: "0.333"
+      GMAIL_POLLING_FALLBACK_ENABLED: "true"
+      AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
+      AGENT_STORE_DB: /app/data/store.db
+    volumes:
+      - agent_data:/app/data
+      - ../services/email-agent/token.json:/app/token.json
+      - ../services/email-agent/credentials.json:/app/credentials.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      security:
+        condition: service_healthy
+    networks:
+      - agora
