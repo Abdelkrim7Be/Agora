@@ -19,7 +19,7 @@ from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
-from src.poller import poll_history
+from src.poller import poll_history, poll_once
 from src.memory import namespace, preferences_text, wrap_preferences
 from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
@@ -474,6 +474,30 @@ async def runs(
     page = list_runs(status=status, user_id=current_user_id(), limit=limit + 1, offset=offset)
     has_more = len(page) > limit
     return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
+
+
+@app.post("/sync")
+async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=100)) -> dict:
+    """Process unread Gmail messages now so validation reflects fresh mail."""
+    user_id = current_user_id()
+    try:
+        resource = await asyncio.to_thread(gmail_resource, user_id)
+    except Exception as exc:
+        print(f"api: gmail sync unavailable for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail sync is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+
+    try:
+        outcomes = await poll_once(request.app.state.graph, resource=resource, max_results=limit)
+    except Exception as exc:
+        print(f"api: gmail sync failed for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gmail sync failed: {type(exc).__name__}: {exc}",
+        ) from exc
+    return {"outcomes": outcomes}
 
 
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:

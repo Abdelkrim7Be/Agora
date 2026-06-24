@@ -98,6 +98,41 @@ def test_runs_endpoint_returns_registry(monkeypatch):
     }
 
 
+def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
+    import src.api as api
+
+    captured = {}
+    graph = object()
+
+    def fake_gmail_resource(user_id=None):
+        captured["gmail_user_id"] = user_id
+        return "gmail"
+
+    async def fake_poll_once(graph_arg, resource=None, max_results=None):
+        captured["graph"] = graph_arg
+        captured["resource"] = resource
+        captured["max_results"] = max_results
+        captured["current_user"] = current_user_id()
+        return [("msg-1", "pending_approval", "run-1")]
+
+    monkeypatch.setattr(api, "gmail_resource", fake_gmail_resource)
+    monkeypatch.setattr(api, "poll_once", fake_poll_once)
+
+    with TestClient(app) as client:
+        client.app.state.graph = graph
+        response = client.post("/sync?limit=7", headers={"X-Agora-User": "owner"})
+
+    assert response.status_code == 200
+    assert response.json() == {"outcomes": [["msg-1", "pending_approval", "run-1"]]}
+    assert captured == {
+        "gmail_user_id": "owner",
+        "graph": graph,
+        "resource": "gmail",
+        "max_results": 7,
+        "current_user": "owner",
+    }
+
+
 def test_run_detail_shapes_timeline_and_security():
     detail = _run_detail(
         {

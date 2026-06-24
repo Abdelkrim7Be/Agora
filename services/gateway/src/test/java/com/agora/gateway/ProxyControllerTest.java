@@ -104,6 +104,25 @@ class ProxyControllerTest {
     }
 
     @Test
+    void proxy_sync_forwards_to_upstream_and_returns_response() throws Exception {
+        String responseBody = "{\"outcomes\":[[\"msg-1\",\"pending_approval\",\"run-1\"]]}";
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/sync?limit=7"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(responseBody)));
+
+        mockMvc.perform(post("/api/agent/sync?limit=7")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(content().json(responseBody));
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/sync?limit=7"))
+                .withHeader("X-Agora-User", equalTo("owner")));
+    }
+
+    @Test
     void proxy_gmail_webhook_forwards_without_jwt() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/webhooks/gmail"))
                 .willReturn(aResponse()

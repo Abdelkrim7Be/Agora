@@ -133,6 +133,16 @@ class RbacTest {
     }
 
     @Test
+    void viewer_cannot_sync_403() throws Exception {
+        mockMvc.perform(post("/api/agent/sync?limit=7")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/sync?limit=7")));
+    }
+
+    @Test
     void owner_denied_on_unenumerated_route() throws Exception {
         // default-deny: even an owner cannot reach an agent route that isn't explicitly allowed
         mockMvc.perform(post("/api/agent/run/abc/unknownverb")
