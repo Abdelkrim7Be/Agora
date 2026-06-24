@@ -66,6 +66,7 @@ class Settings:
     run_registry_backend: str = os.getenv("AGENT_RUN_REGISTRY_BACKEND", "postgres" if database_url else "json")
     tenant_mode: str = os.getenv("TENANT_MODE", "single")
     default_user_id: str = os.getenv("AGENT_DEFAULT_USER_ID", "default")
+    default_agent_instance_id: str = os.getenv("AGENT_DEFAULT_INSTANCE_ID", "default-email-agent")
     gmail_webhook_enabled: bool = _env_bool("GMAIL_WEBHOOK_ENABLED", "false")
     gmail_webhook_topic: str = os.getenv("GMAIL_WEBHOOK_TOPIC", "")
     gmail_webhook_secret: str = os.getenv("GMAIL_WEBHOOK_SECRET", "")

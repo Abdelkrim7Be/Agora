@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Iterator
 
 from src.config import SERVICE_ROOT, settings
-from src.tenant import current_user_id, normalize_user_id
+from src.tenant import (
+    current_agent_instance_id,
+    current_user_id,
+    normalize_agent_instance_id,
+    normalize_user_id,
+)
 
 
 def _service_path(path: str) -> Path:
@@ -20,15 +25,26 @@ def _token_store_dir() -> Path:
     return configured.with_suffix("") if configured.suffix else configured
 
 
-def token_file_for_user(user_id: str | None = None) -> Path:
+def token_file_for_user(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> Path:
     resolved = normalize_user_id(user_id or current_user_id())
+    resolved_instance = normalize_agent_instance_id(
+        agent_instance_id or current_agent_instance_id()
+    )
     default_user = normalize_user_id(settings.default_user_id)
-    if settings.tenant_mode == "single" and resolved == default_user:
-        return _service_path(settings.gmail_token_path)
+    default_instance = normalize_agent_instance_id(settings.default_agent_instance_id)
+    if resolved_instance == default_instance:
+        if settings.tenant_mode == "single" and resolved == default_user:
+            return _service_path(settings.gmail_token_path)
+        token_dir = _token_store_dir()
+        token_dir.mkdir(parents=True, exist_ok=True)
+        return token_dir / f"{resolved}.json"
 
     token_dir = _token_store_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
-    return token_dir / f"{resolved}.json"
+    return token_dir / f"{resolved}__{resolved_instance}.json"
 
 
 def _fernet():
@@ -44,7 +60,10 @@ def _encrypted_path(target: Path) -> Path:
 
 
 @contextmanager
-def prepared_token_file(user_id: str | None = None) -> Iterator[str]:
+def prepared_token_file(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> Iterator[str]:
     """Yield a plaintext token path for the Google client, encrypting it at rest.
 
     When AGENT_TOKEN_ENCRYPTION_KEY is unset this is a passthrough (current behavior).
@@ -53,7 +72,7 @@ def prepared_token_file(user_id: str | None = None) -> Iterator[str]:
     plaintext is re-encrypted and removed on exit, so tokens are never left on disk
     in the clear.
     """
-    target = token_file_for_user(user_id)
+    target = token_file_for_user(user_id, agent_instance_id)
     if not settings.token_encryption_key:
         yield str(target)
         return

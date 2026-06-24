@@ -33,7 +33,13 @@ from src.gmail_client import (
     mark_as_unread,
     trash_message,
 )
-from src.tenant import current_user_id, resolve_user_id, user_context
+from src.tenant import (
+    agent_instance_context,
+    current_agent_instance_id,
+    current_user_id,
+    resolve_user_id,
+    user_context,
+)
 from src.security_client import fetch_policy
 from src.storage import open_graph_storage
 
@@ -90,10 +96,15 @@ def _request_user_id(request: Request) -> str | None:
     return request.headers.get("x-agora-user")
 
 
+def _request_agent_instance_id(request: Request) -> str | None:
+    return request.headers.get("x-agora-agent-instance")
+
+
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
     with user_context(_request_user_id(request)):
-        return await call_next(request)
+        with agent_instance_context(_request_agent_instance_id(request)):
+            return await call_next(request)
 
 
 class EmailInput(BaseModel):
@@ -173,10 +184,15 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
         classification=run.classification,
         pending_action=run.pending_action,
         user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
     )
 
 def _pending_response_after_decision_error(run_id: str, exc: Exception, action: str) -> RunResponse | None:
-    record = get_run_record(run_id, user_id=current_user_id())
+    record = get_run_record(
+        run_id,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+    )
     if not record or record.get("status") != "pending_approval":
         return None
     print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
@@ -211,7 +227,11 @@ def _record_email_input(record: dict) -> dict:
 
 
 def _complete_pending_rejection(run_id: str) -> RunResponse | None:
-    record = get_run_record(run_id, user_id=current_user_id())
+    record = get_run_record(
+        run_id,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+    )
     if not record or record.get("status") != "pending_approval":
         return None
     response = RunResponse(
@@ -224,7 +244,11 @@ def _complete_pending_rejection(run_id: str) -> RunResponse | None:
 
 
 def _execute_pending_action(run_id: str, args_override: dict | None = None) -> RunResponse | None:
-    record = get_run_record(run_id, user_id=current_user_id())
+    record = get_run_record(
+        run_id,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+    )
     if not record or record.get("status") != "pending_approval":
         return None
     pending = _pending_action(record)
@@ -272,7 +296,11 @@ def _execute_pending_action(run_id: str, args_override: dict | None = None) -> R
 
 
 async def _require_run(graph, run_id: str) -> dict:
-    if get_run_record(run_id, user_id=current_user_id()) is None:
+    if get_run_record(
+        run_id,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+    ) is None:
         raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
     config = _thread_config(run_id)
     state = await graph.aget_state(config)
@@ -471,7 +499,13 @@ async def runs(
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     # Fetch one extra row to tell the UI whether a next page exists.
-    page = list_runs(status=status, user_id=current_user_id(), limit=limit + 1, offset=offset)
+    page = list_runs(
+        status=status,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+        limit=limit + 1,
+        offset=offset,
+    )
     has_more = len(page) > limit
     return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
 
@@ -543,7 +577,7 @@ async def inbox(limit: int = Query(default=25, ge=1, le=100)) -> dict:
         messages = await asyncio.to_thread(list_inbox, limit, resource)
     except Exception as exc:
         print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
-        runs = await asyncio.to_thread(list_runs, user_id=user_id, limit=500)
+        runs = await asyncio.to_thread(list_runs, user_id=user_id, agent_instance_id=current_agent_instance_id(), limit=500)
         return {
             "messages": _fallback_inbox_messages(runs, limit),
             "warning": (
@@ -551,7 +585,7 @@ async def inbox(limit: int = Query(default=25, ge=1, le=100)) -> dict:
                 "Showing last known agent messages."
             ),
         }
-    runs = await asyncio.to_thread(list_runs, user_id=user_id, limit=500)
+    runs = await asyncio.to_thread(list_runs, user_id=user_id, agent_instance_id=current_agent_instance_id(), limit=500)
     by_email: dict[str, dict] = {}
     for record in runs:
         email_id = record.get("email_id")

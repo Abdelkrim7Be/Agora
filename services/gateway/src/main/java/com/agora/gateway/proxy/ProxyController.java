@@ -25,20 +25,23 @@ public class ProxyController {
 
     private static final String PREFIX = "/api/agent";
     private static final String USER_HEADER = "X-Agora-User";
+    private static final String AGENT_INSTANCE_HEADER = "X-Agora-Agent-Instance";
     private static final Pattern VERB_PATTERN = Pattern.compile("^/api/agent/run/[^/]+/([^/]+)$");
 
     private static final Set<String> HOP_BY_HOP = Set.of(
             "host", "connection", "content-length", "transfer-encoding",
             "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
-            USER_HEADER.toLowerCase()
+            USER_HEADER.toLowerCase(), AGENT_INSTANCE_HEADER.toLowerCase()
     );
 
     private final RestClient restClient;
     private final String upstreamBase;
     private final AuditService auditService;
+    private final String defaultAgentInstance;
 
     public ProxyController(GatewayProperties props, RestClient.Builder builder, AuditService auditService) {
         this.upstreamBase = props.getUpstream().getEmailAgentUrl();
+        this.defaultAgentInstance = props.getDefaultAgentInstance();
         this.restClient = builder.build();
         this.auditService = auditService;
     }
@@ -77,6 +80,7 @@ public class ProxyController {
         if (username != null) {
             spec = spec.header(USER_HEADER, username);
         }
+        spec = spec.header(AGENT_INSTANCE_HEADER, defaultAgentInstance);
 
         if (body.length > 0 && contentType != null) {
             spec = spec.contentType(MediaType.parseMediaType(contentType)).body(body);

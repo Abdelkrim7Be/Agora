@@ -9,12 +9,21 @@ from src.config import settings
 
 _USER_SAFE_RE = re.compile(r"[^A-Za-z0-9_.@-]+")
 _current_user_id: ContextVar[str | None] = ContextVar("current_user_id", default=None)
+_current_agent_instance_id: ContextVar[str | None] = ContextVar(
+    "current_agent_instance_id", default=None
+)
 
 
 def normalize_user_id(user_id: str | None) -> str:
     value = (user_id or settings.default_user_id).strip()
     value = _USER_SAFE_RE.sub("_", value)
     return value.strip("._-") or settings.default_user_id
+
+
+def normalize_agent_instance_id(agent_instance_id: str | None) -> str:
+    value = (agent_instance_id or settings.default_agent_instance_id).strip()
+    value = _USER_SAFE_RE.sub("_", value)
+    return value.strip("._-") or settings.default_agent_instance_id
 
 
 def resolve_user_id(external_id: str | None) -> str:
@@ -32,6 +41,10 @@ def current_user_id() -> str:
     return normalize_user_id(_current_user_id.get())
 
 
+def current_agent_instance_id() -> str:
+    return normalize_agent_instance_id(_current_agent_instance_id.get())
+
+
 @contextmanager
 def user_context(user_id: str | None) -> Iterator[str]:
     resolved = normalize_user_id(user_id)
@@ -40,3 +53,13 @@ def user_context(user_id: str | None) -> Iterator[str]:
         yield resolved
     finally:
         _current_user_id.reset(token)
+
+
+@contextmanager
+def agent_instance_context(agent_instance_id: str | None) -> Iterator[str]:
+    resolved = normalize_agent_instance_id(agent_instance_id)
+    token = _current_agent_instance_id.set(resolved)
+    try:
+        yield resolved
+    finally:
+        _current_agent_instance_id.reset(token)

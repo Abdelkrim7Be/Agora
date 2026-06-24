@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from src.config import settings
 from src import gmail_sync
-from src.tenant import user_context
+from src.tenant import agent_instance_context, user_context
 
 
 def _use_json(monkeypatch, tmp_path):
@@ -42,3 +42,23 @@ def test_baseline_uses_current_tenant_context(monkeypatch, tmp_path) -> None:
         assert gmail_sync.get_last_history_id() == "42"
 
     assert gmail_sync.get_last_history_id("carol@example.com") == "42"
+
+
+def test_baseline_round_trips_per_agent_instance(monkeypatch, tmp_path) -> None:
+    _use_json(monkeypatch, tmp_path)
+
+    gmail_sync.set_last_history_id("100", "alice@example.com", "ceo-email-agent")
+    gmail_sync.set_last_history_id("250", "alice@example.com", "hr-email-agent")
+
+    assert gmail_sync.get_last_history_id("alice@example.com", "ceo-email-agent") == "100"
+    assert gmail_sync.get_last_history_id("alice@example.com", "hr-email-agent") == "250"
+
+
+def test_baseline_uses_current_agent_instance_context(monkeypatch, tmp_path) -> None:
+    _use_json(monkeypatch, tmp_path)
+
+    with agent_instance_context("support-email-agent"):
+        gmail_sync.set_last_history_id("84", "carol@example.com")
+        assert gmail_sync.get_last_history_id("carol@example.com") == "84"
+
+    assert gmail_sync.get_last_history_id("carol@example.com") is None

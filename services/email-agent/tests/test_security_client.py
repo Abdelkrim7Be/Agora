@@ -142,6 +142,7 @@ def test_authorize_action_200_returns_verdict_and_sends_run_id(monkeypatch):
         "run_id": "run-123",
         "action_id": "call-1",
         "user_id": "default",
+        "agent_instance_id": "default-email-agent",
     }
 
 

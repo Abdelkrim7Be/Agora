@@ -42,7 +42,7 @@ from src.run_registry import (
     upsert_run,
 )
 from src.storage import open_graph_storage
-from src.tenant import current_user_id
+from src.tenant import current_agent_instance_id, current_user_id
 
 
 def ensure_watch(resource=None) -> dict | None:
@@ -117,6 +117,7 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
             email_input=email_input,
             classification=result.get("classification_decision"),
             pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+            agent_instance_id=current_agent_instance_id(),
         )
         outcomes.append((msg_id, status, run_id))
     return outcomes
@@ -136,7 +137,11 @@ async def process_message(
     # An email left UNREAD because it already has a run must not be reprocessed:
     # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
     # an approved reply the API sent but couldn't mark read) just needs housekeeping.
-    existing = find_run_by_email(message.get("id"), user_id=current_user_id())
+    existing = find_run_by_email(
+        message.get("id"),
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+    )
     if existing:
         if existing["status"] in ACTIVE_RUN_STATUSES:
             return (msg_id, existing["status"], existing["run_id"])
@@ -209,6 +214,7 @@ async def process_message(
         email_input=email_input,
         classification=result.get("classification_decision"),
         pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+        agent_instance_id=current_agent_instance_id(),
     )
     return (msg_id, outcome_status, run_id)
 

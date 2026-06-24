@@ -3,7 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.config import SERVICE_ROOT, settings
-from src.tenant import current_user_id, normalize_user_id, resolve_user_id, user_context
+from src.tenant import (
+    agent_instance_context,
+    current_agent_instance_id,
+    current_user_id,
+    normalize_agent_instance_id,
+    normalize_user_id,
+    resolve_user_id,
+    user_context,
+)
 from src.token_store import prepared_token_file, token_file_for_user
 
 
@@ -29,7 +37,7 @@ def test_user_id_is_sanitized_for_file_paths(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(settings, "tenant_mode", "multi")
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
 
-    assert token_file_for_user("../bob/team").name == "bob_team.json"
+    assert token_file_for_user("../bob/team", "../ceo/mailbox").name == "bob_team__ceo_mailbox.json"
 
 
 def test_user_context_sets_current_user() -> None:
@@ -74,3 +82,19 @@ def test_resolve_user_id_maps_external_identity(monkeypatch) -> None:
 
     assert resolve_user_id("Alice@Gmail.com") == "alice"
     assert resolve_user_id("bob@gmail.com") == "bob@gmail.com"
+
+
+def test_agent_instance_context_sets_current_instance() -> None:
+    with agent_instance_context("ceo-email-agent"):
+        assert current_agent_instance_id() == "ceo-email-agent"
+
+    assert current_agent_instance_id() == normalize_agent_instance_id(settings.default_agent_instance_id)
+
+
+def test_non_default_instance_gets_isolated_token_file(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(settings, "tenant_mode", "single")
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "gmail_tokens.json"))
+
+    path = token_file_for_user(agent_instance_id="ceo-email-agent")
+
+    assert path == tmp_path / "gmail_tokens" / "default__ceo-email-agent.json"

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.api import app, _require_run, _run_detail
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
-from src.tenant import current_user_id, normalize_user_id
+from src.tenant import current_agent_instance_id, current_user_id, normalize_user_id
 
 
 def test_run_registry_filters_by_status(tmp_path):
@@ -55,6 +55,17 @@ def test_run_registry_filters_by_user(tmp_path):
     assert runs[0]["user_id"] == "alice@example.com"
 
 
+def test_run_registry_filters_by_agent_instance(tmp_path):
+    path = tmp_path / "runs.json"
+    upsert_run("run-1", "completed", path=path, agent_instance_id="ceo-email-agent")
+    upsert_run("run-2", "completed", path=path, agent_instance_id="hr-email-agent")
+
+    runs = list_runs(path=path, agent_instance_id="ceo-email-agent")
+
+    assert [run["run_id"] for run in runs] == ["run-1"]
+    assert runs[0]["agent_instance_id"] == "ceo-email-agent"
+
+
 def test_selected_run_registry_backend_defaults_to_json(monkeypatch):
     from src.config import settings
 
@@ -77,8 +88,9 @@ def test_selected_run_registry_backend_requires_database_url(monkeypatch):
 def test_runs_endpoint_returns_registry(monkeypatch):
     captured = {}
 
-    def fake_list_runs(status=None, user_id=None, limit=None, offset=0):
+    def fake_list_runs(status=None, user_id=None, agent_instance_id=None, limit=None, offset=0):
         captured["user_id"] = user_id
+        captured["agent_instance_id"] = agent_instance_id
         captured["limit"] = limit
         captured["offset"] = offset
         return [{"run_id": "run-1", "status": status, "user_id": user_id}]
@@ -90,6 +102,7 @@ def test_runs_endpoint_returns_registry(monkeypatch):
 
     assert response.status_code == 200
     assert captured["user_id"] == "alice@example.com"
+    assert captured["agent_instance_id"] == "default-email-agent"
     assert response.json() == {
         "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": "alice@example.com"}],
         "limit": 50,
@@ -113,6 +126,7 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
         captured["resource"] = resource
         captured["max_results"] = max_results
         captured["current_user"] = current_user_id()
+        captured["current_agent_instance"] = current_agent_instance_id()
         return [("msg-1", "pending_approval", "run-1")]
 
     monkeypatch.setattr(api, "gmail_resource", fake_gmail_resource)
@@ -120,7 +134,10 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
 
     with TestClient(app) as client:
         client.app.state.graph = graph
-        response = client.post("/sync?limit=7", headers={"X-Agora-User": "owner"})
+        response = client.post(
+            "/sync?limit=7",
+            headers={"X-Agora-User": "owner", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        )
 
     assert response.status_code == 200
     assert response.json() == {"outcomes": [["msg-1", "pending_approval", "run-1"]]}
@@ -130,6 +147,7 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
         "resource": "gmail",
         "max_results": 7,
         "current_user": "owner",
+        "current_agent_instance": "ceo-email-agent",
     }
 
 
@@ -219,8 +237,8 @@ def test_memory_is_scoped_by_forwarded_user_header(monkeypatch):
         }
 
         stored_namespaces = {ns for ns, _ in client.app.state.store.values}
-        assert ("email_agent", normalize_user_id("alice@example.com"), "triage_preferences") in stored_namespaces
-        assert ("email_agent", normalize_user_id("bob@example.com"), "triage_preferences") in stored_namespaces
+        assert ("email_agent", normalize_user_id("alice@example.com"), "default-email-agent", "triage_preferences") in stored_namespaces
+        assert ("email_agent", normalize_user_id("bob@example.com"), "default-email-agent", "triage_preferences") in stored_namespaces
 
 
 def test_policy_endpoint_proxies_security_service(monkeypatch):
@@ -326,7 +344,7 @@ async def test_require_run_rejects_other_users_run(monkeypatch):
         async def aget_state(self, config):
             raise AssertionError("graph state should not be read for another user")
 
-    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: None)
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None, agent_instance_id=None: None)
 
     with pytest.raises(Exception) as exc:
         await _require_run(Graph(), "run-1")
@@ -342,7 +360,7 @@ async def test_require_run_allows_owned_run(monkeypatch):
         async def aget_state(self, config):
             return State()
 
-    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None: {"run_id": run_id})
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None, agent_instance_id=None: {"run_id": run_id})
 
     assert await _require_run(Graph(), "run-1") == {"configurable": {"thread_id": "run-1"}}
 
@@ -360,7 +378,7 @@ def test_respond_keeps_pending_when_redraft_fails(monkeypatch):
         async def ainvoke(self, command, config):
             raise RuntimeError("network unreachable")
 
-    def fake_get_run(run_id, user_id=None):
+    def fake_get_run(run_id, user_id=None, agent_instance_id=None):
         return {
             "run_id": run_id,
             "status": "pending_approval",
@@ -406,7 +424,7 @@ def test_decision_completes_from_pending_action_when_graph_fails(monkeypatch):
 
     monkeypatch.setitem(api.graph_module.tools_by_name_map, "write_email", Tool())
     monkeypatch.setattr(api, "_record_response", lambda response, email_input=None: saved.append((response, email_input)))
-    monkeypatch.setattr(api, "get_run_record", lambda run_id, user_id=None: {
+    monkeypatch.setattr(api, "get_run_record", lambda run_id, user_id=None, agent_instance_id=None: {
         "run_id": run_id,
         "status": "pending_approval",
         "classification": "respond",

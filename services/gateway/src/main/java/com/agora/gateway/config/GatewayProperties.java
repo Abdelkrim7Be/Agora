@@ -6,12 +6,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class GatewayProperties {
 
     private Upstream upstream = new Upstream();
+    private String defaultAgentInstance = "default-email-agent";
     private Jwt jwt = new Jwt();
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
 
     public Upstream getUpstream() { return upstream; }
     public void setUpstream(Upstream upstream) { this.upstream = upstream; }
+
+    public String getDefaultAgentInstance() { return defaultAgentInstance; }
+    public void setDefaultAgentInstance(String defaultAgentInstance) { this.defaultAgentInstance = defaultAgentInstance; }
 
     public Jwt getJwt() { return jwt; }
     public void setJwt(Jwt jwt) { this.jwt = jwt; }

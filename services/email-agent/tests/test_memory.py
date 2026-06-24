@@ -4,7 +4,7 @@ import pytest
 from langgraph.store.memory import InMemoryStore
 
 from src.memory import UserPreferences, get_memory, namespace, update_memory
-from src.tenant import user_context
+from src.tenant import agent_instance_context, user_context
 from tests.conftest import _FakeMemoryLLM
 
 
@@ -72,10 +72,20 @@ def test_update_memory_works_with_empty_store():
 
 def test_namespace_structure():
     ns = namespace("triage_preferences")
-    assert ns == ("email_agent", "default", "triage_preferences")
+    assert ns == (
+        "email_agent",
+        "default",
+        "default-email-agent",
+        "triage_preferences",
+    )
 
     ns2 = namespace("response_preferences")
-    assert ns2 == ("email_agent", "default", "response_preferences")
+    assert ns2 == (
+        "email_agent",
+        "default",
+        "default-email-agent",
+        "response_preferences",
+    )
 
 
 def test_namespace_uses_current_user_context():
@@ -83,8 +93,25 @@ def test_namespace_uses_current_user_context():
         assert namespace("triage_preferences") == (
             "email_agent",
             "alice@example.com",
+            "default-email-agent",
             "triage_preferences",
         )
+
+
+def test_namespace_uses_current_agent_instance_context():
+    with agent_instance_context("ceo-email-agent"):
+        assert namespace("triage_preferences") == (
+            "email_agent",
+            "default",
+            "ceo-email-agent",
+            "triage_preferences",
+        )
+
+
+def test_namespace_isolates_agent_instances():
+    assert namespace("response_preferences", agent_instance_id="ceo-email-agent") != namespace(
+        "response_preferences", agent_instance_id="hr-email-agent"
+    )
 
 
 # ---------------------------------------------------------------------------

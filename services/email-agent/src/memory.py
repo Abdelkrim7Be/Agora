@@ -3,7 +3,12 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from src.prompts import MEMORY_UPDATE_INSTRUCTIONS
-from src.tenant import current_user_id, normalize_user_id
+from src.tenant import (
+    current_agent_instance_id,
+    current_user_id,
+    normalize_agent_instance_id,
+    normalize_user_id,
+)
 
 
 class UserPreferences(BaseModel):
@@ -17,8 +22,23 @@ class UserPreferences(BaseModel):
     )
 
 
-def namespace(kind: str, user_id: str | None = None) -> tuple[str, str, str]:
-    return ("email_agent", normalize_user_id(user_id or current_user_id()), kind)
+def namespace(
+    kind: str,
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> tuple[str, str, str, str]:
+    """Memory is scoped by user and agent instance.
+
+    Existing stores keyed as ("email_agent", user_id, kind) are not copied in-place.
+    The default instance will reseed from config on first read when no instance-keyed
+    item exists, preserving single-mailbox behavior without mutating legacy rows.
+    """
+    return (
+        "email_agent",
+        normalize_user_id(user_id or current_user_id()),
+        normalize_agent_instance_id(agent_instance_id or current_agent_instance_id()),
+        kind,
+    )
 
 
 def wrap_preferences(text: str) -> dict:

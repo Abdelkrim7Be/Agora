@@ -38,6 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
+        "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",
         "gateway.owner.password=ownerpass"
 })
@@ -94,13 +95,15 @@ class ProxyControllerTest {
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + ownerToken())
                         .header("X-Agora-User", "spoofed-user")
+                        .header("X-Agora-Agent-Instance", "spoofed-instance")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"author\":\"a@b.com\",\"to\":\"me@b.com\",\"subject\":\"Hi\",\"email_thread\":\"Hello\"}"))
                 .andExpect(status().isOk())
                 .andExpect(content().json(responseBody));
 
         wireMock.verify(postRequestedFor(urlEqualTo("/run"))
-                .withHeader("X-Agora-User", equalTo("owner")));
+                .withHeader("X-Agora-User", equalTo("owner"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 
     @Test
@@ -119,7 +122,8 @@ class ProxyControllerTest {
                 .andExpect(content().json(responseBody));
 
         wireMock.verify(postRequestedFor(urlEqualTo("/sync?limit=7"))
-                .withHeader("X-Agora-User", equalTo("owner")));
+                .withHeader("X-Agora-User", equalTo("owner"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 
     @Test
@@ -136,7 +140,8 @@ class ProxyControllerTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.accepted").value(true));
 
-        wireMock.verify(postRequestedFor(urlPathEqualTo("/webhooks/gmail")));
+        wireMock.verify(postRequestedFor(urlPathEqualTo("/webhooks/gmail"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 
     @Test
