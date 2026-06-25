@@ -164,6 +164,13 @@ public class AgentRegistryService {
         return slug.isBlank() ? "agent-instance" : slug;
     }
 
+    public AgentInstance deactivate(String instanceId) {
+        AgentInstance instance = instances.findById(instanceId)
+                .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
+        instance.setStatus("inactive");
+        return instances.save(instance);
+    }
+
     public record CreateAgentInstanceRequest(
             @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
             @jakarta.validation.constraints.NotBlank @com.fasterxml.jackson.annotation.JsonProperty("agent_type") String agentType,

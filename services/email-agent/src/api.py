@@ -38,7 +38,12 @@ from src.sync_status import (
     record_success as record_sync_success,
     set_paused as set_sync_paused,
     setup_sync_status,
+    _json_update as _sync_json_update,
+    _pg_update as _sync_pg_update,
+    _resolve as _sync_resolve,
 )
+from src.run_registry import selected_run_registry_backend as _selected_run_registry_backend
+from src.token_store import delete_token
 from src.gmail_oauth import (
     build_authorization_url as build_gmail_authorization_url,
     build_state as build_gmail_oauth_state,
@@ -836,6 +841,46 @@ async def sync_resume() -> dict:
     """Resume automatic Gmail polling for the current agent instance."""
     set_sync_paused(False)
     return {"paused": False}
+
+
+@app.post("/disconnect/gmail", status_code=200)
+async def disconnect_gmail() -> dict:
+    """Revoke and delete the stored Gmail OAuth token for the current agent instance.
+
+    This disconnects the instance from Gmail. A new OAuth flow is required to reconnect.
+    The operation is irreversible — any pending runs that need Gmail access will fail
+    until the instance is reconnected.
+    """
+    user_id = current_user_id()
+    agent_instance_id = current_agent_instance_id()
+    removed = delete_token(user_id, agent_instance_id)
+    uid, iid = _sync_resolve(user_id, agent_instance_id)
+    patch = {"connection_status": "disconnected", "sync_mode": "idle"}
+    if _selected_run_registry_backend() == "postgres":
+        _sync_pg_update(uid, iid, patch)
+    else:
+        _sync_json_update(uid, iid, patch)
+    return {"disconnected": removed, "user_id": user_id, "agent_instance_id": agent_instance_id}
+
+
+@app.delete("/style", status_code=200)
+async def delete_style(request: Request) -> dict:
+    """Clear the learned writing style for the current agent instance."""
+    store = request.app.state.store
+    await store.adelete(namespace("writing_style"), "user_preferences")
+    return {"cleared": True, "namespace": "writing_style"}
+
+
+@app.delete("/memory", status_code=200)
+async def delete_memory(request: Request) -> dict:
+    """Clear all learned memory (triage preferences, response preferences, writing style)
+    for the current agent instance. This cannot be undone; the agent will reseed defaults
+    from config.yaml on the next run.
+    """
+    store = request.app.state.store
+    for kind in ("triage_preferences", "response_preferences", "writing_style"):
+        await store.adelete(namespace(kind), "user_preferences")
+    return {"cleared": True, "namespaces": ["triage_preferences", "response_preferences", "writing_style"]}
 
 
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:

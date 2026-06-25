@@ -59,6 +59,25 @@ def _encrypted_path(target: Path) -> Path:
     return target.with_name(target.name + ".enc")
 
 
+def delete_token(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> bool:
+    """Delete the stored OAuth token for the given user/instance.
+
+    Removes both the plaintext and encrypted-at-rest variants. Returns True if any
+    file was removed, False if no token was present.
+    """
+    target = token_file_for_user(user_id, agent_instance_id)
+    enc_path = _encrypted_path(target)
+    removed = False
+    for path in (target, enc_path):
+        if path.is_file():
+            path.unlink()
+            removed = True
+    return removed
+
+
 @contextmanager
 def prepared_token_file(
     user_id: str | None = None,

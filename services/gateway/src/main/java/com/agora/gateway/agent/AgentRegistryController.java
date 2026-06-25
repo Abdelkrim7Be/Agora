@@ -2,13 +2,16 @@ package com.agora.gateway.agent;
 
 import com.agora.gateway.config.GatewayProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.agora.gateway.audit.AuditService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -21,9 +24,11 @@ import java.util.Map;
 public class AgentRegistryController {
 
     private final AgentRegistryService service;
+    private final AuditService auditService;
 
-    public AgentRegistryController(AgentRegistryService service) {
+    public AgentRegistryController(AgentRegistryService service, AuditService auditService) {
         this.service = service;
+        this.auditService = auditService;
     }
 
     @GetMapping("/agents")
@@ -48,6 +53,15 @@ public class AgentRegistryController {
         AgentInstance instance = service.create(request, auth.getName());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName())));
+    }
+
+    @DeleteMapping("/agent-instances/{instanceId}")
+    public ResponseEntity<AgentInstanceResponse> deactivate(Authentication auth,
+            @PathVariable String instanceId) {
+        AgentInstance instance = service.deactivate(instanceId);
+        auditService.record(auth.getName(), role(auth), "deactivate_instance", "DELETE",
+                "/agent-instances/" + instanceId, null, "deactivated");
+        return ResponseEntity.ok(AgentInstanceResponse.from(instance, Map.of()));
     }
 
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)
