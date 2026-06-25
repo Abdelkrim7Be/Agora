@@ -181,6 +181,29 @@ class InstanceGrantTest {
     }
 
     @Test
+    void deactivated_instance_is_denied_at_proxy() throws Exception {
+        String ownerToken = login("owner", "ownerpass");
+
+        // Create an instance, then deactivate it.
+        String createBody = objectMapper.writeValueAsString(Map.of(
+                "id", "temp-deactivated", "agent_type", "email-agent", "display_name", "Temp"));
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isCreated());
+        mockMvc.perform(delete("/agent-instances/temp-deactivated")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk());
+
+        // Even an owner cannot proxy to a deactivated instance.
+        mockMvc.perform(get("/api/agent/run/xyz")
+                        .header("Authorization", "Bearer " + ownerToken)
+                        .header("X-Agora-Agent-Instance", "temp-deactivated"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void viewer_without_grant_denied_on_approve() throws Exception {
         // No grant for viewer on default instance beyond JWT viewer role.
         // ProxyController should deny because viewer tier < approver.

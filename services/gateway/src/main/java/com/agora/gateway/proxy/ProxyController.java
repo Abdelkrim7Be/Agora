@@ -173,6 +173,7 @@ public class ProxyController {
         if (requested == null || requested.isBlank()) return defaultAgentInstance;
         if (username == null) return defaultAgentInstance;
         return agentRegistryService.findInstance(requested)
+                .filter(instance -> "active".equals(instance.getStatus()))
                 .filter(instance -> agentRegistryService.canView(instance, username, role))
                 .map(instance -> requested)
                 .orElse(null);
