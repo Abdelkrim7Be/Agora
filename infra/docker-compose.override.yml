@@ -19,8 +19,9 @@ services:
     environment:
       AGENT_DRY_RUN: "false"
       AGENT_POLL_INTERVAL_MIN: "0.333"
+      GMAIL_TOKEN_PATH: /app/data/token.json
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
     volumes:
-      - ../services/email-agent/token.json:/app/token.json
       - ../services/email-agent/credentials.json:/app/credentials.json
 
   # Live demo poller: watches agora.test.inbox and turns real incoming mail into
@@ -42,17 +43,19 @@ services:
       # runs it creates are visible to that user and it resolves /app/token.json.
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      GMAIL_CREDENTIALS_PATH: credentials.json
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_DRY_RUN: "false"
       AGENT_POLL_INTERVAL_MIN: "0.333"
+      GMAIL_TOKEN_PATH: /app/data/token.json
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
       GMAIL_POLLING_FALLBACK_ENABLED: "true"
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
     volumes:
       - agent_data:/app/data
-      - ../services/email-agent/token.json:/app/token.json
       - ../services/email-agent/credentials.json:/app/credentials.json
     depends_on:
       postgres:

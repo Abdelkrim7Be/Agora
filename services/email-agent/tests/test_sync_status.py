@@ -30,13 +30,13 @@ def test_record_success_sets_connected(monkeypatch, tmp_path):
     assert s["last_error"] is None
 
 
-def test_record_failure_sets_error(monkeypatch, tmp_path):
+def test_record_failure_sets_product_safe_error(monkeypatch, tmp_path):
     _use_json(monkeypatch, tmp_path)
     sync_status.record_failure("Connection refused", "alice@example.com", "default-email-agent")
     s = sync_status.get_status("alice@example.com", "default-email-agent")
     assert s["connection_status"] == "error"
     assert s["last_failure_at"] is not None
-    assert "Connection refused" in s["last_error"]
+    assert s["last_error"] == "Gmail sync failed. Check service logs for details."
 
 
 def test_auth_error_sets_expired(monkeypatch, tmp_path):
@@ -44,6 +44,7 @@ def test_auth_error_sets_expired(monkeypatch, tmp_path):
     sync_status.record_failure("invalid_grant: Token has been expired", "alice@example.com", "default-email-agent")
     s = sync_status.get_status("alice@example.com", "default-email-agent")
     assert s["connection_status"] == "expired"
+    assert s["last_error"] == "Gmail authorization expired or was revoked. Reconnect Gmail."
 
 
 def test_record_success_clears_error(monkeypatch, tmp_path):
@@ -113,9 +114,11 @@ def test_uses_tenant_context(monkeypatch, tmp_path):
     assert sync_status.get_status("carol@example.com", "ceo-email-agent")["connection_status"] == "disconnected"
 
 
-def test_error_truncated_to_500_chars(monkeypatch, tmp_path):
+def test_provider_rate_limit_error_is_sanitized(monkeypatch, tmp_path):
     _use_json(monkeypatch, tmp_path)
-    long_error = "x" * 1000
-    sync_status.record_failure(long_error, "alice@example.com", "default-email-agent")
+    raw_error = "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.3-70b-versatile` in organization `org_secret`'}}"
+    sync_status.record_failure(raw_error, "alice@example.com", "default-email-agent")
     s = sync_status.get_status("alice@example.com", "default-email-agent")
-    assert len(s["last_error"]) == 500
+    assert s["last_error"] == "AI provider rate limit reached. Wait a few minutes and try again."
+    assert "llama" not in s["last_error"]
+    assert "org_secret" not in s["last_error"]

@@ -217,8 +217,32 @@ def record_success(
         patch["watch_expires_at"] = watch_expires_at
     if selected_run_registry_backend() == "postgres":
         _pg_update(uid, iid, patch)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE email_agent_sync
+                    SET last_error = NULL, last_failure_at = NULL, updated_at = NOW()
+                    WHERE user_id = %s AND agent_instance_id = %s
+                    """,
+                    (uid, iid),
+                )
     else:
         _json_update(uid, iid, patch)
+
+
+
+
+def public_error_message(error: str) -> str:
+    raw = str(error or "")
+    lowered = raw.lower()
+    if "rate_limit" in lowered or "rate limit" in lowered or "429" in lowered:
+        return "AI provider rate limit reached. Wait a few minutes and try again."
+    if "invalid_grant" in lowered or "expired or revoked" in lowered or "token has been expired" in lowered:
+        return "Gmail authorization expired or was revoked. Reconnect Gmail."
+    if "could not locate runnable browser" in lowered or "oauth" in lowered or "credentials" in lowered:
+        return "Gmail sync is unavailable. Check the Gmail connection settings."
+    return "Gmail sync failed. Check service logs for details."
 
 
 def record_failure(
@@ -231,7 +255,7 @@ def record_failure(
     patch = {
         "connection_status": status,
         "last_failure_at": _now(),
-        "last_error": str(error)[:500],
+        "last_error": public_error_message(error),
     }
     if selected_run_registry_backend() == "postgres":
         _pg_update(uid, iid, patch)

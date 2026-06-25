@@ -278,6 +278,31 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
     assert captured["resource"] == "gmail-resource"
 
 
+
+
+def test_style_learn_returns_retryable_rate_limit_error(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=True))
+    monkeypatch.setattr(api, "gmail_resource", lambda user_id=None: "gmail-resource")
+    monkeypatch.setattr(api, "fetch_sent", lambda max_messages, resource=None: [
+        {"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}
+    ])
+
+    def fake_analyze_style(samples, llm):
+        raise RuntimeError("Error code: 429 - rate_limit_exceeded")
+
+    monkeypatch.setattr(api, "analyze_style", fake_analyze_style)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/style/learn",
+            headers={"X-Agora-User": "alice@example.com", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        )
+
+    assert response.status_code == 429
+    assert "rate limit" in response.json()["detail"].lower()
+
 def test_cost_summary_endpoint_uses_current_user_and_instance(monkeypatch):
     import src.api as api
 

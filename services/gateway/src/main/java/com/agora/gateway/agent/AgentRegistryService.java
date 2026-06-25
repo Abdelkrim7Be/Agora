@@ -60,6 +60,7 @@ public class AgentRegistryService {
 
     public List<AgentInstance> visibleInstances(String username, String role) {
         return instances.findAll().stream()
+                .filter(instance -> !"inactive".equalsIgnoreCase(instance.getStatus()))
                 .filter(instance -> canView(instance, username, role))
                 .toList();
     }

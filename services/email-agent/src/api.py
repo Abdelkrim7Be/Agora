@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import html
 import json
 import uuid
 
@@ -10,6 +11,7 @@ import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -34,6 +36,7 @@ from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
 from src.sync_status import (
     get_status as get_sync_status,
+    public_error_message as public_sync_error_message,
     record_failure as record_sync_failure,
     record_success as record_sync_success,
     set_paused as set_sync_paused,
@@ -520,22 +523,48 @@ async def gmail_connect_start(instance_id: str, request: Request) -> GmailConnec
     )
 
 
-@app.get("/connect/gmail/callback", response_model=GmailConnectCallbackResponse)
-async def gmail_connect_callback(code: str | None = None, state: str | None = None) -> GmailConnectCallbackResponse:
+def _gmail_callback_page(status: str, message: str, payload: dict | None = None) -> HTMLResponse:
+    body = json.dumps({"type": "agora:gmail-oauth", "status": status, "message": message, "payload": payload or {}})
+    code = 200 if status == "connected" else 400
+    page_html = f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Gmail connection</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0b1326;color:#dae2fd;display:grid;place-items:center;min-height:100vh;margin:0">
+  <p>{html.escape(message)}</p>
+  <script>
+    const result = {body};
+    if (window.opener) {{
+      window.opener.postMessage(result, "*");
+      window.close();
+    }} else {{
+      window.location.replace('/');
+    }}
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(page_html, status_code=code)
+
+
+@app.get("/connect/gmail/callback", response_class=HTMLResponse)
+async def gmail_connect_callback(code: str | None = None, state: str | None = None) -> HTMLResponse:
     if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing Gmail OAuth code or state")
+        return _gmail_callback_page("error", "Missing Gmail OAuth code or state.")
     try:
         payload = validate_gmail_oauth_state(state)
         exchange_gmail_oauth_code(code, payload)
+        record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _gmail_callback_page("error", str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return GmailConnectCallbackResponse(
-        status="connected",
-        agent_instance_id=payload["agent_instance_id"],
-        user_id=payload["user_id"],
-        mailbox_identity=payload.get("mailbox_identity") or None,
+        return _gmail_callback_page("error", str(exc))
+    return _gmail_callback_page(
+        "connected",
+        "Gmail connected. You can close this window.",
+        {
+            "agent_instance_id": payload["agent_instance_id"],
+            "user_id": payload["user_id"],
+            "mailbox_identity": payload.get("mailbox_identity") or None,
+        },
     )
 
 
@@ -739,7 +768,13 @@ async def learn_style(request: Request) -> dict:
     try:
         profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
     except Exception as exc:
+        message = str(exc)
         print(f"api: style learning analysis failed for user {user_id}: {exc}")
+        if "rate_limit" in message or "429" in message or "Rate limit" in message:
+            raise HTTPException(
+                status_code=429,
+                detail="Style learning hit the LLM rate limit. Wait a few seconds and try again.",
+            ) from exc
         raise HTTPException(status_code=503, detail="Style analysis failed with the configured LLM") from exc
     writing_style = build_style_text(profile)
     await request.app.state.store.aput(
@@ -815,10 +850,9 @@ async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=
     except Exception as exc:
         print(f"api: gmail sync failed for user {user_id}: {exc}")
         record_sync_failure(str(exc))
-        raise HTTPException(
-            status_code=503,
-            detail=f"Gmail sync failed: {type(exc).__name__}: {exc}",
-        ) from exc
+        detail = public_sync_error_message(str(exc))
+        status_code = 429 if "rate limit" in detail.lower() else 503
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     record_sync_success("manual")
     return {"outcomes": outcomes}
 

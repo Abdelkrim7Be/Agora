@@ -87,6 +87,7 @@ def _flow():
         str(SERVICE_ROOT / settings.gmail_credentials_path),
         scopes=GMAIL_SCOPES,
         redirect_uri=settings.gmail_oauth_redirect_uri,
+        autogenerate_code_verifier=False,
     )
 
 

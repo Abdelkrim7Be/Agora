@@ -26,11 +26,12 @@ class _FakeFlow:
         self.fetch_code = None
 
     @classmethod
-    def from_client_secrets_file(cls, client_secrets_file, scopes, redirect_uri):
+    def from_client_secrets_file(cls, client_secrets_file, scopes, redirect_uri, **kwargs):
         flow = cls()
         flow.client_secrets_file = client_secrets_file
         flow.scopes = scopes
         flow.redirect_uri = redirect_uri
+        flow.kwargs = kwargs
         cls.last = flow
         return flow
 
@@ -67,6 +68,7 @@ def test_gmail_connect_start_builds_signed_offline_consent_url(monkeypatch):
     assert body["agent_instance_id"] == "ceo-email-agent"
     assert "https://mail.google.com/" in body["scopes"]
     assert _FakeFlow.last.redirect_uri == "https://gateway.example/api/agent/connect/gmail/callback"
+    assert _FakeFlow.last.kwargs["autogenerate_code_verifier"] is False
 
 
 def test_gmail_connect_callback_rejects_bad_state(monkeypatch):
@@ -76,7 +78,8 @@ def test_gmail_connect_callback_rejects_bad_state(monkeypatch):
         response = client.get("/connect/gmail/callback?code=abc&state=bad-state")
 
     assert response.status_code == 400
-    assert "Invalid OAuth state" in response.json()["detail"]
+    assert "Invalid OAuth state" in response.text
+    assert "agora:gmail-oauth" in response.text
 
 
 def test_gmail_connect_callback_exchanges_valid_state(monkeypatch):
@@ -96,12 +99,9 @@ def test_gmail_connect_callback_exchanges_valid_state(monkeypatch):
         response = client.get(f"/connect/gmail/callback?code=abc123&state={state}")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "connected",
-        "agent_instance_id": "ceo-email-agent",
-        "user_id": "owner@example.com",
-        "mailbox_identity": "ceo@example.com",
-    }
+    assert "agora:gmail-oauth" in response.text
+    assert "Gmail connected" in response.text
+    assert "ceo-email-agent" in response.text
     assert captured["code"] == "abc123"
     assert captured["payload"]["agent_instance_id"] == "ceo-email-agent"
 

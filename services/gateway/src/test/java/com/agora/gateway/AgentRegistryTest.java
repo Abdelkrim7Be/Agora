@@ -21,6 +21,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -150,6 +151,39 @@ class AgentRegistryTest {
                 .andExpect(jsonPath("$.id").value("ceo-email-agent"))
                 .andExpect(jsonPath("$.mailbox_identity").value("ceo@example.com"))
                 .andExpect(jsonPath("$.created_by").value("owner"));
+    }
+
+    @Test
+    void deleted_agent_instance_is_hidden_from_directory() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"drafts\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
+
+        String token = login("owner", "ownerpass");
+        String body = objectMapper.writeValueAsString(Map.of(
+                "id", "delete-me-email-agent",
+                "agent_type", "email-agent",
+                "display_name", "Delete Me Email Agent",
+                "mailbox_identity", "delete-me@example.com"
+        ));
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(delete("/agent-instances/delete-me-email-agent")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("inactive"));
+
+        mockMvc.perform(get("/agent-instances")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == 'delete-me-email-agent')]").isEmpty());
     }
 
     @Test

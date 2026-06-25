@@ -110,7 +110,7 @@ class StyleLearningConfig(BaseModel):
     """Opt-in style learning from the selected mailbox's sent mail."""
 
     enabled: bool = False
-    max_samples: int = Field(default=50, ge=1, le=200)
+    max_samples: int = Field(default=8, ge=1, le=50)
 
 
 class AutoOrganizeConfig(BaseModel):

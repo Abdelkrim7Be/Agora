@@ -57,5 +57,5 @@ auto_organize:
   ignored_label: Auto/Ignored
 
 style_learning:
-  enabled: false
-  max_samples: 50
+  enabled: true
+  max_samples: 8

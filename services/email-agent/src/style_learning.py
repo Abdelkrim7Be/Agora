@@ -25,8 +25,11 @@ include raw email bodies or private examples in the profile.
 """.strip()
 
 
+MAX_STYLE_SAMPLE_CHARS = 1200
+
+
 def _sample_block(sample: dict) -> str:
-    body = str(sample.get("body") or "")[:4000]
+    body = str(sample.get("body") or "")[:MAX_STYLE_SAMPLE_CHARS]
     return (
         f"To: {sample.get('to', '')}\n"
         f"Subject: {sample.get('subject', '')}\n"
