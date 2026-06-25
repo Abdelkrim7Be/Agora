@@ -14,6 +14,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from src.config import settings
+from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
 from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src import graph as graph_module
@@ -67,6 +68,7 @@ async def _watch_renewal_loop() -> None:
 async def lifespan(app: FastAPI):
     setup_run_registry()
     setup_gmail_sync()
+    setup_cost_tracker()
     async with open_graph_storage() as storage:
         # The graph's nodes are sync, so LangGraph runs them in a threadpool where
         # sync store.get/put works. A future ASYNC node must use aget/aput instead.
@@ -489,6 +491,29 @@ async def update_preferences(request: Request, body: MemoryInput) -> dict:
     return {
         "triage_preferences": body.triage_preferences,
         "response_preferences": body.response_preferences,
+    }
+
+
+@app.get("/costs/summary")
+async def cost_summary(period: str = Query(default="session")) -> dict:
+    if period not in {"session", "day", "month"}:
+        raise HTTPException(status_code=422, detail="period must be one of: session, day, month")
+    return summarize_costs(
+        period,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+    )
+
+
+@app.get("/costs")
+async def costs(limit: int = Query(default=100, ge=1, le=500)) -> dict:
+    return {
+        "costs": list_costs(
+            user_id=current_user_id(),
+            agent_instance_id=current_agent_instance_id(),
+            limit=limit,
+        ),
+        "limit": limit,
     }
 
 

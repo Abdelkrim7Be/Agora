@@ -182,9 +182,9 @@ def test_reject_memory_messages_have_no_dangling_tool_call(fake_llms, monkeypatc
     captured = {}
     real_update = g.update_memory
 
-    def spy(store, ns, messages, llm):
+    def spy(store, ns, messages, llm, invoke_config=None):
         captured["messages"] = messages
-        return real_update(store, ns, messages, llm)
+        return real_update(store, ns, messages, llm, invoke_config)
 
     monkeypatch.setattr(g, "update_memory", spy)
 

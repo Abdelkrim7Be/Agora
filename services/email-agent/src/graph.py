@@ -24,6 +24,7 @@ from src.capabilities import (
     tools_by_name,
 )
 from src.config import load_config, settings
+from src.cost_tracker import llm_invoke_config
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.security_client import authorize_action
@@ -38,11 +39,12 @@ from src.utils import format_draft_markdown, format_email_markdown, parse_email
 
 load_dotenv()
 
-config = load_config()
+agent_config = load_config()
+config = agent_config
 
-tools, tools_prompt = load_capabilities(config.capabilities)
+tools, tools_prompt = load_capabilities(agent_config.capabilities)
 tools_by_name_map = tools_by_name(tools)
-approval_set = approval_required(config.capabilities)
+approval_set = approval_required(agent_config.capabilities)
 
 llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
 llm_router = llm.with_structured_output(RouterSchema)
@@ -168,25 +170,35 @@ def automation_router(
     return Command(goto="triage_router")
 
 
-def llm_call(state: State, store: BaseStore):
+def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
+    try:
+        return llm_obj.invoke(messages, config=invoke_config)
+    except TypeError as exc:
+        if "config" not in str(exc):
+            raise
+        return llm_obj.invoke(messages)
+
+
+def llm_call(state: State, store: BaseStore, config=None):
     """LLM decides which tool to call to handle the email."""
     response_prefs = get_memory(
         store,
         namespace("response_preferences"),
-        config.agent.response_preferences,
+        agent_config.agent.response_preferences,
     )
     messages = [
         {
             "role": "system",
             "content": agent_system_prompt.format(
                 tools_prompt=tools_prompt,
-                background=config.agent.background,
+                background=agent_config.agent.background,
                 response_preferences=response_prefs,
             ),
         }
     ] + state["messages"]
+    run_id = _run_id_from_config(config)
     try:
-        response = llm_with_tools.invoke(messages)
+        response = _invoke_llm(llm_with_tools, messages, llm_invoke_config(run_id, "llm_call"))
     except Exception as exc:
         response = _recover_tool_call_from_failed_generation(exc)
         if response is None:
@@ -394,6 +406,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                         ),
                     }],
                     llm_memory,
+                    llm_invoke_config(run_id, "memory"),
                 )
                 _suggest_rule("ignored_draft", {"tool": name})
                 continue
@@ -423,6 +436,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                         ),
                     }],
                     llm_memory,
+                    llm_invoke_config(run_id, "memory"),
                 )
                 _suggest_rule("draft_feedback", {"tool": name, "feedback": feedback})
                 continue
@@ -450,6 +464,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                             ),
                         }],
                         llm_memory,
+                        llm_invoke_config(run_id, "memory"),
                     )
                     _suggest_rule(
                         "edited_draft",
@@ -570,7 +585,7 @@ def should_continue(state: State) -> Literal["environment", "force_redraft", "__
 
 
 def triage_router(
-    state: State, store: BaseStore
+    state: State, store: BaseStore, config=None
 ) -> Command[Literal["llm_call", "environment", "__end__"]]:
     """Classify the email as ignore / notify / respond and route accordingly."""
     sec = state["email_input"].get("security")
@@ -585,11 +600,11 @@ def triage_router(
     triage_instructions = get_memory(
         store,
         namespace("triage_preferences"),
-        config.agent.triage_instructions,
+        agent_config.agent.triage_instructions,
     )
 
     system_prompt = triage_system_prompt.format(
-        background=config.agent.background,
+        background=agent_config.agent.background,
         triage_instructions=triage_instructions,
     )
     user_prompt = triage_user_prompt.format(
@@ -598,11 +613,14 @@ def triage_router(
     )
     email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
 
-    result = llm_router.invoke(
+    run_id = _run_id_from_config(config)
+    result = _invoke_llm(
+        llm_router,
         [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ]
+        ],
+        llm_invoke_config(run_id, "triage"),
     )
 
     classification = result.classification

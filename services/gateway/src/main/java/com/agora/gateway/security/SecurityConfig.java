@@ -54,6 +54,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/costs").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/costs/**").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/runs").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/inbox").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/archive").hasRole("OWNER")

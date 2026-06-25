@@ -73,22 +73,37 @@ def get_memory(store, ns: tuple, default_content: str) -> str:
     return default_content
 
 
-def update_memory(store, ns: tuple, messages: list, llm) -> None:
+def _invoke_memory_llm(llm, messages: list, invoke_config: dict | None):
+    if invoke_config is None:
+        return llm.invoke(messages)
+    try:
+        return llm.invoke(messages, config=invoke_config)
+    except TypeError as exc:
+        if "config" not in str(exc):
+            raise
+        return llm.invoke(messages)
+
+
+def update_memory(
+    store,
+    ns: tuple,
+    messages: list,
+    llm,
+    invoke_config: dict | None = None,
+) -> None:
     """Synthesize feedback from messages and write updated preferences back to store."""
     item = store.get(ns, "user_preferences")
     current = preferences_text(item.value) if item else ""
+    prompt_messages = [
+        {
+            "role": "system",
+            "content": MEMORY_UPDATE_INSTRUCTIONS.format(
+                current_profile=current, namespace=ns
+            ),
+        }
+    ] + messages
     try:
-        result = llm.invoke(
-            [
-                {
-                    "role": "system",
-                    "content": MEMORY_UPDATE_INSTRUCTIONS.format(
-                        current_profile=current, namespace=ns
-                    ),
-                }
-            ]
-            + messages
-        )
+        result = _invoke_memory_llm(llm, prompt_messages, invoke_config)
     except Exception as exc:
         print(f"memory: preference update skipped: {exc}")
         return

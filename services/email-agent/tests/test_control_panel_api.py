@@ -85,6 +85,69 @@ def test_selected_run_registry_backend_requires_database_url(monkeypatch):
         selected_run_registry_backend()
 
 
+def test_cost_summary_endpoint_uses_current_user_and_instance(monkeypatch):
+    import src.api as api
+
+    captured = {}
+
+    def fake_summary(period, user_id=None, agent_instance_id=None):
+        captured["period"] = period
+        captured["user_id"] = user_id
+        captured["agent_instance_id"] = agent_instance_id
+        return {"period": period, "totals": {"calls": 0}}
+
+    monkeypatch.setattr(api, "summarize_costs", fake_summary)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/costs/summary?period=day",
+            headers={"X-Agora-User": "alice@example.com", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        )
+
+    assert response.status_code == 200
+    assert captured == {
+        "period": "day",
+        "user_id": "alice@example.com",
+        "agent_instance_id": "ceo-email-agent",
+    }
+    assert response.json()["period"] == "day"
+
+
+def test_costs_endpoint_returns_current_instance_entries(monkeypatch):
+    import src.api as api
+
+    captured = {}
+
+    def fake_list_costs(user_id=None, agent_instance_id=None, limit=100):
+        captured["user_id"] = user_id
+        captured["agent_instance_id"] = agent_instance_id
+        captured["limit"] = limit
+        return [{"run_id": "run-1", "cost_eur": 0.01}]
+
+    monkeypatch.setattr(api, "list_costs", fake_list_costs)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/costs?limit=7",
+            headers={"X-Agora-User": "alice@example.com", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        )
+
+    assert response.status_code == 200
+    assert captured == {
+        "user_id": "alice@example.com",
+        "agent_instance_id": "ceo-email-agent",
+        "limit": 7,
+    }
+    assert response.json() == {"costs": [{"run_id": "run-1", "cost_eur": 0.01}], "limit": 7}
+
+
+def test_cost_summary_endpoint_rejects_unknown_period():
+    with TestClient(app) as client:
+        response = client.get("/costs/summary?period=year")
+
+    assert response.status_code == 422
+
+
 def test_runs_endpoint_returns_registry(monkeypatch):
     captured = {}
 

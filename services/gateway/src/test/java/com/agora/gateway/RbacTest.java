@@ -143,6 +143,32 @@ class RbacTest {
     }
 
     @Test
+    void owner_can_read_cost_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"period\":\"session\"}")));
+
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.period").value("session"));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+    @Test
+    void viewer_cannot_read_cost_summary_403() throws Exception {
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+    @Test
     void owner_denied_on_unenumerated_route() throws Exception {
         // default-deny: even an owner cannot reach an agent route that isn't explicitly allowed
         mockMvc.perform(post("/api/agent/run/abc/unknownverb")

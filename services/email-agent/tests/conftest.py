@@ -23,7 +23,7 @@ class _FakeRouter:
     def __init__(self, classification: str):
         self._classification = classification
 
-    def invoke(self, _messages):
+    def invoke(self, _messages, config=None):
         return SimpleNamespace(classification=self._classification)
 
 
@@ -32,7 +32,7 @@ class _FakeToolLLM:
         self._sequence = list(sequence)
         self._i = 0
 
-    def invoke(self, _messages):
+    def invoke(self, _messages, config=None):
         msg = self._sequence[min(self._i, len(self._sequence) - 1)]
         self._i += 1
         return msg
@@ -44,7 +44,7 @@ class _FakeMemoryLLM:
     def __init__(self, preference_text: str = "updated preference"):
         self._pref = preference_text
 
-    def invoke(self, _messages):
+    def invoke(self, _messages, config=None):
         return UserPreferences(
             chain_of_thought="fake reasoning",
             user_preferences=self._pref,
