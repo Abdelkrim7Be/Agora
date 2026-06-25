@@ -200,6 +200,24 @@ class RbacTest {
 
 
 
+
+
+    @Test
+    void viewer_can_read_contacts() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/contacts"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"contacts\":[]}")));
+
+        mockMvc.perform(get("/api/agent/contacts")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contacts").isArray());
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/contacts")));
+    }
+
     @Test
     void viewer_can_read_drafts() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/drafts"))

@@ -450,7 +450,7 @@ async def health() -> dict:
 
 @app.get("/categories")
 async def get_categories() -> dict:
-    cfg = load_categories(agent_instance_id=current_agent_instance_id())
+    cfg = load_categories(DEFAULT_CATEGORIES_PATH, agent_instance_id=current_agent_instance_id())
     return {
         "agent_instance_id": current_agent_instance_id(),
         "categories_yaml": DEFAULT_CATEGORIES_PATH.read_text() if DEFAULT_CATEGORIES_PATH.is_file() else dump_categories(cfg),
@@ -477,10 +477,20 @@ async def update_categories(body: CategoriesInput) -> dict:
 
 @app.get("/templates")
 async def get_templates() -> dict:
-    cfg = load_categories(agent_instance_id=current_agent_instance_id())
+    cfg = load_categories(DEFAULT_CATEGORIES_PATH, agent_instance_id=current_agent_instance_id())
     return {
         "agent_instance_id": current_agent_instance_id(),
         "templates": [template.model_dump() for template in cfg.templates],
+        "storage": "default-instance-yaml",
+    }
+
+
+@app.get("/contacts")
+async def get_contacts() -> dict:
+    cfg = load_categories(DEFAULT_CATEGORIES_PATH, agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "contacts": [contact.model_dump() for contact in cfg.contacts],
         "storage": "default-instance-yaml",
     }
 

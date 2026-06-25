@@ -11,6 +11,40 @@ from src.tenant import current_agent_instance_id, current_user_id
 
 
 
+
+def test_contacts_endpoint_returns_configured_contacts(monkeypatch, tmp_path):
+    import src.api as api
+
+    path = tmp_path / "categories.yaml"
+    path.write_text("""enabled: true
+categories: []
+templates: []
+contacts:
+  - email: vip@example.com
+    category: support
+    display_name: VIP
+    priority: urgent
+""")
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+
+    with TestClient(app) as client:
+        response = client.get("/contacts", headers={"X-Agora-Agent-Instance": "ceo-email-agent"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "agent_instance_id": "ceo-email-agent",
+        "contacts": [
+            {
+                "email": "vip@example.com",
+                "category": "support",
+                "display_name": "VIP",
+                "priority": "urgent",
+            }
+        ],
+        "storage": "default-instance-yaml",
+    }
+
+
 def test_drafts_endpoint_filters_category_and_priority(monkeypatch):
     import src.api as api
 
