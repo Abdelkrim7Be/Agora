@@ -14,6 +14,8 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
+import re as _re
+
 from src.automation import load_rules as load_automation_rules, suggest_rule_from_correction
 from src.capabilities import (
     approval_required,
@@ -25,7 +27,7 @@ from src.capabilities import (
 )
 from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config
-from src.categories import auto_draft_tool_call, classify_category, load_categories
+from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.security_client import authorize_action
@@ -149,7 +151,7 @@ def reload_config() -> None:
 
 def automation_router(
     state: State, store: BaseStore
-) -> Command[Literal["environment", "triage_router", "__end__"]]:
+) -> Command[Literal["environment", "category_router", "__end__"]]:
     """Execute deterministic poller-provided automation before LLM triage."""
     automation = state["email_input"].get("automation") or {}
     terminal_status = automation.get("terminal_status")
@@ -168,7 +170,125 @@ def automation_router(
         return Command(goto="environment", update=update)
     if terminal_status == "notify":
         return Command(goto=END, update={"classification_decision": "notify"})
-    return Command(goto="triage_router")
+    return Command(goto="category_router")
+
+
+def category_router(
+    state: State,
+) -> Command[Literal["environment", "triage_router", "llm_call", "__end__"]]:
+    """Deterministic category routing before the triage LLM.
+
+    Classifies the email against configured categories. When a policy matches,
+    handles it directly (auto_draft, organize, notify, ignore) so the triage LLM
+    call is skipped entirely. Unmatched emails fall through to triage_router with
+    the category context already in state for the LLM to refine (B4).
+    """
+    categories_config = load_categories()
+    category_meta = classify_category(state["email_input"], categories_config)
+
+    cat = category_meta.get("category")
+    policy = category_meta.get("policy")
+    matched_contact = category_meta.get("contact")
+
+    category_update = {
+        "category": cat,
+        "category_display_name": category_meta.get("category_display_name"),
+        "priority": category_meta.get("priority") or "normal",
+        "template": category_meta.get("template"),
+        "category_policy": policy,
+    }
+
+    if not cat or not policy:
+        return Command(goto="triage_router", update=category_update)
+
+    if policy == "auto_draft":
+        template_tool_call = auto_draft_tool_call(
+            state["email_input"], categories_config, cat, contact=matched_contact
+        )
+        if template_tool_call is not None:
+            content = template_tool_call["args"].get("content", "")
+            remaining_vars = unresolved_vars(content)
+            author, to, subject, email_thread = parse_email(state["email_input"])
+            atts = state["email_input"].get("attachments") or []
+            email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
+            if remaining_vars:
+                print(f"📧 Category '{cat}': template has unresolved vars {remaining_vars}, routing to LLM for finalization")
+                return Command(
+                    goto="llm_call",
+                    update={
+                        "classification_decision": "respond",
+                        **category_update,
+                        "messages": [{
+                            "role": "user",
+                            "content": (
+                                f"This email matches the '{cat}' category. Draft a response using this "
+                                f"template as a starting point:\n\n"
+                                f"To: {template_tool_call['args']['to']}\n"
+                                f"Subject: {template_tool_call['args']['subject']}\n"
+                                f"Content: {content}\n\n"
+                                f"Fill in the unresolved placeholders "
+                                f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
+                                f"from the email context below, then call write_email:\n\n{email_markdown}"
+                            ),
+                        }],
+                    },
+                )
+            print(f"📧 Category '{cat}': auto-draft from template")
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "respond",
+                    **category_update,
+                    "messages": [
+                        {"role": "user", "content": f"Draft from category template for email: {email_markdown}"},
+                        AIMessage(content="", tool_calls=[template_tool_call]),
+                    ],
+                },
+            )
+        # auto_draft policy but no template resolved → fall through to triage
+        return Command(goto="triage_router", update=category_update)
+
+    if policy == "organize":
+        if "apply_label" not in tools_by_name_map or "archive_email" not in tools_by_name_map:
+            print(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
+            return Command(goto="triage_router", update=category_update)
+        cat_obj = next((c for c in categories_config.categories if c.name == cat), None)
+        labels = (cat_obj.labels if cat_obj and cat_obj.labels else [cat])
+        org_tool_calls = [
+            {"name": "apply_label", "args": {"label": label}, "id": f"org_label_{i}", "type": "tool_call"}
+            for i, label in enumerate(labels)
+        ] + [{"name": "archive_email", "args": {}, "id": "org_archive", "type": "tool_call"}]
+        print(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "ignore",
+                **category_update,
+                "auto_organized": True,
+                "messages": [AIMessage(content="", tool_calls=org_tool_calls)],
+            },
+        )
+
+    if policy == "notify":
+        print(f"🔔 Category '{cat}': notify policy, terminating")
+        return Command(goto=END, update={"classification_decision": "notify", **category_update})
+
+    if policy == "ignore":
+        print(f"🚫 Category '{cat}': ignore policy")
+        if _can_auto_organize():
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "ignore",
+                    **category_update,
+                    "auto_organized": True,
+                    "messages": [_auto_organize_message()],
+                },
+            )
+        return Command(goto=END, update={"classification_decision": "ignore", **category_update})
+
+    # Unknown or unhandled policy → fall through
+    return Command(goto="triage_router", update=category_update)
 
 
 def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
@@ -594,7 +714,12 @@ def should_continue(state: State) -> Literal["environment", "force_redraft", "__
 def triage_router(
     state: State, store: BaseStore, config=None
 ) -> Command[Literal["llm_call", "environment", "__end__"]]:
-    """Classify the email as ignore / notify / respond and route accordingly."""
+    """Classify the email as ignore / notify / respond and route accordingly.
+
+    Category classification is already done by category_router. This node runs
+    the triage LLM on emails that did not match a deterministic category policy.
+    When categories are configured, the LLM may also tag one (B4 fallback).
+    """
     sec = state["email_input"].get("security")
     if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
         print("🛡️ Classification: NOTIFY - forced by security (injection or classifier unavailable)")
@@ -610,9 +735,27 @@ def triage_router(
         agent_config.agent.triage_instructions,
     )
 
+    # Build optional category section for B4 LLM fallback tagging.
+    categories_config = load_categories()
+    pre_classified_category = state.get("category")
+    if categories_config.enabled and categories_config.categories and not pre_classified_category:
+        cat_lines = "\n".join(
+            f"- {c.name}: {c.display_name}" for c in categories_config.categories
+        )
+        category_section = (
+            "\n< Email Categories >\n"
+            "If this email clearly fits one of the categories below and no rule matched it, "
+            "include the category name in your response. Leave it null if unsure.\n"
+            f"{cat_lines}\n"
+            "</ Email Categories >"
+        )
+    else:
+        category_section = ""
+
     system_prompt = triage_system_prompt.format(
         background=agent_config.agent.background,
         triage_instructions=triage_instructions,
+        category_section=category_section,
     )
     user_prompt = triage_user_prompt.format(
         author=author, to=to, subject=subject, email_thread=email_thread,
@@ -631,36 +774,20 @@ def triage_router(
     )
 
     classification = result.classification
-    categories_config = load_categories()
-    category_meta = classify_category(state["email_input"], categories_config)
-    category_update = {
-        "category": category_meta.get("category"),
-        "category_display_name": category_meta.get("category_display_name"),
-        "priority": category_meta.get("priority") or "normal",
-        "template": category_meta.get("template"),
-        "category_policy": category_meta.get("policy"),
-    }
-    template_tool_call = auto_draft_tool_call(
-        state["email_input"],
-        categories_config,
-        category_meta.get("category"),
-    )
-    if template_tool_call is not None:
-        print("📧 Classification: RESPOND - category template draft requires approval")
-        return Command(
-            goto="environment",
-            update={
-                "classification_decision": "respond",
-                **category_update,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"Draft from category template for email: {email_markdown}",
-                    },
-                    AIMessage(content="", tool_calls=[template_tool_call]),
-                ],
-            },
-        )
+
+    # Merge LLM-suggested category (B4) only when category_router found no match.
+    category_update: dict = {}
+    if not pre_classified_category and result.category:
+        category_by_name = {c.name: c for c in categories_config.categories}
+        if result.category in category_by_name:
+            c = category_by_name[result.category]
+            category_update = {
+                "category": c.name,
+                "category_display_name": c.display_name,
+                "priority": c.priority,
+                "template": c.template,
+                "category_policy": c.policy,
+            }
 
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")
@@ -701,6 +828,7 @@ def triage_router(
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
     .add_node("automation_router", automation_router)
+    .add_node("category_router", category_router)
     .add_node("triage_router", triage_router)
     .add_node("llm_call", llm_call)
     .add_node("environment", tool_node)

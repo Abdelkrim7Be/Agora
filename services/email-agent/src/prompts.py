@@ -22,7 +22,7 @@ Classify the below email into one of these categories.
 < Rules >
 {triage_instructions}
 </ Rules >
-"""
+{category_section}"""
 
 # Triage user prompt — the email to classify.
 triage_user_prompt = """

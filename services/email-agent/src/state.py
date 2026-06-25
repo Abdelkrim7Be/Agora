@@ -16,6 +16,11 @@ class RouterSchema(BaseModel):
         "'notify' for important information that doesn't need a response, "
         "'respond' for emails that need a reply",
     )
+    category: str | None = Field(
+        default=None,
+        description="Optional: the category name from the configured list if this email clearly fits one "
+        "and no deterministic rule matched it. Leave null if unsure or if categories are not listed.",
+    )
 
 
 class EmailInput(TypedDict):

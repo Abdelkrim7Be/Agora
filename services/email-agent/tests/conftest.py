@@ -20,11 +20,12 @@ def ai_tool_call(name: str, args: dict, call_id: str = "call_1") -> AIMessage:
 
 
 class _FakeRouter:
-    def __init__(self, classification: str):
+    def __init__(self, classification: str, category: str | None = None):
         self._classification = classification
+        self._category = category
 
     def invoke(self, _messages, config=None):
-        return SimpleNamespace(classification=self._classification)
+        return SimpleNamespace(classification=self._classification, category=self._category)
 
 
 class _FakeToolLLM:

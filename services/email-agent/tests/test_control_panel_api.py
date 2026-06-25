@@ -36,6 +36,8 @@ contacts:
         "contacts": [
             {
                 "email": "vip@example.com",
+                "domain": None,
+                "name": None,
                 "category": "support",
                 "display_name": "VIP",
                 "priority": "urgent",
