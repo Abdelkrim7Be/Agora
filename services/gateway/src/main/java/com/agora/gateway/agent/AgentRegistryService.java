@@ -54,6 +54,10 @@ public class AgentRegistryService {
         }
     }
 
+    public Optional<AgentInstance> findInstance(String id) {
+        return instances.findById(id);
+    }
+
     public List<AgentInstance> visibleInstances(String username, String role) {
         return instances.findAll().stream()
                 .filter(instance -> canView(instance, username, role))

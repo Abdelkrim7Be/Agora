@@ -95,7 +95,6 @@ class ProxyControllerTest {
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + ownerToken())
                         .header("X-Agora-User", "spoofed-user")
-                        .header("X-Agora-Agent-Instance", "spoofed-instance")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"author\":\"a@b.com\",\"to\":\"me@b.com\",\"subject\":\"Hi\",\"email_thread\":\"Hello\"}"))
                 .andExpect(status().isOk())
@@ -104,6 +103,54 @@ class ProxyControllerTest {
         wireMock.verify(postRequestedFor(urlEqualTo("/run"))
                 .withHeader("X-Agora-User", equalTo("owner"))
                 .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+    }
+
+
+    @Test
+    void proxy_forwards_selected_visible_agent_instance() throws Exception {
+        String responseBody = "{\"run_id\":\"abc123\",\"status\":\"completed\"}";
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/run"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(responseBody)));
+
+        String token = ownerToken();
+        String body = objectMapper.writeValueAsString(Map.of(
+                "id", "ceo-email-agent",
+                "agent_type", "email-agent",
+                "display_name", "CEO Email Agent"
+        ));
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/agent/run")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Agora-Agent-Instance", "ceo-email-agent")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"author\":\"a@b.com\",\"to\":\"me@b.com\",\"subject\":\"Hi\",\"email_thread\":\"Hello\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().json(responseBody));
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/run"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("ceo-email-agent")));
+    }
+
+    @Test
+    void proxy_rejects_unknown_agent_instance_header() throws Exception {
+        mockMvc.perform(post("/api/agent/run")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .header("X-Agora-Agent-Instance", "missing-agent")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/run")));
     }
 
     @Test

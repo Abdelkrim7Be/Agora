@@ -1,5 +1,6 @@
 package com.agora.gateway.proxy;
 
+import com.agora.gateway.agent.AgentRegistryService;
 import com.agora.gateway.audit.AuditService;
 import com.agora.gateway.config.GatewayProperties;
 import jakarta.servlet.http.HttpServletRequest;
@@ -37,13 +38,16 @@ public class ProxyController {
     private final RestClient restClient;
     private final String upstreamBase;
     private final AuditService auditService;
+    private final AgentRegistryService agentRegistryService;
     private final String defaultAgentInstance;
 
-    public ProxyController(GatewayProperties props, RestClient.Builder builder, AuditService auditService) {
+    public ProxyController(GatewayProperties props, RestClient.Builder builder, AuditService auditService,
+                           AgentRegistryService agentRegistryService) {
         this.upstreamBase = props.getUpstream().getEmailAgentUrl();
         this.defaultAgentInstance = props.getDefaultAgentInstance();
         this.restClient = builder.build();
         this.auditService = auditService;
+        this.agentRegistryService = agentRegistryService;
     }
 
     @RequestMapping("/api/agent/**")
@@ -69,6 +73,16 @@ public class ProxyController {
                 .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
                 .findFirst().orElse(null) : null;
 
+        String requestedAgentInstance = request.getHeader(AGENT_INSTANCE_HEADER);
+        String agentInstance = selectAgentInstance(requestedAgentInstance, username, role);
+        if (agentInstance == null) {
+            auditService.record(username, role, "agent_instance_access", request.getMethod(),
+                    downstreamPath, null, "denied");
+            return ResponseEntity.status(403)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"error\":\"forbidden\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+
         // Forward safe headers (skip hop-by-hop and internally owned identity headers).
         var headerNames = request.getHeaderNames();
         while (headerNames.hasMoreElements()) {
@@ -80,7 +94,7 @@ public class ProxyController {
         if (username != null) {
             spec = spec.header(USER_HEADER, username);
         }
-        spec = spec.header(AGENT_INSTANCE_HEADER, defaultAgentInstance);
+        spec = spec.header(AGENT_INSTANCE_HEADER, agentInstance);
 
         if (body.length > 0 && contentType != null) {
             spec = spec.contentType(MediaType.parseMediaType(contentType)).body(body);
@@ -105,6 +119,15 @@ public class ProxyController {
     @RequestMapping("/health")
     public ResponseEntity<Object> health() {
         return ResponseEntity.ok(java.util.Map.of("status", "ok"));
+    }
+
+    private String selectAgentInstance(String requested, String username, String role) {
+        if (requested == null || requested.isBlank()) return defaultAgentInstance;
+        if (username == null) return defaultAgentInstance;
+        return agentRegistryService.findInstance(requested)
+                .filter(instance -> agentRegistryService.canView(instance, username, role))
+                .map(instance -> requested)
+                .orElse(null);
     }
 
     private String deriveAction(HttpServletRequest request) {
