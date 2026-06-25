@@ -43,11 +43,11 @@ from src.sync_status import (
     _resolve as _sync_resolve,
 )
 from src.run_registry import selected_run_registry_backend as _selected_run_registry_backend
-from src.token_store import delete_token
 from src.gmail_oauth import (
     build_authorization_url as build_gmail_authorization_url,
     build_state as build_gmail_oauth_state,
     exchange_code_for_token as exchange_gmail_oauth_code,
+    revoke_gmail_token,
     validate_state as validate_gmail_oauth_state,
 )
 from src.gmail_client import (
@@ -853,7 +853,7 @@ async def disconnect_gmail() -> dict:
     """
     user_id = current_user_id()
     agent_instance_id = current_agent_instance_id()
-    removed = delete_token(user_id, agent_instance_id)
+    removed = revoke_gmail_token(user_id, agent_instance_id)
     uid, iid = _sync_resolve(user_id, agent_instance_id)
     patch = {"connection_status": "disconnected", "sync_mode": "idle"}
     if _selected_run_registry_backend() == "postgres":

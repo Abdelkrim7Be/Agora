@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
+import urllib.parse
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api import app
 from src.config import settings
-from src.gmail_oauth import build_state
+from src.gmail_oauth import build_state, validate_state
 
 
 class _FakeCredentials:
@@ -100,3 +104,111 @@ def test_gmail_connect_callback_exchanges_valid_state(monkeypatch):
     }
     assert captured["code"] == "abc123"
     assert captured["payload"]["agent_instance_id"] == "ceo-email-agent"
+
+
+def test_exchange_code_rejects_mailbox_mismatch(monkeypatch, tmp_path):
+    """exchange_code_for_token must raise when authorized email != expected mailbox."""
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+
+    fake_service = MagicMock()
+    fake_service.users.return_value.getProfile.return_value.execute.return_value = {
+        "emailAddress": "other@example.com"
+    }
+    monkeypatch.setattr(oauth, "_build_service", lambda *a, **kw: fake_service)
+
+    state = build_state("owner@example.com", "ceo-email-agent", mailbox_identity="ceo@example.com")
+    payload = validate_state(state)
+
+    with pytest.raises(ValueError, match="authorized.*other@example.com.*expected.*ceo@example.com"):
+        oauth.exchange_code_for_token("abc", payload)
+
+
+def test_exchange_code_skips_mailbox_check_when_no_identity(monkeypatch, tmp_path):
+    """exchange_code_for_token skips mailbox verification when mailbox_identity is empty."""
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+
+    state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
+    payload = validate_state(state)
+
+    # No _build_service mock — would raise if called; test verifies it isn't called.
+    path = oauth.exchange_code_for_token("abc", payload)
+    assert path.exists()
+    assert json.loads(path.read_text()) == {"token": "oauth-token"}
+
+
+def test_revoke_gmail_token_calls_google_revoke_endpoint(monkeypatch, tmp_path):
+    """revoke_gmail_token POSTs to Google's revocation endpoint before deleting."""
+    import src.gmail_oauth as oauth
+    from src.gmail_oauth import revoke_gmail_token
+
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+
+    token_path = tmp_path / "token.json"
+    token_path.write_text(json.dumps({"refresh_token": "rt-abc123", "token": "at-xyz"}))
+
+    revoke_calls = []
+
+    class _FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    def fake_urlopen(req, timeout=None):
+        revoke_calls.append({
+            "url": req.full_url,
+            "data": urllib.parse.parse_qs(req.data.decode()),
+        })
+        return _FakeResponse()
+
+    monkeypatch.setattr(oauth.urllib.request, "urlopen", fake_urlopen)
+
+    result = revoke_gmail_token()
+
+    assert result is True
+    assert len(revoke_calls) == 1
+    assert revoke_calls[0]["url"] == "https://oauth2.googleapis.com/revoke"
+    assert revoke_calls[0]["data"]["token"] == ["rt-abc123"]
+    assert not token_path.exists()
+
+
+def test_revoke_gmail_token_returns_false_when_no_token(monkeypatch, tmp_path):
+    """revoke_gmail_token returns False silently when no token file exists."""
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "nonexistent.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+
+    from src.gmail_oauth import revoke_gmail_token
+    assert revoke_gmail_token() is False
+
+
+def test_revoke_gmail_token_deletes_locally_even_if_google_fails(monkeypatch, tmp_path):
+    """Local token deleted even when the Google revocation HTTP call fails."""
+    import src.gmail_oauth as oauth
+    from src.gmail_oauth import revoke_gmail_token
+
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+
+    token_path = tmp_path / "token.json"
+    token_path.write_text(json.dumps({"refresh_token": "rt-abc", "token": "at-xyz"}))
+
+    def fail_urlopen(req, timeout=None):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(oauth.urllib.request, "urlopen", fail_urlopen)
+
+    result = revoke_gmail_token()
+    assert result is True
+    assert not token_path.exists()
