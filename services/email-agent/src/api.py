@@ -126,6 +126,25 @@ def _request_agent_instance_id(request: Request) -> str | None:
     return request.headers.get("x-agora-agent-instance")
 
 
+def _require_instance_role(request: Request, min_role: str) -> None:
+    """Defense-in-depth: verify the gateway-stamped instance role is sufficient.
+
+    The gateway resolves and stamps X-Agora-Instance-Role before forwarding.
+    When the header is absent (direct call bypassing the gateway) no check is applied —
+    the gateway is the authoritative enforcement layer; this is an additional guard only.
+    Roles: owner > approver > viewer.
+    """
+    ROLE_TIER = {"owner": 3, "approver": 2, "viewer": 1}
+    MIN_TIER = {"owner": 3, "approver": 2, "viewer": 1}
+    header = request.headers.get("x-agora-instance-role")
+    if header is None:
+        return  # no gateway header → direct call, let it through (gateway is gatekeeper)
+    caller_tier = ROLE_TIER.get(header.lower(), 0)
+    required_tier = MIN_TIER.get(min_role, 99)
+    if caller_tier < required_tier:
+        raise HTTPException(status_code=403, detail="Insufficient instance role")
+
+
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
     with user_context(_request_user_id(request)):
@@ -949,6 +968,7 @@ async def run(request: Request, email: EmailInput) -> RunResponse:
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)
 async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
+    _require_instance_role(request, "approver")
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     try:
@@ -971,6 +991,7 @@ async def approve(request: Request, run_id: str, approval: ApprovalInput) -> Run
 
 @app.post("/run/{run_id}/reject", response_model=RunResponse)
 async def reject(request: Request, run_id: str) -> RunResponse:
+    _require_instance_role(request, "approver")
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     try:
@@ -993,6 +1014,7 @@ async def reject(request: Request, run_id: str) -> RunResponse:
 
 @app.post("/run/{run_id}/respond", response_model=RunResponse)
 async def respond(request: Request, run_id: str, body: RespondInput) -> RunResponse:
+    _require_instance_role(request, "approver")
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     try:
