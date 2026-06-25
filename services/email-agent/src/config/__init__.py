@@ -99,6 +99,14 @@ class AgentBehavior(BaseModel):
     background: str = Field(min_length=1)
     triage_instructions: str = Field(min_length=1)
     response_preferences: str = Field(min_length=1)
+    writing_style_default: str = "Neutral professional voice until learned from sent mail."
+
+
+class StyleLearningConfig(BaseModel):
+    """Opt-in style learning from the selected mailbox's sent mail."""
+
+    enabled: bool = False
+    max_samples: int = Field(default=50, ge=1, le=200)
 
 
 class AutoOrganizeConfig(BaseModel):
@@ -112,6 +120,7 @@ class AgentConfig(BaseModel):
     agent: AgentBehavior
     capabilities: dict[str, bool] = {"email": True}
     auto_organize: AutoOrganizeConfig = Field(default_factory=AutoOrganizeConfig)
+    style_learning: StyleLearningConfig = Field(default_factory=StyleLearningConfig)
 
 
 def load_config(path: str | Path | None = None) -> AgentConfig:

@@ -22,6 +22,10 @@ class UserPreferences(BaseModel):
     )
 
 
+def _namespace_label(value: str) -> str:
+    return value.replace(".", "_")
+
+
 def namespace(
     kind: str,
     user_id: str | None = None,
@@ -35,8 +39,8 @@ def namespace(
     """
     return (
         "email_agent",
-        normalize_user_id(user_id or current_user_id()),
-        normalize_agent_instance_id(agent_instance_id or current_agent_instance_id()),
+        _namespace_label(normalize_user_id(user_id or current_user_id())),
+        _namespace_label(normalize_agent_instance_id(agent_instance_id or current_agent_instance_id())),
         kind,
     )
 

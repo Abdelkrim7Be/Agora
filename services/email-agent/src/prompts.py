@@ -61,6 +61,11 @@ When handling emails, follow these steps:
 < Response Preferences >
 {response_preferences}
 </ Response Preferences >
+
+< Writing Style >
+Write in this person's established voice:
+{writing_style}
+</ Writing Style >
 """
 
 # Tool descriptions now come from each capability module's TOOLS_PROMPT,

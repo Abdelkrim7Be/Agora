@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.api import app, _require_run, _run_detail
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
-from src.tenant import current_agent_instance_id, current_user_id, normalize_user_id
+from src.tenant import current_agent_instance_id, current_user_id
 
 
 def test_run_registry_filters_by_status(tmp_path):
@@ -83,6 +83,107 @@ def test_selected_run_registry_backend_requires_database_url(monkeypatch):
 
     with pytest.raises(RuntimeError, match="DATABASE_URL is required"):
         selected_run_registry_backend()
+
+
+
+def _style_enabled_config(enabled: bool = True):
+    from src.config import AgentConfig
+
+    return AgentConfig(
+        agent={
+            "background": "background",
+            "triage_instructions": "triage",
+            "response_preferences": "response",
+            "writing_style_default": "default style",
+        },
+        capabilities={"email": True},
+        style_learning={"enabled": enabled, "max_samples": 2},
+    )
+
+
+def test_style_endpoint_reads_and_updates_current_instance():
+    with TestClient(app) as client:
+        initial = client.get("/style", headers={"X-Agora-Agent-Instance": "ceo-email-agent"})
+        assert initial.status_code == 200
+        assert initial.json()["agent_instance_id"] == "ceo-email-agent"
+
+        saved = client.put(
+            "/style",
+            headers={"X-Agora-Agent-Instance": "ceo-email-agent"},
+            json={"writing_style": "Use crisp executive prose."},
+        )
+        assert saved.status_code == 200
+
+        ceo = client.get("/style", headers={"X-Agora-Agent-Instance": "ceo-email-agent"}).json()
+        hr = client.get("/style", headers={"X-Agora-Agent-Instance": "hr-email-agent"}).json()
+
+    assert ceo["writing_style"] == "Use crisp executive prose."
+    assert ceo["source"] == "learned"
+    assert hr["writing_style"] != "Use crisp executive prose."
+
+
+def test_style_learn_requires_enabled_config(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=False))
+
+    with TestClient(app) as client:
+        response = client.post("/style/learn")
+
+    assert response.status_code == 409
+    assert "disabled" in response.json()["detail"]
+
+
+def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
+    import src.api as api
+    from src.style_learning import StyleProfile
+
+    captured = {}
+    profile = StyleProfile(
+        greeting="Hi there,",
+        tone="warm and direct",
+        sign_off="Best,",
+        typical_length="short",
+        recurring_phrases=["thanks for the context"],
+        dos=["acknowledge next steps"],
+        donts=["avoid long caveats"],
+    )
+
+    monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=True))
+    monkeypatch.setattr(api, "gmail_resource", lambda user_id=None: "gmail-resource")
+
+    def fake_fetch_sent(max_messages, resource=None):
+        captured["max_messages"] = max_messages
+        captured["resource"] = resource
+        return [{"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}]
+
+    def fake_analyze_style(samples, llm):
+        captured["samples"] = samples
+        captured["llm"] = llm
+        return profile
+
+    monkeypatch.setattr(api, "fetch_sent", fake_fetch_sent)
+    monkeypatch.setattr(api, "analyze_style", fake_analyze_style)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/style/learn",
+            headers={"X-Agora-User": "alice@example.com", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        )
+        stored = client.get(
+            "/style",
+            headers={"X-Agora-User": "alice@example.com", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        ).json()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_instance_id"] == "ceo-email-agent"
+    assert body["sample_count"] == 1
+    assert body["profile"]["tone"] == "warm and direct"
+    assert "Tone: warm and direct" in body["writing_style"]
+    assert stored["writing_style"] == body["writing_style"]
+    assert captured["max_messages"] == 2
+    assert captured["resource"] == "gmail-resource"
 
 
 def test_cost_summary_endpoint_uses_current_user_and_instance(monkeypatch):
@@ -300,8 +401,8 @@ def test_memory_is_scoped_by_forwarded_user_header(monkeypatch):
         }
 
         stored_namespaces = {ns for ns, _ in client.app.state.store.values}
-        assert ("email_agent", normalize_user_id("alice@example.com"), "default-email-agent", "triage_preferences") in stored_namespaces
-        assert ("email_agent", normalize_user_id("bob@example.com"), "default-email-agent", "triage_preferences") in stored_namespaces
+        assert ("email_agent", "alice@example_com", "default-email-agent", "triage_preferences") in stored_namespaces
+        assert ("email_agent", "bob@example_com", "default-email-agent", "triage_preferences") in stored_namespaces
 
 
 def test_policy_endpoint_proxies_security_service(monkeypatch):

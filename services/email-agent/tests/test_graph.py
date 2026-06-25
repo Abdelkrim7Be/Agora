@@ -211,3 +211,33 @@ def test_automation_notify_rule_tags_classification(monkeypatch):
 
     assert result.get("automation_acted") is True
     assert result.get("classification_decision") == "notify"
+
+
+def test_llm_call_includes_writing_style_in_prompt(monkeypatch, fake_llms, respond_email):
+    from langchain_core.messages import AIMessage
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.store.memory import InMemoryStore
+    import src.graph as g
+    from src.memory import namespace, wrap_preferences
+
+    captured = {}
+
+    class _CaptureToolLLM:
+        def invoke(self, messages, config=None):
+            captured["system"] = messages[0]["content"]
+            return AIMessage(
+                content="",
+                tool_calls=[{"name": "Done", "args": {"done": True}, "id": "done-1", "type": "tool_call"}],
+            )
+
+    fake_llms(classification="respond")
+    monkeypatch.setattr(g, "llm_with_tools", _CaptureToolLLM())
+    store = InMemoryStore()
+    store.put(namespace("writing_style"), "user_preferences", wrap_preferences("Use a warm concise voice."))
+    graph = g.overall_workflow.compile(checkpointer=MemorySaver(), store=store)
+
+    graph.invoke({"email_input": respond_email}, _cfg())
+
+    assert "< Writing Style >" in captured["system"]
+    assert "Use a warm concise voice." in captured["system"]
+    assert "< Response Preferences >" in captured["system"]

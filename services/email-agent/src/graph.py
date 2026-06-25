@@ -186,6 +186,11 @@ def llm_call(state: State, store: BaseStore, config=None):
         namespace("response_preferences"),
         agent_config.agent.response_preferences,
     )
+    writing_style = get_memory(
+        store,
+        namespace("writing_style"),
+        agent_config.agent.writing_style_default,
+    )
     messages = [
         {
             "role": "system",
@@ -193,6 +198,7 @@ def llm_call(state: State, store: BaseStore, config=None):
                 tools_prompt=tools_prompt,
                 background=agent_config.agent.background,
                 response_preferences=response_prefs,
+                writing_style=writing_style,
             ),
         }
     ] + state["messages"]

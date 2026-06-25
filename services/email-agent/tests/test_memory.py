@@ -92,7 +92,7 @@ def test_namespace_uses_current_user_context():
     with user_context("alice@example.com"):
         assert namespace("triage_preferences") == (
             "email_agent",
-            "alice@example.com",
+            "alice@example_com",
             "default-email-agent",
             "triage_preferences",
         )

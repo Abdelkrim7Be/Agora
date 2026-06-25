@@ -46,6 +46,46 @@ def fetch_unread(max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+def _is_automated_address(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in ("no-reply", "noreply", "donotreply", "do-not-reply"))
+
+
+def fetch_sent(max_messages: int = 50, resource=None) -> list[dict]:
+    """Return usable sent-mail samples for writing-style learning.
+
+    The returned samples include distilled metadata and body text only; callers decide
+    whether to persist a learned profile. Trivial messages and automated recipients
+    are excluded so the profile is based on real authored mail.
+    """
+    resource = resource or gmail_resource()
+    refs = (
+        resource.users()
+        .messages()
+        .list(userId="me", q="in:sent", maxResults=max_messages)
+        .execute()
+        .get("messages", [])
+    )
+    samples: list[dict] = []
+    for ref in refs:
+        message = get_message(ref["id"], resource=resource)
+        body = _extract_message_part(message.get("payload", {})).strip()
+        to = _header_value(message, "To")
+        if len(body) < 20 or _is_automated_address(to):
+            continue
+        samples.append(
+            {
+                "id": message.get("id", ref.get("id")),
+                "thread_id": message.get("threadId", ref.get("threadId")),
+                "to": to,
+                "subject": _header_value(message, "Subject"),
+                "date": _header_value(message, "Date"),
+                "body": body,
+            }
+        )
+    return samples
+
+
 def list_messages_by_label(label_id: str, max_results: int, resource=None) -> list[dict]:
     """Return message refs carrying a Gmail label id."""
     resource = resource or gmail_resource()

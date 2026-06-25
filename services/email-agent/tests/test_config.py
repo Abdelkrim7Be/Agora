@@ -138,6 +138,7 @@ def test_config_values_flow_into_prompts(tmp_path):
         tools_prompt="(tools)",
         background=cfg.agent.background,
         response_preferences=cfg.agent.response_preferences,
+        writing_style=cfg.agent.writing_style_default,
     )
     assert "UNIQUE_BACKGROUND_MARKER" in agent
     assert "UNIQUE_PREFS_MARKER" in agent

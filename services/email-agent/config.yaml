@@ -42,6 +42,9 @@ agent:
     - Acknowledge any existing work or materials mentioned (drafts, slides, docs)
     - Explicitly mention reviewing these materials before or during the meeting
 
+  writing_style_default: |
+    Neutral professional voice until learned from sent mail.
+
 capabilities:
   email: true       # write_email + Done — keep on
   calendar: false   # schedule_meeting + check_calendar_availability — off for now
@@ -52,3 +55,7 @@ capabilities:
 auto_organize:
   enabled: false
   ignored_label: Auto/Ignored
+
+style_learning:
+  enabled: false
+  max_samples: 50

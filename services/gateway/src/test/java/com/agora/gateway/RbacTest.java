@@ -168,6 +168,34 @@ class RbacTest {
         wireMock.verify(0, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
     }
 
+
+
+    @Test
+    void owner_can_learn_style() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/style/learn"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"profile\":{}}")));
+
+        mockMvc.perform(post("/api/agent/style/learn")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.profile").exists());
+
+        wireMock.verify(1, postRequestedFor(urlEqualTo("/style/learn")));
+    }
+
+    @Test
+    void viewer_cannot_learn_style_403() throws Exception {
+        mockMvc.perform(post("/api/agent/style/learn")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/style/learn")));
+    }
+
     @Test
     void owner_denied_on_unenumerated_route() throws Exception {
         // default-deny: even an owner cannot reach an agent route that isn't explicitly allowed

@@ -28,6 +28,7 @@ from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
 from src.gmail_client import (
     archive_message,
+    fetch_sent,
     gmail_resource,
     list_inbox,
     mark_as_read,
@@ -43,6 +44,7 @@ from src.tenant import (
 )
 from src.security_client import fetch_policy
 from src.storage import open_graph_storage
+from src.style_learning import analyze_style, build_style_text
 
 
 async def _watch_renewal_loop() -> None:
@@ -141,6 +143,10 @@ class CapabilitiesInput(BaseModel):
 class MemoryInput(BaseModel):
     triage_preferences: str
     response_preferences: str
+
+
+class StyleInput(BaseModel):
+    writing_style: str
 
 
 class RunResponse(BaseModel):
@@ -491,6 +497,68 @@ async def update_preferences(request: Request, body: MemoryInput) -> dict:
     return {
         "triage_preferences": body.triage_preferences,
         "response_preferences": body.response_preferences,
+    }
+
+
+@app.get("/style")
+async def get_style(request: Request) -> dict:
+    cfg = load_config()
+    store = request.app.state.store
+    item = await store.aget(namespace("writing_style"), "user_preferences")
+    writing_style = preferences_text(item.value) if item else cfg.agent.writing_style_default
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "enabled": cfg.style_learning.enabled,
+        "max_samples": cfg.style_learning.max_samples,
+        "writing_style": writing_style,
+        "source": "learned" if item else "default",
+    }
+
+
+@app.put("/style")
+async def update_style(request: Request, body: StyleInput) -> dict:
+    store = request.app.state.store
+    await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(body.writing_style))
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "writing_style": body.writing_style,
+        "source": "manual",
+    }
+
+
+@app.post("/style/learn")
+async def learn_style(request: Request) -> dict:
+    cfg = load_config()
+    if not cfg.style_learning.enabled:
+        raise HTTPException(status_code=409, detail="Style learning is disabled for this agent instance")
+    user_id = current_user_id()
+    try:
+        resource = await asyncio.to_thread(gmail_resource, user_id)
+        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+    except Exception as exc:
+        print(f"api: style learning Gmail read unavailable for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail sent mail is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+    if not samples:
+        raise HTTPException(status_code=422, detail="No usable sent-mail samples found for style learning")
+    try:
+        profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
+    except Exception as exc:
+        print(f"api: style learning analysis failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=503, detail="Style analysis failed with the configured LLM") from exc
+    writing_style = build_style_text(profile)
+    await request.app.state.store.aput(
+        namespace("writing_style"),
+        "user_preferences",
+        wrap_preferences(writing_style),
+    )
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "sample_count": len(samples),
+        "profile": profile.model_dump(),
+        "writing_style": writing_style,
     }
 
 
