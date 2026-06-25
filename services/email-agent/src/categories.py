@@ -131,3 +131,42 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "policy": category.policy,
             }
     return {"category": None, "priority": "normal", "template": None, "policy": None}
+
+
+def _re_subject(subject: str) -> str:
+    return subject if subject.lower().startswith("re:") else f"Re: {subject}"
+
+
+def render_template_text(text: str, email_input: dict) -> str:
+    values = {
+        "subject": email_input.get("subject", ""),
+        "author": email_input.get("author", ""),
+        "to": email_input.get("to", ""),
+        "email_thread": email_input.get("email_thread", ""),
+    }
+    rendered = text
+    for key, value in values.items():
+        rendered = rendered.replace("{{" + key + "}}", str(value))
+    return rendered
+
+
+def auto_draft_tool_call(email_input: dict, config: CategoriesConfig, category_name: str | None) -> dict | None:
+    if not category_name:
+        return None
+    category = next((item for item in config.categories if item.name == category_name), None)
+    if category is None or category.policy != "auto_draft" or not category.template:
+        return None
+    template = next((item for item in config.templates if item.name == category.template), None)
+    if template is None:
+        return None
+    subject = render_template_text(template.subject, email_input) if template.subject else _re_subject(email_input.get("subject", "No Subject"))
+    return {
+        "name": "write_email",
+        "args": {
+            "to": _email_address(email_input.get("author", "")),
+            "subject": subject,
+            "content": render_template_text(template.body, email_input),
+        },
+        "id": f"category_{category.name}_template",
+        "type": "tool_call",
+    }

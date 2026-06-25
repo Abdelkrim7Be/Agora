@@ -25,7 +25,7 @@ from src.capabilities import (
 )
 from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config
-from src.categories import classify_category, load_categories
+from src.categories import auto_draft_tool_call, classify_category, load_categories
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.security_client import authorize_action
@@ -631,7 +631,8 @@ def triage_router(
     )
 
     classification = result.classification
-    category_meta = classify_category(state["email_input"], load_categories())
+    categories_config = load_categories()
+    category_meta = classify_category(state["email_input"], categories_config)
     category_update = {
         "category": category_meta.get("category"),
         "category_display_name": category_meta.get("category_display_name"),
@@ -639,6 +640,28 @@ def triage_router(
         "template": category_meta.get("template"),
         "category_policy": category_meta.get("policy"),
     }
+    template_tool_call = auto_draft_tool_call(
+        state["email_input"],
+        categories_config,
+        category_meta.get("category"),
+    )
+    if template_tool_call is not None:
+        print("📧 Classification: RESPOND - category template draft requires approval")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "respond",
+                **category_update,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft from category template for email: {email_markdown}",
+                    },
+                    AIMessage(content="", tool_calls=[template_tool_call]),
+                ],
+            },
+        )
+
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")
         goto = "llm_call"

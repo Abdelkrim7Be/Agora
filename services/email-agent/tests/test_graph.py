@@ -270,3 +270,40 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
     assert result["category"] == "support"
     assert result["category_display_name"] == "Support"
     assert result["priority"] == "urgent"
+
+
+def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Reclamation",
+                "priority": "urgent",
+                "policy": "auto_draft",
+                "template": "complaint_reply",
+                "when": {"sender_domain": ["example.com"]},
+            }
+        ],
+        templates=[
+            {
+                "name": "complaint_reply",
+                "subject": "Re: {{subject}}",
+                "body": "Thanks for the context. I will look into this.",
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    fake_llms(classification="notify")
+
+    result = email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert result["classification_decision"] == "respond"
+    assert result["category"] == "reclamation"
+    assert result["priority"] == "urgent"
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "write_email"
+    assert request["action_request"]["args"]["subject"] == "Re: Quick question about the API"

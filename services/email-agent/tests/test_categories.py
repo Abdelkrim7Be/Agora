@@ -101,3 +101,28 @@ def test_run_registry_persists_category_metadata(tmp_path):
     assert runs[0]["category_display_name"] == "Reclamation"
     assert runs[0]["priority"] == "urgent"
     assert runs[0]["template"] == "complaint_reply"
+
+
+def test_auto_draft_tool_call_renders_template(tmp_path):
+    from src.categories import auto_draft_tool_call
+
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    call = auto_draft_tool_call(
+        {
+            "author": "Client <ana@client.example>",
+            "subject": "urgent issue",
+            "email_thread": "The system is down.",
+        },
+        cfg,
+        "reclamation",
+    )
+
+    assert call["name"] == "write_email"
+    assert call["args"] == {
+        "to": "ana@client.example",
+        "subject": "Re: urgent issue",
+        "content": "Thanks for reaching out.",
+    }
