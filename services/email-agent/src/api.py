@@ -32,6 +32,13 @@ from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
+from src.sync_status import (
+    get_status as get_sync_status,
+    record_failure as record_sync_failure,
+    record_success as record_sync_success,
+    set_paused as set_sync_paused,
+    setup_sync_status,
+)
 from src.gmail_oauth import (
     build_authorization_url as build_gmail_authorization_url,
     build_state as build_gmail_oauth_state,
@@ -76,6 +83,7 @@ async def _watch_renewal_loop() -> None:
             await asyncio.to_thread(ensure_watch)
         except Exception as exc:  # network/credential issues must not kill the API
             print(f"api: gmail watch registration failed: {exc}")
+            record_sync_failure(str(exc))
         await asyncio.sleep(interval)
 
 
@@ -83,6 +91,7 @@ async def _watch_renewal_loop() -> None:
 async def lifespan(app: FastAPI):
     setup_run_registry()
     setup_gmail_sync()
+    setup_sync_status()
     setup_cost_tracker()
     async with open_graph_storage() as storage:
         # The graph's nodes are sync, so LangGraph runs them in a threadpool where
@@ -454,12 +463,14 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
             return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
         try:
             outcomes = await poll_history(request.app.state.graph, baseline)
-        except Exception:
+        except Exception as exc:
             # Stale baseline (history older than ~1 week is purged by Gmail). Reset
             # forward and ack so Pub/Sub stops retrying an unrecoverable window.
             set_last_history_id(pushed_history_id)
+            record_sync_failure(str(exc))
             return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
         set_last_history_id(pushed_history_id)
+        record_sync_success("webhook")
 
     return {"accepted": True, "history_id": pushed_history_id, "outcomes": outcomes}
 
@@ -769,6 +780,7 @@ async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=
         resource = await asyncio.to_thread(gmail_resource, user_id)
     except Exception as exc:
         print(f"api: gmail sync unavailable for user {user_id}: {exc}")
+        record_sync_failure(str(exc))
         raise HTTPException(
             status_code=503,
             detail="Gmail sync is unavailable. Check OAuth credentials and container network access.",
@@ -778,11 +790,33 @@ async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=
         outcomes = await poll_once(request.app.state.graph, resource=resource, max_results=limit)
     except Exception as exc:
         print(f"api: gmail sync failed for user {user_id}: {exc}")
+        record_sync_failure(str(exc))
         raise HTTPException(
             status_code=503,
             detail=f"Gmail sync failed: {type(exc).__name__}: {exc}",
         ) from exc
+    record_sync_success("manual")
     return {"outcomes": outcomes}
+
+
+@app.get("/sync/status")
+async def sync_status() -> dict:
+    """Return the Gmail sync observability state for the current agent instance."""
+    return get_sync_status()
+
+
+@app.post("/sync/pause", status_code=200)
+async def sync_pause() -> dict:
+    """Pause automatic Gmail polling for the current agent instance."""
+    set_sync_paused(True)
+    return {"paused": True}
+
+
+@app.post("/sync/resume", status_code=200)
+async def sync_resume() -> dict:
+    """Resume automatic Gmail polling for the current agent instance."""
+    set_sync_paused(False)
+    return {"paused": False}
 
 
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:

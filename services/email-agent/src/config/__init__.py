@@ -77,6 +77,8 @@ class Settings:
     gmail_webhook_secret: str = os.getenv("GMAIL_WEBHOOK_SECRET", "")
     # Per-user last-processed Gmail historyId baseline for incremental push sync.
     gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
+    # Per-instance sync observability state (connection status, last success/failure, etc.).
+    gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
     # Gmail watches expire after 7 days; re-register well inside that window.
     gmail_watch_renew_hours: int = int(os.getenv("GMAIL_WATCH_RENEW_HOURS", "24"))
     polling_fallback_enabled: bool = _env_bool("GMAIL_POLLING_FALLBACK_ENABLED", "true")

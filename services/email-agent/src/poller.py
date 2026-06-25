@@ -35,6 +35,7 @@ from src.gmail_client import (
 )
 from src.graph import overall_workflow
 from src.gmail_sync import set_last_history_id, setup_gmail_sync
+from src.sync_status import record_failure, record_success, setup_sync_status
 from src.run_registry import (
     ACTIVE_RUN_STATUSES,
     find_run_by_email,
@@ -59,6 +60,18 @@ def ensure_watch(resource=None) -> dict | None:
     history_id = str(result.get("historyId") or "")
     if history_id:
         set_last_history_id(history_id)
+    # Gmail watch expiration is a Unix ms timestamp; convert to ISO for storage.
+    watch_expires_at: str | None = None
+    raw_expiry = result.get("expiration")
+    if raw_expiry:
+        from datetime import datetime, timezone
+        try:
+            watch_expires_at = datetime.fromtimestamp(
+                int(raw_expiry) / 1000, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        except (ValueError, TypeError):
+            pass
+    record_success("webhook", watch_expires_at=watch_expires_at)
     return result
 
 
@@ -289,6 +302,7 @@ async def run_forever() -> None:
     renew = settings.gmail_watch_renew_hours * 3600
     setup_run_registry()
     setup_gmail_sync()
+    setup_sync_status()
     last_watch = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
@@ -312,14 +326,17 @@ async def run_forever() -> None:
                     print("poller: gmail watch registered")
                 except Exception as exc:
                     print(f"poller: gmail watch failed: {exc}")
+                    record_failure(str(exc))
             if settings.polling_fallback_enabled:
                 try:
                     outcomes = await poll_once(graph)
                 except Exception as exc:
                     print(f"poller: poll failed: {exc}")
+                    record_failure(str(exc))
                 else:
                     if outcomes:
                         print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
+                    record_success("polling")
             await asyncio.sleep(interval)
 
 
