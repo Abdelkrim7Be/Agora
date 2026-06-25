@@ -173,6 +173,39 @@ class ProxyControllerTest {
                 .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 
+
+    @Test
+    void proxy_gmail_oauth_start_requires_owner_and_forwards() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/agent-instances/default-email-agent/connect/gmail/start"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"authorization_url\":\"https://google.example\",\"agent_instance_id\":\"default-email-agent\",\"scopes\":[]}")));
+
+        mockMvc.perform(get("/api/agent/agent-instances/default-email-agent/connect/gmail/start")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authorization_url").value("https://google.example"));
+
+        wireMock.verify(getRequestedFor(urlEqualTo("/agent-instances/default-email-agent/connect/gmail/start"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+    }
+
+    @Test
+    void proxy_gmail_oauth_callback_forwards_without_jwt() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/connect/gmail/callback?code=abc&state=signed"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"status\":\"connected\"}")));
+
+        mockMvc.perform(get("/api/agent/connect/gmail/callback?code=abc&state=signed"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("connected"));
+
+        wireMock.verify(getRequestedFor(urlEqualTo("/connect/gmail/callback?code=abc&state=signed")));
+    }
+
     @Test
     void proxy_gmail_webhook_forwards_without_jwt() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/webhooks/gmail"))

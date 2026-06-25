@@ -13,6 +13,7 @@ dependencies = [
     "langchain-anthropic>=0.2",
     "langchain-groq>=0.1",
     "langchain-google-community[gmail]>=2.0",
+    "google-auth-oauthlib>=1.2",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-dotenv>=1.0",

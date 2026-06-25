@@ -32,7 +32,14 @@ from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
+from src.gmail_oauth import (
+    build_authorization_url as build_gmail_authorization_url,
+    build_state as build_gmail_oauth_state,
+    exchange_code_for_token as exchange_gmail_oauth_code,
+    validate_state as validate_gmail_oauth_state,
+)
 from src.gmail_client import (
+    GMAIL_SCOPES,
     archive_message,
     fetch_sent,
     gmail_resource,
@@ -136,6 +143,20 @@ class RespondInput(BaseModel):
 class GmailWebhookInput(BaseModel):
     message: dict = {}
     subscription: str | None = None
+
+class GmailConnectStartResponse(BaseModel):
+    authorization_url: str
+    agent_instance_id: str
+    scopes: list[str]
+    expires_in_seconds: int = 600
+
+
+class GmailConnectCallbackResponse(BaseModel):
+    status: str
+    agent_instance_id: str
+    user_id: str
+    mailbox_identity: str | None = None
+
 
 
 class RulesInput(BaseModel):
@@ -446,6 +467,41 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "storage_backend": settings.storage_backend}
+
+
+@app.get("/agent-instances/{instance_id}/connect/gmail/start", response_model=GmailConnectStartResponse)
+async def gmail_connect_start(instance_id: str, request: Request) -> GmailConnectStartResponse:
+    user_id = _request_user_id(request) or current_user_id()
+    mailbox_identity = request.query_params.get("mailbox_identity") or ""
+    try:
+        state = build_gmail_oauth_state(user_id, instance_id, mailbox_identity=mailbox_identity)
+        authorization_url = build_gmail_authorization_url(state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return GmailConnectStartResponse(
+        authorization_url=authorization_url,
+        agent_instance_id=instance_id,
+        scopes=GMAIL_SCOPES,
+    )
+
+
+@app.get("/connect/gmail/callback", response_model=GmailConnectCallbackResponse)
+async def gmail_connect_callback(code: str | None = None, state: str | None = None) -> GmailConnectCallbackResponse:
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing Gmail OAuth code or state")
+    try:
+        payload = validate_gmail_oauth_state(state)
+        exchange_gmail_oauth_code(code, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return GmailConnectCallbackResponse(
+        status="connected",
+        agent_instance_id=payload["agent_instance_id"],
+        user_id=payload["user_id"],
+        mailbox_identity=payload.get("mailbox_identity") or None,
+    )
 
 
 @app.get("/categories")

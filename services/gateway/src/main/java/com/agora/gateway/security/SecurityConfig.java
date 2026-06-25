@@ -52,6 +52,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/agent-instances").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")
