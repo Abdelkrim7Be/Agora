@@ -139,7 +139,8 @@ def _pg_update(user_id: str, instance_id: str, patch: dict) -> None:
                      last_success_at, last_failure_at, last_error, watch_expires_at, paused, updated_at)
                 VALUES
                     (%(user_id)s, %(agent_instance_id)s, %(provider)s, %(connection_status)s, %(sync_mode)s,
-                     %(last_success_at)s, %(last_failure_at)s, %(last_error)s, %(watch_expires_at)s, %(paused)s, NOW())
+                     %(last_success_at)s, %(last_failure_at)s, %(last_error)s, %(watch_expires_at)s,
+                     COALESCE(%(paused)s, FALSE), NOW())
                 ON CONFLICT (user_id, agent_instance_id) DO UPDATE SET
                     connection_status = COALESCE(EXCLUDED.connection_status, email_agent_sync.connection_status),
                     sync_mode         = COALESCE(EXCLUDED.sync_mode, email_agent_sync.sync_mode),
@@ -147,7 +148,7 @@ def _pg_update(user_id: str, instance_id: str, patch: dict) -> None:
                     last_failure_at   = COALESCE(EXCLUDED.last_failure_at, email_agent_sync.last_failure_at),
                     last_error        = COALESCE(EXCLUDED.last_error, email_agent_sync.last_error),
                     watch_expires_at  = COALESCE(EXCLUDED.watch_expires_at, email_agent_sync.watch_expires_at),
-                    paused            = EXCLUDED.paused,
+                    paused            = COALESCE(%(paused)s, email_agent_sync.paused),
                     updated_at        = NOW()
                 """,
                 {

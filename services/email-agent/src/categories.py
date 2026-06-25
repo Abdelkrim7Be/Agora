@@ -169,7 +169,7 @@ def render_template_text(text: str, email_input: dict, contact: "Contact | None"
         "to": email_input.get("to", ""),
         "email_thread": email_input.get("email_thread", ""),
     }
-    if contact and contact.name:
+    if contact and contact.name and contact.name.split():
         values["name"] = contact.name
         values["prenom"] = contact.name.split()[0]
     rendered = text
