@@ -19,10 +19,12 @@ import java.util.Map;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -194,6 +196,36 @@ class RbacTest {
                 .andExpect(jsonPath("$.error").value("forbidden"));
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/style/learn")));
+    }
+
+
+
+    @Test
+    void viewer_can_read_drafts() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/drafts"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"drafts\":[]}")));
+
+        mockMvc.perform(get("/api/agent/drafts?priority=urgent")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.drafts").isArray());
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/drafts?priority=urgent")));
+    }
+
+    @Test
+    void viewer_cannot_update_categories_403() throws Exception {
+        mockMvc.perform(put("/api/agent/categories")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"categories_yaml\":\"enabled: false\\n\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlEqualTo("/categories")));
     }
 
     @Test

@@ -25,6 +25,7 @@ from src.capabilities import (
 )
 from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config
+from src.categories import classify_category, load_categories
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.security_client import authorize_action
@@ -630,11 +631,20 @@ def triage_router(
     )
 
     classification = result.classification
+    category_meta = classify_category(state["email_input"], load_categories())
+    category_update = {
+        "category": category_meta.get("category"),
+        "category_display_name": category_meta.get("category_display_name"),
+        "priority": category_meta.get("priority") or "normal",
+        "template": category_meta.get("template"),
+        "category_policy": category_meta.get("policy"),
+    }
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")
         goto = "llm_call"
         update = {
             "classification_decision": classification,
+            **category_update,
             "messages": [
                 {
                     "role": "user",
@@ -648,16 +658,17 @@ def triage_router(
             goto = "environment"
             update = {
                 "classification_decision": classification,
+                **category_update,
                 "auto_organized": True,
                 "messages": [_auto_organize_message()],
             }
         else:
             goto = END
-            update = {"classification_decision": classification}
+            update = {"classification_decision": classification, **category_update}
     elif classification == "notify":
         print("🔔 Classification: NOTIFY - This email contains important information")
         goto = END
-        update = {"classification_decision": classification}
+        update = {"classification_decision": classification, **category_update}
     else:
         raise ValueError(f"Invalid classification: {classification}")
 

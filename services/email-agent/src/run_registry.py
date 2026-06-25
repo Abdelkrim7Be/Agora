@@ -74,6 +74,10 @@ def _record(
         "author": email_input.get("author"),
         "email_id": email_input.get("email_id"),
         "gmail_thread_id": email_input.get("gmail_thread_id"),
+        "category": email_input.get("category"),
+        "category_display_name": email_input.get("category_display_name"),
+        "priority": email_input.get("priority", "normal"),
+        "template": email_input.get("template"),
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -91,6 +95,10 @@ def _json_upsert(record: dict, path: str | Path | None = None) -> dict:
                 "updated_at",
                 "user_id",
                 "agent_instance_id",
+                "category",
+                "category_display_name",
+                "priority",
+                "template",
             }:
                 existing[key] = value
         saved = existing
@@ -170,6 +178,10 @@ def setup_run_registry() -> None:
                     author TEXT,
                     email_id TEXT,
                     gmail_thread_id TEXT,
+                    category TEXT,
+                    category_display_name TEXT,
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    template TEXT,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
@@ -177,6 +189,18 @@ def setup_run_registry() -> None:
             cur.execute(
                 "ALTER TABLE agent_runs "
                 "ADD COLUMN IF NOT EXISTS agent_instance_id TEXT NOT NULL DEFAULT 'default-email-agent'"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS category TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS category_display_name TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal'"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS template TEXT"
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS agent_runs_user_instance_status_updated_idx "
@@ -212,11 +236,13 @@ def _postgres_upsert(record: dict) -> dict:
                 """
                 INSERT INTO agent_runs (
                     run_id, user_id, agent_instance_id, status, classification,
-                    pending_action, subject, author, email_id, gmail_thread_id, updated_at
+                    pending_action, subject, author, email_id, gmail_thread_id,
+                    category, category_display_name, priority, template, updated_at
                 ) VALUES (
                     %(run_id)s, %(user_id)s, %(agent_instance_id)s, %(status)s,
                     %(classification)s, %(pending_action)s, %(subject)s, %(author)s,
-                    %(email_id)s, %(gmail_thread_id)s, %(updated_at)s
+                    %(email_id)s, %(gmail_thread_id)s, %(category)s,
+                    %(category_display_name)s, %(priority)s, %(template)s, %(updated_at)s
                 )
                 ON CONFLICT (run_id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -228,9 +254,14 @@ def _postgres_upsert(record: dict) -> dict:
                     author = COALESCE(EXCLUDED.author, agent_runs.author),
                     email_id = COALESCE(EXCLUDED.email_id, agent_runs.email_id),
                     gmail_thread_id = COALESCE(EXCLUDED.gmail_thread_id, agent_runs.gmail_thread_id),
+                    category = COALESCE(EXCLUDED.category, agent_runs.category),
+                    category_display_name = COALESCE(EXCLUDED.category_display_name, agent_runs.category_display_name),
+                    priority = COALESCE(EXCLUDED.priority, agent_runs.priority),
+                    template = COALESCE(EXCLUDED.template, agent_runs.template),
                     updated_at = EXCLUDED.updated_at
                 RETURNING run_id, user_id, agent_instance_id, status, classification,
-                    pending_action, subject, author, email_id, gmail_thread_id, updated_at
+                    pending_action, subject, author, email_id, gmail_thread_id,
+                    category, category_display_name, priority, template, updated_at
                 """,
                 params,
             )
@@ -267,7 +298,8 @@ def _postgres_list(
             cur.execute(
                 """
                 SELECT run_id, user_id, agent_instance_id, status, classification,
-                    pending_action, subject, author, email_id, gmail_thread_id, updated_at
+                    pending_action, subject, author, email_id, gmail_thread_id,
+                    category, category_display_name, priority, template, updated_at
                 FROM agent_runs
                 """
                 + where
@@ -299,7 +331,8 @@ def _postgres_get(
             cur.execute(
                 """
                 SELECT run_id, user_id, agent_instance_id, status, classification,
-                    pending_action, subject, author, email_id, gmail_thread_id, updated_at
+                    pending_action, subject, author, email_id, gmail_thread_id,
+                    category, category_display_name, priority, template, updated_at
                 FROM agent_runs
                 WHERE
                 """

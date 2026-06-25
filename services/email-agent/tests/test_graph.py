@@ -241,3 +241,32 @@ def test_llm_call_includes_writing_style_in_prompt(monkeypatch, fake_llms, respo
     assert "< Writing Style >" in captured["system"]
     assert "Use a warm concise voice." in captured["system"]
     assert "< Response Preferences >" in captured["system"]
+
+
+def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "support",
+                "display_name": "Support",
+                "priority": "urgent",
+                "policy": "notify",
+                "when": {"sender_domain": ["example.com"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    fake_llms(
+        classification="respond",
+        tool_sequence=[ai_tool_call("Done", {"done": True})],
+    )
+
+    result = email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert result["category"] == "support"
+    assert result["category_display_name"] == "Support"
+    assert result["priority"] == "urgent"

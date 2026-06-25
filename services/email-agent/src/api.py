@@ -15,6 +15,12 @@ from pydantic import BaseModel
 
 from src.config import settings
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
+from src.categories import (
+    CategoriesConfig,
+    DEFAULT_CATEGORIES_PATH,
+    dump_categories,
+    load_categories,
+)
 from src.automation import DEFAULT_RULES_PATH, RulesConfig, load_rules
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, load_config
 from src import graph as graph_module
@@ -149,12 +155,20 @@ class StyleInput(BaseModel):
     writing_style: str
 
 
+class CategoriesInput(BaseModel):
+    categories_yaml: str
+
+
 class RunResponse(BaseModel):
     run_id: str
     status: str  # "pending_approval" | "completed" | "failed"
     classification: str | None = None
     error: str | None = None
     pending_action: list | None = None  # list of Agent Inbox request objects when paused
+    category: str | None = None
+    category_display_name: str | None = None
+    priority: str | None = None
+    template: str | None = None
 
 
 def _thread_config(run_id: str) -> dict:
@@ -169,6 +183,10 @@ def _format(result: dict, run_id: str) -> RunResponse:
             run_id=run_id,
             status="pending_approval",
             pending_action=interrupts[0].value,
+            category=result.get("category"),
+            category_display_name=result.get("category_display_name"),
+            priority=result.get("priority"),
+            template=result.get("template"),
         )
     if result.get("email_send_failed"):
         return RunResponse(
@@ -176,11 +194,19 @@ def _format(result: dict, run_id: str) -> RunResponse:
             status="failed",
             classification=result.get("classification_decision", "unknown"),
             error=result.get("email_send_failed"),
+            category=result.get("category"),
+            category_display_name=result.get("category_display_name"),
+            priority=result.get("priority"),
+            template=result.get("template"),
         )
     return RunResponse(
         run_id=run_id,
         status="completed",
         classification=result.get("classification_decision", "unknown"),
+        category=result.get("category"),
+        category_display_name=result.get("category_display_name"),
+        priority=result.get("priority"),
+        template=result.get("template"),
     )
 
 
@@ -345,6 +371,10 @@ def _run_detail(values: dict, run_id: str) -> dict:
             else "completed"
         ),
         "classification": values.get("classification_decision"),
+        "category": values.get("category"),
+        "category_display_name": values.get("category_display_name"),
+        "priority": values.get("priority"),
+        "template": values.get("template"),
         "error": values.get("email_send_failed"),
         "email": {
             "author": email_input.get("author"),
@@ -416,6 +446,68 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "storage_backend": settings.storage_backend}
+
+
+@app.get("/categories")
+async def get_categories() -> dict:
+    cfg = load_categories(agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "categories_yaml": DEFAULT_CATEGORIES_PATH.read_text() if DEFAULT_CATEGORIES_PATH.is_file() else dump_categories(cfg),
+        "parsed": cfg.model_dump(),
+        "storage": "default-instance-yaml",
+    }
+
+
+@app.put("/categories")
+async def update_categories(body: CategoriesInput) -> dict:
+    data = yaml.safe_load(body.categories_yaml) or {}
+    data.setdefault("categories", [])
+    data.setdefault("templates", [])
+    data.setdefault("contacts", [])
+    parsed = CategoriesConfig(**data)
+    DEFAULT_CATEGORIES_PATH.write_text(body.categories_yaml)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "categories_yaml": body.categories_yaml,
+        "parsed": parsed.model_dump(),
+        "storage": "default-instance-yaml",
+    }
+
+
+@app.get("/templates")
+async def get_templates() -> dict:
+    cfg = load_categories(agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "templates": [template.model_dump() for template in cfg.templates],
+        "storage": "default-instance-yaml",
+    }
+
+
+@app.get("/drafts")
+async def drafts(
+    category: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
+    runs = list_runs(
+        status="pending_approval",
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+        limit=500,
+    )
+    if category:
+        runs = [run for run in runs if run.get("category") == category]
+    if priority:
+        runs = [run for run in runs if run.get("priority") == priority]
+    order = {"urgent": 0, "normal": 1, "low": 2}
+    runs.sort(key=lambda run: (order.get(run.get("priority") or "normal", 1), run.get("updated_at", "")))
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "drafts": runs[:limit],
+        "limit": limit,
+    }
 
 
 @app.get("/rules")

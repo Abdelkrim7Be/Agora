@@ -43,6 +43,11 @@ class State(MessagesState):
     # MessagesState provides the `messages` key; we add email-specific fields.
     email_input: EmailInput
     classification_decision: Literal["ignore", "respond", "notify"]
+    category: NotRequired[str]
+    category_display_name: NotRequired[str]
+    priority: NotRequired[Literal["urgent", "normal", "low"]]
+    template: NotRequired[str]
+    category_policy: NotRequired[str]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
     # Set when an approved send action fails after the human decision.

@@ -1,0 +1,15 @@
+enabled: true
+categories:
+- name: support
+  display_name: Support
+  priority: urgent
+  when:
+    sender_contains: []
+    sender_domain: []
+    subject_contains: []
+    labels: []
+  template: null
+  policy: notify
+  labels: []
+templates: []
+contacts: []

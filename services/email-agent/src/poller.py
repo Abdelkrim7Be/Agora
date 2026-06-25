@@ -111,10 +111,17 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
             {"configurable": {"thread_id": run_id}},
         )
         status = "pending_approval" if result.get("__interrupt__") else "follow_up_proposed"
+        run_email_input = {
+            **email_input,
+            "category": result.get("category"),
+            "category_display_name": result.get("category_display_name"),
+            "priority": result.get("priority"),
+            "template": result.get("template"),
+        }
         upsert_run(
             run_id,
             status,
-            email_input=email_input,
+            email_input=run_email_input,
             classification=result.get("classification_decision"),
             pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
             agent_instance_id=current_agent_instance_id(),
@@ -208,10 +215,17 @@ async def process_message(
         outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
 
     record_digest_item(rules_config, outcome_status, email_input, run_id)
+    run_email_input = {
+        **email_input,
+        "category": result.get("category"),
+        "category_display_name": result.get("category_display_name"),
+        "priority": result.get("priority"),
+        "template": result.get("template"),
+    }
     upsert_run(
         run_id,
         outcome_status,
-        email_input=email_input,
+        email_input=run_email_input,
         classification=result.get("classification_decision"),
         pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
         agent_instance_id=current_agent_instance_id(),

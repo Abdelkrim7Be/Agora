@@ -10,6 +10,62 @@ from src.run_registry import list_runs, selected_run_registry_backend, upsert_ru
 from src.tenant import current_agent_instance_id, current_user_id
 
 
+
+def test_drafts_endpoint_filters_category_and_priority(monkeypatch):
+    import src.api as api
+
+    captured = {}
+
+    def fake_list_runs(**kwargs):
+        captured.update(kwargs)
+        return [
+            {"run_id": "run-1", "status": "pending_approval", "category": "reclamation", "priority": "urgent"},
+            {"run_id": "run-2", "status": "pending_approval", "category": "internal", "priority": "normal"},
+            {"run_id": "run-3", "status": "pending_approval", "category": "reclamation", "priority": "low"},
+        ]
+
+    monkeypatch.setattr(api, "list_runs", fake_list_runs)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/drafts?category=reclamation&priority=urgent",
+            headers={"X-Agora-User": "alice@example.com", "X-Agora-Agent-Instance": "ceo-email-agent"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["drafts"] == [
+        {"run_id": "run-1", "status": "pending_approval", "category": "reclamation", "priority": "urgent"}
+    ]
+    assert captured["status"] == "pending_approval"
+    assert captured["user_id"] == "alice@example.com"
+    assert captured["agent_instance_id"] == "ceo-email-agent"
+
+
+def test_categories_endpoint_validates_yaml(monkeypatch, tmp_path):
+    import src.api as api
+
+    path = tmp_path / "categories.yaml"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+
+    body = """enabled: true
+categories:
+  - name: support
+    display_name: Support
+    priority: urgent
+    policy: notify
+templates: []
+contacts: []
+"""
+
+    with TestClient(app) as client:
+        response = client.put("/categories", json={"categories_yaml": body})
+        got = client.get("/categories")
+
+    assert response.status_code == 200
+    assert response.json()["parsed"]["categories"][0]["name"] == "support"
+    assert got.json()["categories_yaml"] == body
+
+
 def test_run_registry_filters_by_status(tmp_path):
     path = tmp_path / "runs.json"
     upsert_run(
