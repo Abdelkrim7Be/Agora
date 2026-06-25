@@ -38,6 +38,9 @@ class EmailInput(TypedDict):
     # Verdict from the security service /sanitize, attached by the poller when
     # AGENT_SECURITY_ENABLED=true. Absent on the manual /run path. triage_router reads it.
     security: NotRequired[dict]
+    # Platform scoping — set by the poller and API from context variables so every
+    # run record carries explicit instance identity without relying solely on context lookups.
+    agent_instance_id: NotRequired[str]
 
 
 class StateInput(TypedDict):

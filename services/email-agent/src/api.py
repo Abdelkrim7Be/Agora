@@ -1002,7 +1002,10 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
 async def run(request: Request, email: EmailInput) -> RunResponse:
     graph = request.app.state.graph
     run_id = str(uuid.uuid4())
-    email_input = email.model_dump()
+    email_input = {
+        **email.model_dump(),
+        "agent_instance_id": current_agent_instance_id(),
+    }
     result = await graph.ainvoke(
         {"email_input": email_input}, _thread_config(run_id)
     )

@@ -90,6 +90,11 @@ def prepared_token_file(
     it is decrypted to the plaintext path for the duration of the call and the
     plaintext is re-encrypted and removed on exit, so tokens are never left on disk
     in the clear.
+
+    Concurrency note: the decrypt→use→re-encrypt sequence is not protected by a file
+    lock. For the single-process dev setup (one uvicorn worker + one poller) this is
+    safe in practice. In a multi-process production deployment, move to a DB-backed
+    token store with row-level locking or use an external secrets manager.
     """
     target = token_file_for_user(user_id, agent_instance_id)
     if not settings.token_encryption_key:

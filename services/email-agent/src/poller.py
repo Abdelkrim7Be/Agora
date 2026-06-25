@@ -169,7 +169,10 @@ async def process_message(
         return (msg_id, "skipped", existing["run_id"])
 
     thread = fetch_thread(message["threadId"], resource=resource)
-    email_input = gmail_to_email_input(message, thread_messages=thread)
+    email_input = {
+        **gmail_to_email_input(message, thread_messages=thread),
+        "agent_instance_id": current_agent_instance_id(),
+    }
 
     if settings.extract_attachments:
         pdf_blocks = []
