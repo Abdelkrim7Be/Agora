@@ -1,0 +1,186 @@
+package com.agora.gateway.agent;
+
+import com.agora.gateway.config.GatewayProperties;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+import java.net.URI;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+@Service
+public class AgentRegistryService {
+
+    private final GatewayProperties props;
+    private final AgentInstanceRepository instances;
+    private final RestClient restClient;
+    private final ObjectMapper objectMapper;
+
+    public AgentRegistryService(GatewayProperties props, AgentInstanceRepository instances,
+                                RestClient.Builder builder, ObjectMapper objectMapper) {
+        this.props = props;
+        this.instances = instances;
+        this.restClient = builder.build();
+        this.objectMapper = objectMapper;
+    }
+
+    public List<GatewayProperties.AgentType> agentTypes() {
+        return props.getAgentTypes();
+    }
+
+    public Optional<GatewayProperties.AgentType> findType(String id) {
+        return props.getAgentTypes().stream().filter(t -> t.getId().equals(id)).findFirst();
+    }
+
+    public String serviceHealth(GatewayProperties.AgentType type) {
+        try {
+            var response = restClient.get()
+                    .uri(URI.create(upstreamBase(type) + type.getHealthPath()))
+                    .retrieve()
+                    .toBodilessEntity();
+            return response.getStatusCode().is2xxSuccessful() ? "healthy" : "unhealthy";
+        } catch (RestClientException ex) {
+            return "unreachable";
+        }
+    }
+
+    public List<AgentInstance> visibleInstances(String username, String role) {
+        return instances.findAll().stream()
+                .filter(instance -> canView(instance, username, role))
+                .toList();
+    }
+
+    public boolean canView(AgentInstance instance, String username, String role) {
+        if ("owner".equals(role)) return true;
+        if (username != null && username.equals(instance.getCreatedBy())) return true;
+        return Arrays.stream(instance.getAllowedRoles().split(","))
+                .map(String::trim)
+                .anyMatch(r -> r.equalsIgnoreCase(role));
+    }
+
+    public AgentInstance create(CreateAgentInstanceRequest request, String username) {
+        GatewayProperties.AgentType type = findType(request.agentType())
+                .orElseThrow(() -> new UnknownAgentTypeException(request.agentType()));
+        String id = request.id() == null || request.id().isBlank()
+                ? slug(request.displayName()) + "-" + UUID.randomUUID().toString().substring(0, 8)
+                : slug(request.id());
+        if (instances.existsById(id)) {
+            throw new DuplicateAgentInstanceException(id);
+        }
+        AgentInstance instance = new AgentInstance(
+                id,
+                type.getId(),
+                request.displayName(),
+                request.mailboxIdentity(),
+                request.description(),
+                request.status() == null || request.status().isBlank() ? "active" : request.status(),
+                type.getBasePath(),
+                request.allowedRoles() == null || request.allowedRoles().isBlank() ? "owner" : request.allowedRoles(),
+                username,
+                request.color() == null || request.color().isBlank() ? type.getColor() : request.color(),
+                request.icon() == null || request.icon().isBlank() ? type.getIcon() : request.icon()
+        );
+        return instances.save(instance);
+    }
+
+    public Map<String, Object> summary(AgentInstance instance, String username) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        findType(instance.getAgentType()).ifPresent(type -> summary.put("service_health", serviceHealth(type)));
+        if (!"email-agent".equals(instance.getAgentType())) {
+            return summary;
+        }
+
+        summary.put("mailbox_connection", instance.getMailboxIdentity() == null || instance.getMailboxIdentity().isBlank()
+                ? "unknown" : "configured");
+        summary.put("sync_status", "unknown");
+        summary.put("pending_drafts", safePendingDrafts(instance, username));
+        summary.put("today_cost_eur", safeTodayCost(instance, username));
+        return summary;
+    }
+
+    private int safePendingDrafts(AgentInstance instance, String username) {
+        try {
+            JsonNode root = getJson(instance, username, "/drafts");
+            JsonNode drafts = root.get("drafts");
+            return drafts != null && drafts.isArray() ? drafts.size() : 0;
+        } catch (RuntimeException ex) {
+            return 0;
+        }
+    }
+
+    private double safeTodayCost(AgentInstance instance, String username) {
+        try {
+            JsonNode root = getJson(instance, username, "/costs/summary?period=day");
+            JsonNode cost = root.path("totals").path("cost_eur");
+            return cost.isNumber() ? cost.asDouble() : 0.0;
+        } catch (RuntimeException ex) {
+            return 0.0;
+        }
+    }
+
+    private JsonNode getJson(AgentInstance instance, String username, String path) {
+        String body = restClient.get()
+                .uri(URI.create(upstreamBase(instance.getAgentType()) + path))
+                .header("X-Agora-User", username == null ? "" : username)
+                .header("X-Agora-Agent-Instance", instance.getId())
+                .retrieve()
+                .body(String.class);
+        try {
+            return objectMapper.readTree(body == null ? "{}" : body);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Invalid upstream JSON", ex);
+        }
+    }
+
+    private String upstreamBase(GatewayProperties.AgentType type) {
+        return upstreamBase(type.getId());
+    }
+
+    private String upstreamBase(String agentType) {
+        if ("email-agent".equals(agentType)) {
+            return props.getUpstream().getEmailAgentUrl();
+        }
+        throw new UnknownAgentTypeException(agentType);
+    }
+
+    private String slug(String value) {
+        String slug = value == null ? "agent-instance" : value.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-|-$", "");
+        return slug.isBlank() ? "agent-instance" : slug;
+    }
+
+    public record CreateAgentInstanceRequest(
+            @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
+            @jakarta.validation.constraints.NotBlank @com.fasterxml.jackson.annotation.JsonProperty("agent_type") String agentType,
+            @jakarta.validation.constraints.NotBlank @com.fasterxml.jackson.annotation.JsonProperty("display_name") String displayName,
+            @com.fasterxml.jackson.annotation.JsonProperty("mailbox_identity") String mailboxIdentity,
+            @com.fasterxml.jackson.annotation.JsonProperty("description") String description,
+            @com.fasterxml.jackson.annotation.JsonProperty("status") String status,
+            @com.fasterxml.jackson.annotation.JsonProperty("allowed_roles") String allowedRoles,
+            @com.fasterxml.jackson.annotation.JsonProperty("color") String color,
+            @com.fasterxml.jackson.annotation.JsonProperty("icon") String icon
+    ) {}
+
+    public static class UnknownAgentTypeException extends RuntimeException {
+        public UnknownAgentTypeException(String agentType) {
+            super("unknown agent type: " + agentType);
+        }
+    }
+
+    public static class DuplicateAgentInstanceException extends RuntimeException {
+        public DuplicateAgentInstanceException(String id) {
+            super("agent instance already exists: " + id);
+        }
+    }
+}

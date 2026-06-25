@@ -48,6 +48,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/agent-instances").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasRole("OWNER")

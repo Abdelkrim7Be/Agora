@@ -2,11 +2,15 @@ package com.agora.gateway.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @ConfigurationProperties(prefix = "gateway")
 public class GatewayProperties {
 
     private Upstream upstream = new Upstream();
     private String defaultAgentInstance = "default-email-agent";
+    private List<AgentType> agentTypes = new ArrayList<>(List.of(AgentType.defaultEmailAgent()));
     private Jwt jwt = new Jwt();
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
@@ -16,6 +20,9 @@ public class GatewayProperties {
 
     public String getDefaultAgentInstance() { return defaultAgentInstance; }
     public void setDefaultAgentInstance(String defaultAgentInstance) { this.defaultAgentInstance = defaultAgentInstance; }
+
+    public List<AgentType> getAgentTypes() { return agentTypes; }
+    public void setAgentTypes(List<AgentType> agentTypes) { this.agentTypes = agentTypes; }
 
     public Jwt getJwt() { return jwt; }
     public void setJwt(Jwt jwt) { this.jwt = jwt; }
@@ -31,6 +38,54 @@ public class GatewayProperties {
 
         public String getEmailAgentUrl() { return emailAgentUrl; }
         public void setEmailAgentUrl(String emailAgentUrl) { this.emailAgentUrl = emailAgentUrl; }
+    }
+
+    public static class AgentType {
+        private String id = "";
+        private String displayName = "";
+        private String description = "";
+        private List<String> capabilities = new ArrayList<>();
+        private String basePath = "";
+        private String healthPath = "/health";
+        private String color = "";
+        private String icon = "";
+
+        public static AgentType defaultEmailAgent() {
+            AgentType type = new AgentType();
+            type.setId("email-agent");
+            type.setDisplayName("Email Agent");
+            type.setDescription("Autonomous email triage, drafting, validation, style learning, and mailbox operations.");
+            type.setCapabilities(List.of("email_triage", "draft_approval", "gmail_sync", "style_learning", "cost_observability"));
+            type.setBasePath("/api/agent");
+            type.setHealthPath("/health");
+            type.setColor("#38bdf8");
+            type.setIcon("mail");
+            return type;
+        }
+
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
+        public String getDisplayName() { return displayName; }
+        public void setDisplayName(String displayName) { this.displayName = displayName; }
+
+        public String getDescription() { return description; }
+        public void setDescription(String description) { this.description = description; }
+
+        public List<String> getCapabilities() { return capabilities; }
+        public void setCapabilities(List<String> capabilities) { this.capabilities = capabilities; }
+
+        public String getBasePath() { return basePath; }
+        public void setBasePath(String basePath) { this.basePath = basePath; }
+
+        public String getHealthPath() { return healthPath; }
+        public void setHealthPath(String healthPath) { this.healthPath = healthPath; }
+
+        public String getColor() { return color; }
+        public void setColor(String color) { this.color = color; }
+
+        public String getIcon() { return icon; }
+        public void setIcon(String icon) { this.icon = icon; }
     }
 
     public static class Jwt {
