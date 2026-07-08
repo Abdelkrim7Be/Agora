@@ -11,6 +11,7 @@ from langgraph.store.memory import InMemoryStore
 
 import src.poller as poller
 from src.graph import overall_workflow
+from src.tenant import current_agent_instance_id, user_context
 from tests.conftest import ai_tool_call
 
 
@@ -149,6 +150,27 @@ async def test_poll_once_skips_email_with_active_run(mocked_gmail, fake_llms):
     second = await poller.poll_once(graph, resource=object())
     assert second == [("m_dup", "pending_approval", first_run_id)]
     assert marked == []  # still awaiting a human → never marked read
+
+
+async def test_poll_once_reuses_active_run_across_delegated_users(mocked_gmail, fake_llms):
+    """Run deduplication is instance-scoped, independent of the actor syncing."""
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m_delegated", "Quick question", "can you help?")])
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, "c1"),
+        ],
+    )
+    graph = _graph()
+
+    with user_context("owner@example.com"):
+        first = await poller.poll_once(graph, resource=object())
+    with user_context("approver@example.com"):
+        second = await poller.poll_once(graph, resource=object())
+
+    assert second == [("m_delegated", "pending_approval", first[0][2])]
+    assert marked == []
 
 
 async def test_poll_once_empty_inbox(mocked_gmail, fake_llms):
@@ -453,6 +475,116 @@ async def test_poll_history_processes_history_refs(monkeypatch, fake_llms):
     assert outcomes[0][0] == "m_hist"
     assert outcomes[0][1] == "completed"
     assert marked == ["m_hist"]
+
+
+def test_active_instance_discovery_uses_gateway_registry(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    executed = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query):
+            executed.append(query)
+
+        def fetchall(self):
+            return [("ceo-email-agent",), ("hr-email-agent",)]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr(poller.settings, "database_url", "postgresql://test")
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _url: Connection()),
+    )
+
+    assert poller.active_email_agent_instance_ids() == [
+        "ceo-email-agent",
+        "hr-email-agent",
+    ]
+    assert "agent_instance" in executed[0]
+    assert "agent_type = 'email-agent'" in executed[0]
+
+
+def test_active_instance_discovery_falls_back_without_database(monkeypatch):
+    monkeypatch.setattr(poller.settings, "database_url", "")
+    monkeypatch.setattr(poller.settings, "default_agent_instance_id", "default-email-agent")
+
+    assert poller.active_email_agent_instance_ids() == ["default-email-agent"]
+
+
+async def test_poll_active_instances_uses_context_and_isolates_failures(monkeypatch):
+    resources = []
+    successes = []
+    failures = []
+
+    monkeypatch.setattr(
+        poller,
+        "get_status",
+        lambda: {"paused": current_agent_instance_id() == "paused-email-agent"},
+    )
+    monkeypatch.setattr(
+        poller,
+        "has_stored_token",
+        lambda instance_id: instance_id != "disconnected-email-agent",
+    )
+
+    def fake_gmail_resource():
+        instance_id = current_agent_instance_id()
+        resources.append(instance_id)
+        return f"gmail:{instance_id}"
+
+    async def fake_poll_once(_graph, resource=None):
+        if resource == "gmail:broken-email-agent":
+            raise RuntimeError("broken token")
+        return [("message-1", "completed", f"run:{current_agent_instance_id()}")]
+
+    monkeypatch.setattr(poller, "gmail_resource", fake_gmail_resource)
+    monkeypatch.setattr(poller, "poll_once", fake_poll_once)
+    monkeypatch.setattr(
+        poller,
+        "record_success",
+        lambda mode: successes.append((current_agent_instance_id(), mode)),
+    )
+    monkeypatch.setattr(
+        poller,
+        "record_failure",
+        lambda error: failures.append((current_agent_instance_id(), error)),
+    )
+
+    results = await poller.poll_active_instances_once(
+        object(),
+        [
+            "ceo-email-agent",
+            "broken-email-agent",
+            "paused-email-agent",
+            "disconnected-email-agent",
+        ],
+    )
+
+    assert resources == ["ceo-email-agent", "broken-email-agent"]
+    assert results["ceo-email-agent"][0][2] == "run:ceo-email-agent"
+    assert results["broken-email-agent"] == []
+    assert results["paused-email-agent"] == []
+    assert results["disconnected-email-agent"] == []
+    assert successes == [("ceo-email-agent", "polling")]
+    assert failures == [("broken-email-agent", "broken token")]
+    assert current_agent_instance_id() == poller.settings.default_agent_instance_id
 
 
 def test_ensure_watch_seeds_baseline(monkeypatch):

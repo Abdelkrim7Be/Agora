@@ -9,9 +9,7 @@ from typing import Iterator
 from src.config import SERVICE_ROOT, settings
 from src.tenant import (
     current_agent_instance_id,
-    current_user_id,
     normalize_agent_instance_id,
-    normalize_user_id,
 )
 
 
@@ -29,22 +27,21 @@ def token_file_for_user(
     user_id: str | None = None,
     agent_instance_id: str | None = None,
 ) -> Path:
-    resolved = normalize_user_id(user_id or current_user_id())
+    """Return the OAuth token path shared by one agent instance.
+
+    ``user_id`` remains accepted for API compatibility, but delegated users must
+    resolve the same mailbox token for a given instance.
+    """
     resolved_instance = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
-    default_user = normalize_user_id(settings.default_user_id)
     default_instance = normalize_agent_instance_id(settings.default_agent_instance_id)
     if resolved_instance == default_instance:
-        if settings.tenant_mode == "single" and resolved == default_user:
-            return _service_path(settings.gmail_token_path)
-        token_dir = _token_store_dir()
-        token_dir.mkdir(parents=True, exist_ok=True)
-        return token_dir / f"{resolved}.json"
+        return _service_path(settings.gmail_token_path)
 
     token_dir = _token_store_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
-    return token_dir / f"{resolved}__{resolved_instance}.json"
+    return token_dir / f"instance__{resolved_instance}.json"
 
 
 def _fernet():
@@ -57,6 +54,12 @@ def _fernet():
 
 def _encrypted_path(target: Path) -> Path:
     return target.with_name(target.name + ".enc")
+
+
+def has_stored_token(agent_instance_id: str | None = None) -> bool:
+    """Return whether an instance has a plaintext or encrypted Gmail token."""
+    target = token_file_for_user(agent_instance_id=agent_instance_id)
+    return target.is_file() or _encrypted_path(target).is_file()
 
 
 def delete_token(

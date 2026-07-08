@@ -51,7 +51,9 @@ as `enabled: false` — zero behavior change for the default single-mailbox setu
 ## Classification order
 
 1. **Contact match** — sender email or domain found in `contacts` with a `category`
-   field. Highest priority.
+   field. Highest priority. This means a broad domain contact (for example,
+   `example.com`) overrides even an explicit subject keyword from another category;
+   use exact contact emails when that broad override is not intended.
 2. **Predicate match** — first `Category` whose `when` conditions match the message
    (sender, domain, subject, label). An empty `when: {}` never matches by design;
    at least one condition is required.
@@ -64,7 +66,7 @@ as `enabled: false` — zero behavior change for the default single-mailbox setu
 | Policy | Behavior |
 |---|---|
 | `auto_draft` | Render the template and queue a `write_email` HITL interrupt. The human reviews, edits, and approves before any send. |
-| `notify` | Mark the run as `notify` and end. No reply generated. |
+| `notify` | If `route_to`/`owner` resolves to a mailbox, queue a `forward_email` approval for Gmail-originated messages. Manual runs without a trusted Gmail message id fail before approval. Without a route, end as a notification. |
 | `organize` | Apply category labels + archive via the inbox capability tools (requires `capabilities.inbox: true`). |
 | `ignore` | End silently. If `auto_organize.enabled` is true, also labels + archives. |
 

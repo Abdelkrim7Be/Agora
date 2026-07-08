@@ -29,6 +29,9 @@ class Category(BaseModel):
     template: str | None = None
     policy: Literal["auto_draft", "notify", "organize", "ignore"] = "notify"
     labels: list[str] = Field(default_factory=list)
+    owner: str | None = None
+    approver: str | None = None
+    route_to: list[str] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -57,9 +60,15 @@ class CategoriesConfig(BaseModel):
 
 def load_categories(path: str | Path | None = None, agent_instance_id: str | None = None) -> CategoriesConfig:
     categories_path = Path(path) if path else DEFAULT_CATEGORIES_PATH
-    if not categories_path.is_file():
-        return CategoriesConfig()
-    data = yaml.safe_load(categories_path.read_text()) or {}
+    if path is None:
+        from src.instance_config import read_instance_text
+
+        raw = read_instance_text("categories", categories_path, agent_instance_id)
+    elif categories_path.is_file():
+        raw = categories_path.read_text()
+    else:
+        raw = ""
+    data = yaml.safe_load(raw) or {}
     data.setdefault("categories", [])
     data.setdefault("templates", [])
     data.setdefault("contacts", [])
@@ -142,6 +151,9 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "priority": contact.priority or category.priority,
                 "template": category.template,
                 "policy": category.policy,
+                "owner": category.owner,
+                "approver": category.approver,
+                "route_to": category.route_to,
                 "contact": contact,
             }
 
@@ -153,6 +165,9 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "priority": category.priority,
                 "template": category.template,
                 "policy": category.policy,
+                "owner": category.owner,
+                "approver": category.approver,
+                "route_to": category.route_to,
                 "contact": None,
             }
     return {"category": None, "priority": "normal", "template": None, "policy": None, "contact": None}

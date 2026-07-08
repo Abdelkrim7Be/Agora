@@ -130,12 +130,18 @@ class AgentConfig(BaseModel):
 def load_config(path: str | Path | None = None) -> AgentConfig:
     """Load and validate config.yaml. Fails loud on missing file or empty/invalid fields."""
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
-    if not config_path.is_file():
+    if path is None:
+        from src.instance_config import read_instance_text
+
+        raw = read_instance_text("config", config_path)
+    elif config_path.is_file():
+        raw = config_path.read_text()
+    else:
         raise FileNotFoundError(
             f"Agent config not found at {config_path}. "
             "Copy config.yaml into the service root and fill in the agent behavior."
         )
-    data = yaml.safe_load(config_path.read_text())
+    data = yaml.safe_load(raw)
     if not data:
         raise ValueError(f"Agent config at {config_path} is empty.")
     return AgentConfig(**data)

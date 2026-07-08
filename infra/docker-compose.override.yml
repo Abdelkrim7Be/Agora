@@ -1,7 +1,7 @@
 # Demo-only overrides (auto-merged by `docker compose`). Not committed-critical:
 #   - mounts the real Gmail OAuth files into the agent so it can send
 #   - enables REAL sends (AGENT_DRY_RUN=false) so an approved reply actually arrives
-#   - 1-minute poll so a live-sent email is picked up fast
+#   - ~6-second poll so a live-sent email is picked up fast
 # Remove this file (or set AGENT_DRY_RUN=true) to go back to safe dry-run mode.
 services:
   # Host port 8080 is taken by another project (edun7), so expose the gateway on
@@ -18,7 +18,7 @@ services:
   email-agent:
     environment:
       AGENT_DRY_RUN: "false"
-      AGENT_POLL_INTERVAL_MIN: "0.333"
+      AGENT_POLL_INTERVAL_MIN: "0.1"
       GMAIL_TOKEN_PATH: /app/data/token.json
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
     volumes:
@@ -48,7 +48,7 @@ services:
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_DRY_RUN: "false"
-      AGENT_POLL_INTERVAL_MIN: "0.333"
+      AGENT_POLL_INTERVAL_MIN: "0.1"
       GMAIL_TOKEN_PATH: /app/data/token.json
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
       GMAIL_POLLING_FALLBACK_ENABLED: "true"

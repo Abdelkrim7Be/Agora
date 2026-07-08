@@ -56,6 +56,9 @@ class State(MessagesState):
     priority: NotRequired[Literal["urgent", "normal", "low"]]
     template: NotRequired[str]
     category_policy: NotRequired[str]
+    workflow_owner: NotRequired[str]
+    workflow_approver: NotRequired[str]
+    workflow_route_to: NotRequired[list[str]]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
     # Set when an approved send action fails after the human decision.

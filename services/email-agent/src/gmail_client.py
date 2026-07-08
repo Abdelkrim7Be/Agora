@@ -244,6 +244,37 @@ def _send_email_message(
     )
 
 
+def send_html_message(
+    to: str,
+    subject: str,
+    html: str,
+    text: str,
+    resource=None,
+    respect_dry_run: bool = True,
+) -> dict:
+    """Send a single multipart/alternative email (plaintext + HTML).
+
+    Used by the campaign broadcast path so recipients see real formatting in
+    Gmail rather than a raw markdown block. Honors AGENT_DRY_RUN like the other
+    send helpers so approval-gated broadcasts stay safe in dev.
+    """
+    if respect_dry_run and settings.dry_run:
+        return _dry_run_result("send_html", to=to, subject=subject)
+    resource = resource or gmail_resource()
+    message = EmailMessage()
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(text)
+    message.add_alternative(html, subtype="html")
+    gmail_message = {"raw": _encode_message(message)}
+    return (
+        resource.users()
+        .messages()
+        .send(userId="me", body=gmail_message)
+        .execute()
+    )
+
+
 def _message_headers(message: dict) -> list[dict]:
     return message.get("payload", {}).get("headers", [])
 

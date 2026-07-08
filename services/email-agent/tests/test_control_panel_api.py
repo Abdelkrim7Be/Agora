@@ -5,9 +5,89 @@ import json
 
 from fastapi.testclient import TestClient
 
+from src import api
+from src import automation
 from src.api import app, _require_run, _run_detail
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
 from src.tenant import current_agent_instance_id, current_user_id
+
+
+def test_rule_and_section_toggle(monkeypatch, tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        "enabled: false\n"
+        "rules:\n"
+        "  - name: archive promotions\n"
+        "    enabled: true\n"
+        "    when: {labels: [CATEGORY_PROMOTIONS]}\n"
+        "    then: {archive: true}\n"
+        "learning:\n"
+        "  enabled: false\n"
+    )
+    monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+
+    with TestClient(app) as client:
+        # Per-rule toggle off.
+        r = client.post("/rules/rule-toggle", json={"name": "archive promotions", "enabled": False})
+        assert r.status_code == 200
+        assert r.json()["parsed"]["rules"][0]["enabled"] is False
+
+        # Unknown rule → 404.
+        assert client.post("/rules/rule-toggle", json={"name": "nope", "enabled": True}).status_code == 404
+
+        # Master automation switch on.
+        r = client.post("/rules/section-toggle", json={"section": "automation", "enabled": True})
+        assert r.json()["parsed"]["enabled"] is True
+
+        # Subsystem (learning) on.
+        r = client.post("/rules/section-toggle", json={"section": "learning", "enabled": True})
+        assert r.json()["parsed"]["learning"]["enabled"] is True
+
+        # Unknown section → 400.
+        assert client.post("/rules/section-toggle", json={"section": "bogus", "enabled": True}).status_code == 400
+
+
+def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        "enabled: true\n"
+        "rules: []\n"
+        "learning:\n"
+        "  enabled: true\n"
+        "  suggestions_path: logs/rule_suggestions.jsonl\n"
+    )
+    suggestions_path = tmp_path / "logs" / "rule_suggestions.jsonl"
+    suggestions_path.parent.mkdir(parents=True, exist_ok=True)
+    suggestions_path.write_text(
+        json.dumps({
+            "correction_type": "ignored_draft",
+            "suggested_rule": {
+                "name": "review ignored_draft for example.com",
+                "enabled": False,
+                "when": {"sender_domain": ["example.com"]},
+                "then": {"notify": True},
+            },
+        }, sort_keys=True) + "\n"
+    )
+    monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(api, "SERVICE_ROOT", tmp_path)
+
+    with TestClient(app) as client:
+        listed = client.get("/rules/suggestions")
+        assert listed.status_code == 200
+        body = listed.json()
+        assert body["learning_enabled"] is True
+        assert len(body["suggestions"]) == 1
+
+        promoted = client.post("/rules/suggestions/0/promote")
+        assert promoted.status_code == 200
+        names = [r["name"] for r in promoted.json()["parsed"]["rules"]]
+        assert "review ignored_draft for example.com" in names
+
+        # Promoted suggestion is consumed, not offered again.
+        assert client.get("/rules/suggestions").json()["suggestions"] == []
 
 
 
@@ -43,7 +123,7 @@ contacts:
                 "priority": "urgent",
             }
         ],
-        "storage": "default-instance-yaml",
+        "storage": "instance-config",
     }
 
 
@@ -73,7 +153,7 @@ def test_drafts_endpoint_filters_category_and_priority(monkeypatch):
         {"run_id": "run-1", "status": "pending_approval", "category": "reclamation", "priority": "urgent"}
     ]
     assert captured["status"] == "pending_approval"
-    assert captured["user_id"] == "alice@example.com"
+    assert captured["user_id"] is None
     assert captured["agent_instance_id"] == "ceo-email-agent"
 
 
@@ -118,6 +198,20 @@ def test_run_registry_filters_by_status(tmp_path):
     assert [run["run_id"] for run in pending] == ["run-1"]
     assert pending[0]["subject"] == "Question"
     assert pending[0]["pending_action"][0]["action_request"]["action"] == "write_email"
+
+
+def test_run_registry_coerces_explicit_none_priority(tmp_path):
+    # security_hold / notify runs pass an explicit priority=None; Postgres has the
+    # column NOT NULL, so the registry must coerce it to 'normal' before persisting.
+    path = tmp_path / "runs.json"
+    upsert_run(
+        "run-hold",
+        "security_hold",
+        email_input={"subject": "Crédits", "author": "Temu", "priority": None},
+        path=path,
+    )
+    runs = list_runs(path=path)
+    assert runs[0]["priority"] == "normal"
 
 
 def test_run_registry_clears_pending_action_on_terminal_status(tmp_path):
@@ -382,10 +476,10 @@ def test_runs_endpoint_returns_registry(monkeypatch):
         response = client.get("/runs?status=pending_approval", headers={"X-Agora-User": "alice@example.com"})
 
     assert response.status_code == 200
-    assert captured["user_id"] == "alice@example.com"
+    assert captured["user_id"] is None
     assert captured["agent_instance_id"] == "default-email-agent"
     assert response.json() == {
-        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": "alice@example.com"}],
+        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": None}],
         "limit": 50,
         "offset": 0,
         "has_more": False,
@@ -423,7 +517,7 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"outcomes": [["msg-1", "pending_approval", "run-1"]]}
     assert captured == {
-        "gmail_user_id": "owner",
+        "gmail_user_id": None,
         "graph": graph,
         "resource": "gmail",
         "max_results": 7,
@@ -631,6 +725,66 @@ async def test_require_run_rejects_other_users_run(monkeypatch):
         await _require_run(Graph(), "run-1")
 
     assert getattr(exc.value, "status_code", None) == 404
+
+
+def test_get_run_prefers_instance_registry_pending_status(monkeypatch):
+    monkeypatch.setattr("src.api.get_run_record", lambda run_id, user_id=None, agent_instance_id=None: {
+        "run_id": run_id,
+        "status": "pending_approval",
+        "classification": "notify",
+        "pending_action": [{"action_request": {"action": "forward_email", "args": {"to": "ops@example.com"}}}],
+        "workflow_owner": "Operations",
+    })
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/run/run-1",
+            headers={"X-Agora-User": "viewer", "X-Agora-Agent-Instance": "default-email-agent"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending_approval"
+    assert response.json()["pending_action"][0]["action_request"]["action"] == "forward_email"
+
+
+def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
+    from src.categories import CategoriesConfig
+    import src.graph as graph
+
+    monkeypatch.setattr(
+        graph,
+        "load_categories",
+        lambda: CategoriesConfig(
+            enabled=True,
+            categories=[
+                {
+                    "name": "operations",
+                    "display_name": "Operations",
+                    "policy": "notify",
+                    "owner": "Operations",
+                    "route_to": ["ops@example.com"],
+                    "when": {"subject_contains": ["route me"]},
+                }
+            ],
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/run",
+            json={
+                "author": "Alice <alice@example.com>",
+                "to": "Me <me@example.com>",
+                "subject": "Please route me",
+                "email_thread": "Forward this message.",
+                "email_id": "caller-forged-gmail-id",
+                "gmail_thread_id": "caller-forged-thread-id",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "trusted Gmail message id" in response.json()["error"]
 
 
 async def test_require_run_allows_owned_run(monkeypatch):

@@ -16,6 +16,11 @@ categories:
   - name: reclamation
     display_name: Reclamation
     priority: urgent
+    owner: Support team
+    approver: support.manager@company.example
+    route_to:
+      - support@company.example
+      - quality@company.example
     policy: auto_draft
     template: complaint_reply
     when:
@@ -48,6 +53,9 @@ def test_load_categories_parses_templates_contacts_and_categories(tmp_path):
     assert cfg.enabled is True
     assert cfg.categories[0].name == "reclamation"
     assert cfg.categories[0].template == "complaint_reply"
+    assert cfg.categories[0].owner == "Support team"
+    assert cfg.categories[0].approver == "support.manager@company.example"
+    assert cfg.categories[0].route_to == ["support@company.example", "quality@company.example"]
     assert cfg.templates[0].variables == ["subject"]
     assert cfg.contacts[0].priority == "urgent"
 
@@ -83,6 +91,9 @@ def test_classify_category_matches_rule_when(tmp_path):
         "priority": "urgent",
         "template": "complaint_reply",
         "policy": "auto_draft",
+        "owner": "Support team",
+        "approver": "support.manager@company.example",
+        "route_to": ["support@company.example", "quality@company.example"],
         "contact": None,
     }
 
@@ -100,6 +111,9 @@ def test_run_registry_persists_category_metadata(tmp_path):
             "category_display_name": "Reclamation",
             "priority": "urgent",
             "template": "complaint_reply",
+            "workflow_owner": "Support team",
+            "workflow_approver": "support.manager@company.example",
+            "workflow_route_to": ["support@company.example", "quality@company.example"],
         },
     )
 
@@ -108,6 +122,9 @@ def test_run_registry_persists_category_metadata(tmp_path):
     assert runs[0]["category_display_name"] == "Reclamation"
     assert runs[0]["priority"] == "urgent"
     assert runs[0]["template"] == "complaint_reply"
+    assert runs[0]["workflow_owner"] == "Support team"
+    assert runs[0]["workflow_approver"] == "support.manager@company.example"
+    assert runs[0]["workflow_route_to"] == ["support@company.example", "quality@company.example"]
 
 
 def test_auto_draft_tool_call_renders_template(tmp_path):
@@ -319,3 +336,29 @@ def test_category_router_notify_policy_terminates(fake_llms, monkeypatch):
     result = g.email_assistant.invoke({"email_input": email}, _cfg())
     assert result.get("classification_decision") == "notify"
     assert not triage_called, "Triage LLM should not be called when category policy is notify"
+
+
+def test_shipped_categories_classify_new_workflows():
+    """Guard the shipped categories.yaml: conge/rendez_vous/devis classify as designed."""
+    cfg = load_categories()
+
+    conge = classify_category({"author": "emp@corp.com", "subject": "Demande de congé été"}, cfg)
+    assert conge["category"] == "conge"
+    assert conge["policy"] == "auto_draft"
+    assert conge["template"] == "conge_reply"
+    assert conge["route_to"] == ["abdelkrimbellagnech99@gmail.com"]
+
+    rdv = classify_category({"author": "client@corp.com", "subject": "Rendez-vous la semaine prochaine"}, cfg)
+    assert rdv["category"] == "rendez_vous"
+    assert rdv["policy"] == "auto_draft"
+    assert rdv["template"] == "rdv_reply"
+
+    devis = classify_category({"author": "buyer@corp.com", "subject": "Demande de devis produit"}, cfg)
+    assert devis["category"] == "devis"
+    assert devis["policy"] == "notify"
+    assert devis["route_to"] == ["zinebbellagnech@gmail.com"]
+
+    # New templates resolve and carry a body.
+    templates = {t.name: t for t in cfg.templates}
+    assert "conge_reply" in templates and templates["conge_reply"].body.strip()
+    assert "rdv_reply" in templates and templates["rdv_reply"].body.strip()
