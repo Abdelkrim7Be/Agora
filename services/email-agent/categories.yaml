@@ -3,6 +3,10 @@ categories:
 - name: attestation_travail
   display_name: Attestation de travail
   priority: urgent
+  owner: HR
+  approver: abdelkrimbellagnech99@gmail.com
+  route_to:
+  - abdelkrimbellagnech99@gmail.com
   when:
     sender_contains: []
     sender_domain: []
@@ -16,6 +20,10 @@ categories:
 - name: reclamation
   display_name: Réclamation
   priority: urgent
+  owner: Operations
+  approver: redacted@example.com
+  route_to:
+  - redacted@example.com
   when:
     sender_contains: []
     sender_domain: []
@@ -24,6 +32,109 @@ categories:
     - réclamation
     - complaint
     - remboursement
+    labels: []
+  template: null
+  policy: notify
+  labels: []
+- name: hr_requests
+  display_name: HR Requests
+  priority: urgent
+  owner: HR
+  approver: abdelkrimbellagnech99@gmail.com
+  route_to:
+  - abdelkrimbellagnech99@gmail.com
+  when:
+    sender_contains: []
+    sender_domain: []
+    subject_contains:
+    - stagiaire
+    - stage
+    - candidature
+    - internship
+    - cv
+    labels: []
+  template: null
+  policy: notify
+  labels: []
+- name: finance_requests
+  display_name: Finance Requests
+  priority: urgent
+  owner: Finance
+  approver: redacted@example.com
+  route_to:
+  - redacted@example.com
+  when:
+    sender_contains: []
+    sender_domain: []
+    subject_contains:
+    - facture
+    - invoice
+    - payment
+    - paiement
+    labels: []
+  template: null
+  policy: notify
+  labels: []
+- name: conge
+  display_name: Demande de congé
+  priority: urgent
+  owner: HR
+  approver: abdelkrimbellagnech99@gmail.com
+  route_to:
+  - abdelkrimbellagnech99@gmail.com
+  when:
+    sender_contains: []
+    sender_domain: []
+    subject_contains:
+    - congé
+    - conge
+    - leave
+    - vacation
+    - absence
+    - time off
+    labels: []
+  template: conge_reply
+  policy: auto_draft
+  labels: []
+- name: rendez_vous
+  display_name: Rendez-vous
+  priority: normal
+  owner: Operations
+  approver: redacted@example.com
+  route_to:
+  - redacted@example.com
+  when:
+    sender_contains: []
+    sender_domain: []
+    subject_contains:
+    - rendez-vous
+    - rendez vous
+    - meeting
+    - réunion
+    - reunion
+    - appointment
+    - disponibilité
+    - disponibilite
+    labels: []
+  template: rdv_reply
+  policy: auto_draft
+  labels: []
+- name: devis
+  display_name: Demande de devis
+  priority: normal
+  owner: Finance
+  approver: redacted@example.com
+  route_to:
+  - redacted@example.com
+  when:
+    sender_contains: []
+    sender_domain: []
+    subject_contains:
+    - devis
+    - quote
+    - tarif
+    - pricing
+    - proposition
     labels: []
   template: null
   policy: notify
@@ -59,9 +170,38 @@ templates:
     Bien cordialement,
   variables:
   - name
+- name: conge_reply
+  subject: null
+  body: |
+    Bonjour {{name}},
+
+    Merci pour votre demande de congé. Je confirme la bonne réception et reviens
+    vers vous après validation avec le responsable concerné.
+
+    Pourriez-vous me préciser les dates exactes souhaitées (début et fin) ainsi
+    que le motif si nécessaire ?
+
+    Bien cordialement,
+  variables:
+  - name
+- name: rdv_reply
+  subject: null
+  body: |
+    Bonjour {{name}},
+
+    Merci pour votre message. Je confirme la prise en compte de votre demande de
+    rendez-vous et reviens vers vous avec un créneau adapté dans les plus brefs
+    délais.
+
+    Pourriez-vous m'indiquer vos disponibilités ainsi que le format souhaité
+    (présentiel ou visioconférence) ?
+
+    Bien cordialement,
+  variables:
+  - name
 contacts:
-- email: null
-  domain: example.com
+- email: sarah.martin@example.com
+  domain: null
   name: Sarah Martin
   category: attestation_travail
   display_name: null

@@ -88,16 +88,15 @@ def test_per_instance_isolation(monkeypatch, tmp_path):
     assert hr["connection_status"] == "error"
 
 
-def test_per_user_isolation(monkeypatch, tmp_path):
+def test_delegated_users_share_instance_status(monkeypatch, tmp_path):
     _use_json(monkeypatch, tmp_path)
     sync_status.record_success("polling", "alice@example.com", "default-email-agent")
-    sync_status.record_failure("oops", "bob@example.com", "default-email-agent")
 
     a = sync_status.get_status("alice@example.com", "default-email-agent")
     b = sync_status.get_status("bob@example.com", "default-email-agent")
 
     assert a["connection_status"] == "connected"
-    assert b["connection_status"] == "error"
+    assert b["connection_status"] == "connected"
 
 
 def test_uses_tenant_context(monkeypatch, tmp_path):
@@ -108,7 +107,7 @@ def test_uses_tenant_context(monkeypatch, tmp_path):
             sync_status.record_success("manual")
             s = sync_status.get_status()
             assert s["connection_status"] == "connected"
-            assert s["user_id"] == "carol@example.com"
+            assert s["user_id"] == settings.default_user_id
             assert s["agent_instance_id"] == "support-email-agent"
 
     assert sync_status.get_status("carol@example.com", "ceo-email-agent")["connection_status"] == "disconnected"

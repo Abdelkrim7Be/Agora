@@ -1,0 +1,60 @@
+groups:
+- id: team_internal
+  name: Équipe interne
+  type: employees
+  members:
+  - email: abdelkrimbellagnech99@gmail.com
+    name: Abdelkrim Bellagnech
+    fields:
+      dept: HR
+  - email: redacted@example.com
+    name: Test User
+    fields:
+      dept: Finance
+- id: clients_demo
+  name: Clients (démo)
+  type: clients
+  members:
+  - email: abdelkrimbellagnech99@gmail.com
+    name: Abdelkrim Bellagnech
+    fields:
+      company: Agora
+templates:
+- name: internal_announcement
+  subject: 'Information interne : {{name}}'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Nous souhaitons vous informer d'une **mise à jour importante** concernant
+    l'organisation de l'équipe **{{dept}}**.
+
+    Points clés :
+
+    - Nouvelle procédure applicable dès la semaine prochaine
+    - Un point d'équipe sera planifié pour répondre à vos questions
+    - Merci de confirmer la bonne réception de ce message
+
+    Bien cordialement,
+    La direction
+  variables:
+  - name
+  - dept
+- name: client_update
+  subject: 'Nouveautés pour {{company}}'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Merci de votre confiance. Voici les **dernières nouveautés** que nous avons
+    préparées pour {{company}} :
+
+    1. Un nouveau tableau de bord de suivi
+    2. Des délais de traitement réduits
+    3. Un interlocuteur dédié à votre compte
+
+    N'hésitez pas à nous répondre pour toute question.
+
+    Bien cordialement,
+    L'équipe Agora
+  variables:
+  - name
+  - company

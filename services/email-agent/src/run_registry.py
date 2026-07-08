@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from src.config import SERVICE_ROOT, settings
@@ -18,6 +19,7 @@ DEFAULT_RUN_INDEX = SERVICE_ROOT / "logs" / "run_index.json"
 # Cap the local JSON index so a long-running dev poller can't grow it unbounded.
 # Production Phase 4 deployments use the Postgres backend instead.
 MAX_RUNS = 1000
+_json_transition_lock = Lock()
 
 
 def _path(path: str | Path | None = None) -> Path:
@@ -76,8 +78,14 @@ def _record(
         "gmail_thread_id": email_input.get("gmail_thread_id"),
         "category": email_input.get("category"),
         "category_display_name": email_input.get("category_display_name"),
-        "priority": email_input.get("priority", "normal"),
+        # priority is NOT NULL in Postgres; callers may pass an explicit None
+        # (e.g. security_hold / notify runs with no matched category), so coerce.
+        "priority": email_input.get("priority") or "normal",
         "template": email_input.get("template"),
+        "workflow_owner": email_input.get("workflow_owner"),
+        "workflow_approver": email_input.get("workflow_approver"),
+        "workflow_route_to": email_input.get("workflow_route_to") or [],
+        "error": email_input.get("error"),
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -99,6 +107,10 @@ def _json_upsert(record: dict, path: str | Path | None = None) -> dict:
                 "category_display_name",
                 "priority",
                 "template",
+                "workflow_owner",
+                "workflow_approver",
+                "workflow_route_to",
+                "error",
             }:
                 existing[key] = value
         saved = existing
@@ -182,6 +194,10 @@ def setup_run_registry() -> None:
                     category_display_name TEXT,
                     priority TEXT NOT NULL DEFAULT 'normal',
                     template TEXT,
+                    workflow_owner TEXT,
+                    workflow_approver TEXT,
+                    workflow_route_to JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    error TEXT,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
@@ -203,12 +219,28 @@ def setup_run_registry() -> None:
                 "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS template TEXT"
             )
             cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workflow_approver TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workflow_owner TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workflow_route_to JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
+            cur.execute(
+                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS error TEXT"
+            )
+            cur.execute(
                 "CREATE INDEX IF NOT EXISTS agent_runs_user_instance_status_updated_idx "
                 "ON agent_runs (user_id, agent_instance_id, status, updated_at DESC)"
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS agent_runs_user_instance_updated_idx "
                 "ON agent_runs (user_id, agent_instance_id, updated_at DESC)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS agent_runs_instance_status_updated_idx "
+                "ON agent_runs (agent_instance_id, status, updated_at DESC)"
             )
 
 
@@ -229,6 +261,7 @@ def _postgres_upsert(record: dict) -> dict:
         "pending_action": Jsonb(record["pending_action"])
         if record["pending_action"] is not None
         else None,
+        "workflow_route_to": Jsonb(record.get("workflow_route_to") or []),
     }
     with _connect() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -237,12 +270,14 @@ def _postgres_upsert(record: dict) -> dict:
                 INSERT INTO agent_runs (
                     run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
-                    category, category_display_name, priority, template, updated_at
+                    category, category_display_name, priority, template, workflow_owner,
+                    workflow_approver, workflow_route_to, error, updated_at
                 ) VALUES (
                     %(run_id)s, %(user_id)s, %(agent_instance_id)s, %(status)s,
                     %(classification)s, %(pending_action)s, %(subject)s, %(author)s,
                     %(email_id)s, %(gmail_thread_id)s, %(category)s,
-                    %(category_display_name)s, %(priority)s, %(template)s, %(updated_at)s
+                    %(category_display_name)s, %(priority)s, %(template)s, %(workflow_owner)s,
+                    %(workflow_approver)s, %(workflow_route_to)s, %(error)s, %(updated_at)s
                 )
                 ON CONFLICT (run_id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -258,10 +293,15 @@ def _postgres_upsert(record: dict) -> dict:
                     category_display_name = COALESCE(EXCLUDED.category_display_name, agent_runs.category_display_name),
                     priority = COALESCE(EXCLUDED.priority, agent_runs.priority),
                     template = COALESCE(EXCLUDED.template, agent_runs.template),
+                    workflow_owner = COALESCE(EXCLUDED.workflow_owner, agent_runs.workflow_owner),
+                    workflow_approver = COALESCE(EXCLUDED.workflow_approver, agent_runs.workflow_approver),
+                    workflow_route_to = COALESCE(EXCLUDED.workflow_route_to, agent_runs.workflow_route_to),
+                    error = EXCLUDED.error,
                     updated_at = EXCLUDED.updated_at
                 RETURNING run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
-                    category, category_display_name, priority, template, updated_at
+                    category, category_display_name, priority, template, workflow_owner,
+                    workflow_approver, workflow_route_to, error, updated_at
                 """,
                 params,
             )
@@ -299,7 +339,8 @@ def _postgres_list(
                 """
                 SELECT run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
-                    category, category_display_name, priority, template, updated_at
+                    category, category_display_name, priority, template, workflow_owner,
+                    workflow_approver, workflow_route_to, error, updated_at
                 FROM agent_runs
                 """
                 + where
@@ -332,7 +373,8 @@ def _postgres_get(
                 """
                 SELECT run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
-                    category, category_display_name, priority, template, updated_at
+                    category, category_display_name, priority, template, workflow_owner,
+                    workflow_approver, workflow_route_to, error, updated_at
                 FROM agent_runs
                 WHERE
                 """
@@ -411,6 +453,67 @@ def get_run(
         user_id=user_id,
         agent_instance_id=agent_instance_id,
     )
+
+
+def claim_run(
+    run_id: str,
+    expected_status: str,
+    new_status: str,
+    path: str | Path | None = None,
+    agent_instance_id: str | None = None,
+) -> dict | None:
+    """Atomically move a run between statuses and return the claimed record."""
+    instance_id = normalize_agent_instance_id(
+        agent_instance_id or current_agent_instance_id()
+    )
+    if selected_run_registry_backend(path) == "postgres":
+        from psycopg.rows import dict_row
+
+        setup_run_registry()
+        with _connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    UPDATE agent_runs
+                    SET status = %(new_status)s, updated_at = NOW()
+                    WHERE run_id = %(run_id)s
+                      AND agent_instance_id = %(agent_instance_id)s
+                      AND status = %(expected_status)s
+                    RETURNING run_id, user_id, agent_instance_id, status,
+                        classification, pending_action, subject, author, email_id,
+                        gmail_thread_id, category, category_display_name, priority,
+                        template, workflow_owner, workflow_approver,
+                        workflow_route_to, error, updated_at
+                    """,
+                    {
+                        "run_id": run_id,
+                        "agent_instance_id": instance_id,
+                        "expected_status": expected_status,
+                        "new_status": new_status,
+                    },
+                )
+                row = cur.fetchone()
+                return _postgres_row(row) if row else None
+
+    with _json_transition_lock:
+        index_path = _path(path)
+        data = _read(index_path)
+        record = next(
+            (
+                item
+                for item in data.get("runs", [])
+                if item.get("run_id") == run_id
+                and normalize_agent_instance_id(item.get("agent_instance_id")) == instance_id
+                and item.get("status") == expected_status
+            ),
+            None,
+        )
+        if record is None:
+            return None
+        record["status"] = new_status
+        record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _write(index_path, data)
+        return record.copy()
 
 
 # Statuses where the email is still awaiting a human and is left UNREAD on purpose.

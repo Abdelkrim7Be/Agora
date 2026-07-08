@@ -9,6 +9,7 @@ COPY src/ ./src/
 COPY config.yaml .
 COPY rules.yaml .
 COPY categories.yaml .
+COPY campaigns.yaml .
 
 EXPOSE 8000
 

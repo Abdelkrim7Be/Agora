@@ -1,16 +1,41 @@
-# Email automation rules — opt-in. With enabled: false this file changes nothing.
+# Email automation rules — opt-in deterministic actions run BEFORE the triage LLM.
+# Matched rules act through the normal tool path (dry-run + security policy still apply).
+#
+# Matching predicates (all provided must hold): sender_contains, sender_domain,
+# subject_contains, labels (Gmail labelIds, e.g. CATEGORY_PROMOTIONS / CATEGORY_SOCIAL).
+# Actions: labels (apply), archive, mark_read, notify, respond, snooze_days.
 
-enabled: false
+enabled: true
 
 rules:
-  # - name: archive newsletters
-  #   enabled: true
-  #   when:
-  #     sender_domain: ["newsletter.example.com"]
-  #     subject_contains: ["weekly digest"]
-  #   then:
-  #     labels: ["Auto/Newsletters"]
-  #     archive: true
+  # Promotional mail: label, mark read, and archive out of the inbox.
+  - name: archive promotions
+    enabled: true
+    when:
+      labels: ["CATEGORY_PROMOTIONS"]
+    then:
+      labels: ["Auto/Promotions"]
+      mark_read: true
+      archive: true
+
+  # Social notifications: label, mark read, and archive.
+  - name: archive social
+    enabled: true
+    when:
+      labels: ["CATEGORY_SOCIAL"]
+    then:
+      labels: ["Auto/Social"]
+      mark_read: true
+      archive: true
+
+  # Bulk "forums" / mailing-list traffic: label and archive, keep unread.
+  - name: archive forums
+    enabled: true
+    when:
+      labels: ["CATEGORY_FORUMS"]
+    then:
+      labels: ["Auto/Forums"]
+      archive: true
 
 digest:
   enabled: false
@@ -31,6 +56,9 @@ follow_ups:
   max_results: 10
   nudge: Just following up on this.
 
+# Dynamic learning: every human correction (ignore / edit / feedback on a draft)
+# appends a disabled rule suggestion to the path below. Promote suggestions into
+# the `rules` list above (one click in the Rules tab) to make them active.
 learning:
-  enabled: false
+  enabled: true
   suggestions_path: logs/rule_suggestions.jsonl

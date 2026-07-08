@@ -141,12 +141,65 @@ def reload_config() -> None:
     is enough for the current process. Note: a separate poller process keeps its own
     copy and must be restarted (or reload itself) to pick up the change.
     """
-    global config, tools, tools_prompt, tools_by_name_map, approval_set, llm_with_tools
-    config = load_config()
+    global agent_config, config, tools, tools_prompt, tools_by_name_map, approval_set, llm_with_tools
+    agent_config = load_config()
+    config = agent_config
     tools, tools_prompt = load_capabilities(config.capabilities)
     tools_by_name_map = tools_by_name(tools)
     approval_set = approval_required(config.capabilities)
     llm_with_tools = llm.bind_tools(tools, tool_choice="any")
+
+
+ROLE_ROUTE_TARGETS = {
+    "hr": "abdelkrimbellagnech99@gmail.com",
+    "human resources": "abdelkrimbellagnech99@gmail.com",
+    "rh": "abdelkrimbellagnech99@gmail.com",
+    "operations": "redacted@example.com",
+    "ops": "redacted@example.com",
+    "management": "redacted@example.com",
+    "finance": "redacted@example.com",
+    "accounting": "redacted@example.com",
+}
+
+
+def _resolve_route_target(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if "@" in cleaned:
+        return cleaned
+    return ROLE_ROUTE_TARGETS.get(cleaned.lower())
+
+
+def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | None:
+    if "forward_email" not in tools_by_name_map:
+        return None
+    raw_targets = category_update.get("workflow_route_to") or []
+    if isinstance(raw_targets, str):
+        raw_targets = [raw_targets]
+    candidates = [*raw_targets, category_update.get("workflow_owner")]
+    target = next((_resolve_route_target(item) for item in candidates if _resolve_route_target(item)), None)
+    if not target:
+        return None
+
+    author, _to, subject, _thread = parse_email(state["email_input"])
+    category = category_update.get("category_display_name") or category_update.get("category") or "Workflow"
+    owner = category_update.get("workflow_owner") or "unassigned"
+    approver = category_update.get("workflow_approver") or "workspace approver"
+    note = (
+        f"Agora workflow route: {category}.\n"
+        f"Owner: {owner}. Approver: {approver}.\n"
+        f"Original sender: {author}. Subject: {subject}.\n\n"
+        "Please handle this request or reply internally with the next action."
+    )
+    return {
+        "name": "forward_email",
+        "args": {"to": target, "note": note},
+        "id": f"workflow_forward_{uuid.uuid4().hex}",
+        "type": "tool_call",
+    }
 
 
 def automation_router(
@@ -196,6 +249,9 @@ def category_router(
         "priority": category_meta.get("priority") or "normal",
         "template": category_meta.get("template"),
         "category_policy": policy,
+        "workflow_owner": category_meta.get("owner"),
+        "workflow_approver": category_meta.get("approver"),
+        "workflow_route_to": category_meta.get("route_to") or [],
     }
 
     if not cat or not policy:
@@ -270,6 +326,32 @@ def category_router(
         )
 
     if policy == "notify":
+        forward_call = _workflow_forward_tool_call(state, category_update)
+        if forward_call is not None and not state["email_input"].get("email_id"):
+            error = (
+                "This workflow requires forwarding the original Gmail message, but this "
+                "run was created manually and has no trusted Gmail message id. Sync the "
+                "mailbox and process the Gmail-originated message instead."
+            )
+            print(f"🔔 Category '{cat}': manual forward rejected")
+            return Command(
+                goto=END,
+                update={
+                    "classification_decision": "notify",
+                    "email_send_failed": error,
+                    **category_update,
+                },
+            )
+        if forward_call is not None:
+            print(f"🔔 Category '{cat}': notify policy, routing for approval")
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "notify",
+                    **category_update,
+                    "messages": [AIMessage(content="", tool_calls=[forward_call])],
+                },
+            )
         print(f"🔔 Category '{cat}': notify policy, terminating")
         return Command(goto=END, update={"classification_decision": "notify", **category_update})
 
@@ -648,7 +730,7 @@ def tool_node(state: State, store: BaseStore, config=None):
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
         )
-        if name == "write_email":
+        if name in {"write_email", "forward_email", "reply_all"}:
             sent = True
 
     update = {"messages": result}
@@ -787,6 +869,9 @@ def triage_router(
                 "priority": c.priority,
                 "template": c.template,
                 "category_policy": c.policy,
+                "workflow_owner": c.owner,
+                "workflow_approver": c.approver,
+                "workflow_route_to": c.route_to,
             }
 
     if classification == "respond":

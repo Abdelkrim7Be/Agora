@@ -25,10 +25,13 @@ public class AgentRegistryController {
 
     private final AgentRegistryService service;
     private final AuditService auditService;
+    private final InstanceGrantService grants;
 
-    public AgentRegistryController(AgentRegistryService service, AuditService auditService) {
+    public AgentRegistryController(AgentRegistryService service, AuditService auditService,
+                                   InstanceGrantService grants) {
         this.service = service;
         this.auditService = auditService;
+        this.grants = grants;
     }
 
     @GetMapping("/agents")
@@ -43,7 +46,8 @@ public class AgentRegistryController {
         String username = auth.getName();
         String role = role(auth);
         return service.visibleInstances(username, role).stream()
-                .map(instance -> AgentInstanceResponse.from(instance, service.summary(instance, username)))
+                .map(instance -> AgentInstanceResponse.from(instance, service.summary(instance, username),
+                        grants.effectiveRole(instance.getId(), username, role).orElse("")))
                 .toList();
     }
 
@@ -52,7 +56,7 @@ public class AgentRegistryController {
             @Valid @RequestBody AgentRegistryService.CreateAgentInstanceRequest request) {
         AgentInstance instance = service.create(request, auth.getName());
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName())));
+                .body(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
     }
 
     @DeleteMapping("/agent-instances/{instanceId}")
@@ -61,7 +65,7 @@ public class AgentRegistryController {
         AgentInstance instance = service.deactivate(instanceId);
         auditService.record(auth.getName(), role(auth), "deactivate_instance", "DELETE",
                 "/agent-instances/" + instanceId, null, "deactivated");
-        return ResponseEntity.ok(AgentInstanceResponse.from(instance, Map.of()));
+        return ResponseEntity.ok(AgentInstanceResponse.from(instance, Map.of(), "owner"));
     }
 
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)
@@ -113,13 +117,14 @@ public class AgentRegistryController {
             String color,
             String icon,
             @JsonProperty("created_at") Instant createdAt,
+            @JsonProperty("effective_role") String effectiveRole,
             Map<String, Object> summary
     ) {
-        static AgentInstanceResponse from(AgentInstance instance, Map<String, Object> summary) {
+        static AgentInstanceResponse from(AgentInstance instance, Map<String, Object> summary, String effectiveRole) {
             return new AgentInstanceResponse(instance.getId(), instance.getAgentType(), instance.getDisplayName(),
                     instance.getMailboxIdentity(), instance.getDescription(), instance.getStatus(),
                     instance.getBasePath(), instance.getAllowedRoles(), instance.getCreatedBy(),
-                    instance.getColor(), instance.getIcon(), instance.getCreatedAt(), summary);
+                    instance.getColor(), instance.getIcon(), instance.getCreatedAt(), effectiveRole, summary);
         }
     }
 }

@@ -46,6 +46,65 @@ def test_respond_email_routes_to_agent(fake_llms, respond_email):
     assert result["classification_decision"] == "respond"
 
 
+def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "approver": "redacted@example.com",
+                "route_to": ["redacted@example.com"],
+                "when": {"subject_contains": ["question"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    email = {**respond_email, "email_id": "msg-route"}
+
+    result = email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert result["classification_decision"] == "notify"
+    assert result["workflow_owner"] == "Operations"
+    assert result["workflow_route_to"] == ["redacted@example.com"]
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "forward_email"
+    assert request["action_request"]["args"]["to"] == "redacted@example.com"
+    assert "Réclamation" in request["action_request"]["args"]["note"]
+
+
+def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "route_to": ["ops@example.com"],
+                "when": {"subject_contains": ["question"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+
+    result = email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert "trusted Gmail message id" in result["email_send_failed"]
+    assert "__interrupt__" not in result
+
+
 def test_ignore_email_ends_after_triage(fake_llms, ignore_email):
     """An 'ignore' classification stops at triage without drafting."""
     fake_llms(classification="ignore")
@@ -70,7 +129,10 @@ def _enable_auto_organize(monkeypatch, label: str = "Auto/Ignored"):
 
 
 def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore_email):
+    from src.categories import CategoriesConfig
+
     g, inbox_tools = _enable_auto_organize(monkeypatch)
+    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g.settings, "security_enabled", False)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
@@ -109,7 +171,10 @@ def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore
 def test_auto_organize_uses_authorization_when_security_enabled(
     monkeypatch, fake_llms, ignore_email
 ):
+    from src.categories import CategoriesConfig
+
     g, inbox_tools = _enable_auto_organize(monkeypatch, label="Auto/Skip")
+    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
     g._authorization_cache.clear()
     monkeypatch.setattr(g.settings, "security_enabled", True)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
@@ -231,6 +296,8 @@ def test_llm_call_includes_writing_style_in_prompt(monkeypatch, fake_llms, respo
             )
 
     fake_llms(classification="respond")
+    from src.categories import CategoriesConfig
+    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g, "llm_with_tools", _CaptureToolLLM())
     store = InMemoryStore()
     store.put(namespace("writing_style"), "user_preferences", wrap_preferences("Use a warm concise voice."))
@@ -255,6 +322,9 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
                 "display_name": "Support",
                 "priority": "urgent",
                 "policy": "notify",
+                "owner": "Support team",
+                "approver": "support.manager@example.com",
+                "route_to": ["support@example.com"],
                 "when": {"sender_domain": ["example.com"]},
             }
         ],
@@ -270,6 +340,9 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
     assert result["category"] == "support"
     assert result["category_display_name"] == "Support"
     assert result["priority"] == "urgent"
+    assert result["workflow_owner"] == "Support team"
+    assert result["workflow_approver"] == "support.manager@example.com"
+    assert result["workflow_route_to"] == ["support@example.com"]
 
 
 def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, respond_email):
@@ -285,6 +358,9 @@ def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, 
                 "priority": "urgent",
                 "policy": "auto_draft",
                 "template": "complaint_reply",
+                "owner": "Support team",
+                "approver": "support.manager@example.com",
+                "route_to": ["support@example.com"],
                 "when": {"sender_domain": ["example.com"]},
             }
         ],
@@ -304,6 +380,9 @@ def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, 
     assert result["classification_decision"] == "respond"
     assert result["category"] == "reclamation"
     assert result["priority"] == "urgent"
+    assert result["workflow_owner"] == "Support team"
+    assert result["workflow_approver"] == "support.manager@example.com"
+    assert result["workflow_route_to"] == ["support@example.com"]
     request = result["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "write_email"
     assert request["action_request"]["args"]["subject"] == "Re: Quick question about the API"
