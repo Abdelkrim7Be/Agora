@@ -414,6 +414,30 @@ class RbacTest {
     }
 
     @Test
+    void viewer_can_read_agent_health() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/health"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"status\":\"ok\",\"agent\":{\"status\":\"up\"},\"queue_depth\":0}")));
+
+        mockMvc.perform(get("/api/agent/health")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.agent.status").value("up"));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/health")));
+    }
+
+    @Test
+    void unauthenticated_cannot_read_agent_health_401() throws Exception {
+        mockMvc.perform(get("/api/agent/health"))
+                .andExpect(status().isUnauthorized());
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/health")));
+    }
+
+    @Test
     void admin_can_list_users() throws Exception {
         mockMvc.perform(get("/users")
                         .header("Authorization", "Bearer " + login("admin", "adminpass")))
