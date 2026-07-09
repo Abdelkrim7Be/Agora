@@ -62,10 +62,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasAnyRole("OWNER", "VIEWER")
-                // approve/reject/respond: JWT allows any authenticated; instance role enforced by ProxyController
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").authenticated()
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").authenticated()
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").authenticated()
+                // approve/reject/respond: limit the JWT gate to shipped roles; the instance-level
+                // owner/approver check still happens in ProxyController.
+                // TODO(wave-1b): allow a dedicated APPROVER JWT role if/when it ships.
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/sync/status").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync/pause").hasRole("OWNER")
