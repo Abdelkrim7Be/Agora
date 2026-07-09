@@ -5,6 +5,10 @@ import time
 import uuid
 
 
+TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_BACKOFF_SECONDS = 30.0
+
+
 from src.automation import (
     RulesConfig,
     build_follow_up_plan,
@@ -34,6 +38,7 @@ from src.gmail_client import (
     watch_mailbox,
 )
 from src.graph import overall_workflow, reload_config
+from src.migrate import upgrade_to_head
 from src.gmail_sync import set_last_history_id, setup_gmail_sync
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
 from src.run_registry import (
@@ -49,6 +54,67 @@ from src.tenant import (
     current_agent_instance_id,
     normalize_agent_instance_id,
 )
+
+
+def _http_status_code(exc: Exception) -> int | None:
+    response = getattr(exc, "resp", None)
+    status = getattr(response, "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError)):
+        return True
+    status = _http_status_code(exc)
+    if status in TRANSIENT_HTTP_STATUS_CODES:
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in (
+        "rate_limit",
+        "rate limit",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection refused",
+        "server disconnected",
+    ))
+
+
+def _backoff_seconds(attempt: int) -> float:
+    base = max(settings.poll_backoff_base_seconds, 0.0)
+    return min(base * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
+
+
+async def _process_message_with_retry(
+    graph,
+    msg_id: str,
+    resource,
+    rules_config: RulesConfig,
+) -> tuple:
+    max_retries = max(0, settings.poll_max_retries)
+    attempt = 0
+    while True:
+        try:
+            return await process_message(graph, msg_id, resource, rules_config)
+        except Exception as exc:
+            if not _is_transient_error(exc):
+                print(f"poller: {msg_id} failed without retry: {exc}")
+                record_failure(str(exc))
+                return (msg_id, "failed", "")
+            attempt += 1
+            if attempt > max_retries:
+                print(f"poller: {msg_id} exhausted retries: {exc}")
+                record_failure(str(exc))
+                return (msg_id, "failed", "")
+            delay = _backoff_seconds(attempt)
+            print(f"poller: {msg_id} transient failure (attempt {attempt}/{max_retries}): {exc}")
+            await asyncio.sleep(delay)
 
 
 def _run_email_input(email_input: dict, result: dict) -> dict:
@@ -242,7 +308,6 @@ async def process_message(
         # Leave UNREAD so the threat stays visible; forced-notify is not delivered anywhere.
         outcome_status = "security_hold"
     else:
-        mark_as_read(msg_id, resource=resource)
         outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
 
     record_digest_item(rules_config, outcome_status, email_input, run_id)
@@ -255,6 +320,8 @@ async def process_message(
         pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
         agent_instance_id=current_agent_instance_id(),
     )
+    if outcome_status in {"completed", "notify"}:
+        mark_as_read(msg_id, resource=resource)
     return (msg_id, outcome_status, run_id)
 
 
@@ -269,7 +336,7 @@ async def poll_history(
     rules_config = rules_config or load_rules()
     outcomes: list[tuple] = []
     for ref in fetch_history_message_refs(start_history_id, resource=resource):
-        outcome = await process_message(graph, ref["id"], resource, rules_config)
+        outcome = await _process_message_with_retry(graph, ref["id"], resource, rules_config)
         if outcome[1] != "skipped":
             outcomes.append(outcome)
     maybe_emit_daily_digest(rules_config)
@@ -301,7 +368,7 @@ async def poll_once(
             outcomes.append((msg_id, "snoozed_resurfaced", label_name))
 
     for ref in fetch_unread(max_results, resource=resource):
-        outcomes.append(await process_message(graph, ref["id"], resource, rules_config))
+        outcomes.append(await _process_message_with_retry(graph, ref["id"], resource, rules_config))
 
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
     maybe_emit_daily_digest(rules_config)
@@ -377,6 +444,7 @@ async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
     interval = settings.poll_interval_minutes * 60
     renew = settings.gmail_watch_renew_hours * 3600
+    upgrade_to_head()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()

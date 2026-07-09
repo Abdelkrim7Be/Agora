@@ -42,26 +42,8 @@ def _connect():
 def setup_sync_status() -> None:
     if selected_run_registry_backend() != "postgres":
         return
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS email_agent_sync (
-                    user_id TEXT NOT NULL,
-                    agent_instance_id TEXT NOT NULL,
-                    provider TEXT NOT NULL DEFAULT 'gmail',
-                    connection_status TEXT NOT NULL DEFAULT 'disconnected',
-                    sync_mode TEXT NOT NULL DEFAULT 'idle',
-                    last_success_at TIMESTAMPTZ,
-                    last_failure_at TIMESTAMPTZ,
-                    last_error TEXT,
-                    watch_expires_at TIMESTAMPTZ,
-                    paused BOOLEAN NOT NULL DEFAULT FALSE,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (user_id, agent_instance_id)
-                )
-                """
-            )
+    # Postgres schema is owned by Alembic migrations. JSON dev path stays unchanged.
+    return
 
 
 # --- JSON backend ---

@@ -477,6 +477,130 @@ async def test_poll_history_processes_history_refs(monkeypatch, fake_llms):
     assert marked == ["m_hist"]
 
 
+async def test_process_message_retries_transient_error_then_succeeds(monkeypatch):
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def fake_process(_graph, msg_id, resource, rules_config):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("429 rate_limit_exceeded")
+        return (msg_id, "completed", "run-1")
+
+    monkeypatch.setattr(poller.settings, "poll_max_retries", 3)
+    monkeypatch.setattr(poller.settings, "poll_backoff_base_seconds", 2)
+    monkeypatch.setattr(poller, "process_message", fake_process)
+    monkeypatch.setattr(poller, "record_failure", lambda error: (_ for _ in ()).throw(AssertionError(error)))
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
+
+    outcome = await poller._process_message_with_retry(object(), "m_retry", object(), RulesConfig())
+
+    assert outcome == ("m_retry", "completed", "run-1")
+    assert attempts["count"] == 3
+    assert sleeps == [2, 4]
+
+
+async def test_process_message_does_not_retry_deterministic_error(monkeypatch):
+    failures: list[str] = []
+    attempts = {"count": 0}
+
+    async def fake_process(_graph, msg_id, resource, rules_config):
+        attempts["count"] += 1
+        raise ValueError("bad mime payload")
+
+    async def fake_sleep(delay):
+        raise AssertionError(f"unexpected retry sleep {delay}")
+
+    monkeypatch.setattr(poller.settings, "poll_max_retries", 3)
+    monkeypatch.setattr(poller, "process_message", fake_process)
+    monkeypatch.setattr(poller, "record_failure", lambda error: failures.append(error))
+    monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
+
+    outcome = await poller._process_message_with_retry(object(), "m_bad", object(), RulesConfig())
+
+    assert outcome == ("m_bad", "failed", "")
+    assert attempts["count"] == 1
+    assert failures == ["bad mime payload"]
+
+
+async def test_process_message_records_failure_after_retry_exhaustion_and_continues(monkeypatch):
+    messages = {
+        "m_retry_fail": _raw_message("m_retry_fail", "Hello", "first"),
+        "m_ok": _raw_message("m_ok", "Hello", "second"),
+    }
+    failures: list[str] = []
+    processed: list[str] = []
+
+    monkeypatch.setattr(poller, "fetch_unread", lambda max_results, resource=None: [{"id": "m_retry_fail"}, {"id": "m_ok"}])
+    monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: messages[msg_id])
+    monkeypatch.setattr(poller, "fetch_thread", lambda thread_id, resource=None: [m for m in messages.values() if m["threadId"] == thread_id])
+    monkeypatch.setattr(poller, "mark_as_read", lambda msg_id, resource=None: None)
+    monkeypatch.setattr(poller, "record_failure", lambda error: failures.append(error))
+    monkeypatch.setattr(poller.settings, "poll_max_retries", 2)
+    monkeypatch.setattr(poller.settings, "poll_backoff_base_seconds", 0)
+
+    async def fake_sleep(delay):
+        return None
+
+    monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
+
+    attempts = {"m_retry_fail": 0}
+
+    async def fake_process(_graph, msg_id, resource, rules_config):
+        processed.append(msg_id)
+        if msg_id == "m_retry_fail":
+            attempts[msg_id] += 1
+            raise RuntimeError("429 rate_limit_exceeded")
+        return (msg_id, "completed", "run-ok")
+
+    monkeypatch.setattr(poller, "process_message", fake_process)
+
+    outcomes = await poller.poll_once(object(), resource=object(), rules_config=RulesConfig())
+
+    assert outcomes == [("m_retry_fail", "failed", ""), ("m_ok", "completed", "run-ok")]
+    assert attempts["m_retry_fail"] == 3
+    assert failures == ["429 rate_limit_exceeded"]
+    assert processed[-1] == "m_ok"
+
+
+async def test_completed_run_is_persisted_before_mark_read_retry(monkeypatch, tmp_path, fake_llms):
+    import src.run_registry as rr
+
+    monkeypatch.setattr(rr, "DEFAULT_RUN_INDEX", tmp_path / "runs.json")
+    monkeypatch.setattr(rr.settings, "run_registry_backend", "json")
+    monkeypatch.setattr(rr.settings, "database_url", "")
+
+    message = _raw_message("m_done", "FYI newsletter", "deals")
+    monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: message)
+    monkeypatch.setattr(poller, "fetch_thread", lambda thread_id, resource=None: [message])
+    monkeypatch.setattr(poller.settings, "poll_max_retries", 1)
+    monkeypatch.setattr(poller.settings, "poll_backoff_base_seconds", 0)
+    fake_llms(classification="ignore")
+
+    attempts = {"count": 0}
+
+    def flaky_mark_read(msg_id, resource=None):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("timeout talking to gmail")
+
+    async def fake_sleep(delay):
+        return None
+
+    monkeypatch.setattr(poller, "mark_as_read", flaky_mark_read)
+    monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
+
+    outcome = await poller._process_message_with_retry(_graph(), "m_done", object(), RulesConfig())
+
+    assert outcome[0] == "m_done"
+    assert outcome[1] == "skipped"
+    assert attempts["count"] == 2
+
+
 def test_active_instance_discovery_uses_gateway_registry(monkeypatch):
     import sys
     from types import SimpleNamespace

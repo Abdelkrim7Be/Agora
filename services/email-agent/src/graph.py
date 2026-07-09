@@ -6,7 +6,6 @@ import uuid
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
@@ -29,6 +28,7 @@ from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config
 from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
 from src.gmail_client import format_attachments
+from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.security_client import authorize_action
 from src.prompts import (
@@ -49,10 +49,16 @@ tools, tools_prompt = load_capabilities(agent_config.capabilities)
 tools_by_name_map = tools_by_name(tools)
 approval_set = approval_required(agent_config.capabilities)
 
-llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
-llm_router = llm.with_structured_output(RouterSchema)
-llm_with_tools = llm.bind_tools(tools, tool_choice="any")
-llm_memory = llm.with_structured_output(UserPreferences)
+
+def _build_llm_bindings():
+    base_llm = get_llm("memory_style")
+    router_llm = get_llm("triage").with_structured_output(RouterSchema)
+    tool_llm = get_llm("draft").bind_tools(tools, tool_choice="any")
+    memory_llm = base_llm.with_structured_output(UserPreferences)
+    return base_llm, router_llm, tool_llm, memory_llm
+
+
+llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
 
 
 def _failed_generation_from_exception(exc: Exception) -> str | None:
@@ -126,7 +132,7 @@ def _recover_tool_call_from_failed_generation(exc: Exception) -> AIMessage | Non
             {
                 "name": name,
                 "args": args,
-                "id": f"groq_recovered_{uuid.uuid4().hex}",
+                "id": f"llm_recovered_{uuid.uuid4().hex}",
                 "type": "tool_call",
             }
         ],
@@ -141,13 +147,14 @@ def reload_config() -> None:
     is enough for the current process. Note: a separate poller process keeps its own
     copy and must be restarted (or reload itself) to pick up the change.
     """
-    global agent_config, config, tools, tools_prompt, tools_by_name_map, approval_set, llm_with_tools
+    global agent_config, config, tools, tools_prompt, tools_by_name_map, approval_set
+    global llm, llm_router, llm_with_tools, llm_memory
     agent_config = load_config()
     config = agent_config
     tools, tools_prompt = load_capabilities(config.capabilities)
     tools_by_name_map = tools_by_name(tools)
     approval_set = approval_required(config.capabilities)
-    llm_with_tools = llm.bind_tools(tools, tool_choice="any")
+    llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
 
 
 ROLE_ROUTE_TARGETS = {
