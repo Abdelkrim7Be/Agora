@@ -33,10 +33,35 @@ from src.gmail_client import (
     search_messages,
     watch_mailbox,
 )
-from src.graph import overall_workflow
+from src.graph import overall_workflow, reload_config
 from src.gmail_sync import set_last_history_id, setup_gmail_sync
-from src.run_registry import setup_run_registry, upsert_run
+from src.sync_status import get_status, record_failure, record_success, setup_sync_status
+from src.run_registry import (
+    ACTIVE_RUN_STATUSES,
+    find_run_by_email,
+    setup_run_registry,
+    upsert_run,
+)
 from src.storage import open_graph_storage
+from src.token_store import has_stored_token
+from src.tenant import (
+    agent_instance_context,
+    current_agent_instance_id,
+    normalize_agent_instance_id,
+)
+
+
+def _run_email_input(email_input: dict, result: dict) -> dict:
+    return {
+        **email_input,
+        "category": result.get("category"),
+        "category_display_name": result.get("category_display_name"),
+        "priority": result.get("priority"),
+        "template": result.get("template"),
+        "workflow_owner": result.get("workflow_owner"),
+        "workflow_approver": result.get("workflow_approver"),
+        "workflow_route_to": result.get("workflow_route_to") or [],
+    }
 
 
 def ensure_watch(resource=None) -> dict | None:
@@ -53,6 +78,18 @@ def ensure_watch(resource=None) -> dict | None:
     history_id = str(result.get("historyId") or "")
     if history_id:
         set_last_history_id(history_id)
+    # Gmail watch expiration is a Unix ms timestamp; convert to ISO for storage.
+    watch_expires_at: str | None = None
+    raw_expiry = result.get("expiration")
+    if raw_expiry:
+        from datetime import datetime, timezone
+        try:
+            watch_expires_at = datetime.fromtimestamp(
+                int(raw_expiry) / 1000, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        except (ValueError, TypeError):
+            pass
+    record_success("webhook", watch_expires_at=watch_expires_at)
     return result
 
 
@@ -105,12 +142,14 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
             {"configurable": {"thread_id": run_id}},
         )
         status = "pending_approval" if result.get("__interrupt__") else "follow_up_proposed"
+        run_email_input = _run_email_input(email_input, result)
         upsert_run(
             run_id,
             status,
-            email_input=email_input,
+            email_input=run_email_input,
             classification=result.get("classification_decision"),
             pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+            agent_instance_id=current_agent_instance_id(),
         )
         outcomes.append((msg_id, status, run_id))
     return outcomes
@@ -127,8 +166,26 @@ async def process_message(
     if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
         return (msg_id, "skipped", "")
 
+    # An email left UNREAD because it already has a run must not be reprocessed:
+    # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
+    # an approved reply the API sent but couldn't mark read) just needs housekeeping.
+    existing = find_run_by_email(
+        message.get("id"),
+        # Runs belong to the mailbox instance, not to the actor who triggered sync.
+        user_id=None,
+        agent_instance_id=current_agent_instance_id(),
+    )
+    if existing:
+        if existing["status"] in ACTIVE_RUN_STATUSES:
+            return (msg_id, existing["status"], existing["run_id"])
+        mark_as_read(msg_id, resource=resource)
+        return (msg_id, "skipped", existing["run_id"])
+
     thread = fetch_thread(message["threadId"], resource=resource)
-    email_input = gmail_to_email_input(message, thread_messages=thread)
+    email_input = {
+        **gmail_to_email_input(message, thread_messages=thread),
+        "agent_instance_id": current_agent_instance_id(),
+    }
 
     if settings.extract_attachments:
         pdf_blocks = []
@@ -179,6 +236,8 @@ async def process_message(
 
     if result.get("__interrupt__"):
         outcome_status = "pending_approval"
+    elif result.get("email_send_failed"):
+        outcome_status = "failed"
     elif security_flagged:
         # Leave UNREAD so the threat stays visible; forced-notify is not delivered anywhere.
         outcome_status = "security_hold"
@@ -187,12 +246,14 @@ async def process_message(
         outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
 
     record_digest_item(rules_config, outcome_status, email_input, run_id)
+    run_email_input = _run_email_input(email_input, result)
     upsert_run(
         run_id,
         outcome_status,
-        email_input=email_input,
+        email_input=run_email_input,
         classification=result.get("classification_decision"),
         pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+        agent_instance_id=current_agent_instance_id(),
     )
     return (msg_id, outcome_status, run_id)
 
@@ -247,12 +308,78 @@ async def poll_once(
     return outcomes
 
 
+def active_email_agent_instance_ids() -> list[str]:
+    """Discover active email-agent instances from the gateway registry.
+
+    The gateway and agent share Postgres in platform mode. Local/JSON mode has no
+    registry, so it preserves the original single default-instance behavior.
+    """
+    default = normalize_agent_instance_id(settings.default_agent_instance_id)
+    if not settings.database_url:
+        return [default]
+    try:
+        import psycopg
+
+        with psycopg.connect(settings.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM agent_instance "
+                    "WHERE LOWER(status) = 'active' AND agent_type = 'email-agent' "
+                    "ORDER BY id"
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        # The poller can start before the gateway creates/seeds its registry table.
+        # Retry discovery next cycle while preserving the legacy default mailbox.
+        print(f"poller: instance discovery failed; using {default}: {exc}")
+        return [default]
+
+    instances = [normalize_agent_instance_id(row[0]) for row in rows if row and row[0]]
+    return list(dict.fromkeys(instances)) or [default]
+
+
+async def poll_active_instances_once(
+    graph,
+    instance_ids: list[str] | None = None,
+) -> dict[str, list[tuple]]:
+    """Poll every active, connected instance without cross-instance failure spread."""
+    instances = instance_ids or active_email_agent_instance_ids()
+    results: dict[str, list[tuple]] = {}
+    for raw_instance_id in instances:
+        instance_id = normalize_agent_instance_id(raw_instance_id)
+        with agent_instance_context(instance_id):
+            if get_status().get("paused"):
+                print(f"poller: {instance_id} is paused")
+                results[instance_id] = []
+                continue
+            if not has_stored_token(instance_id):
+                print(f"poller: {instance_id} has no Gmail token; skipping")
+                results[instance_id] = []
+                continue
+            try:
+                reload_config()
+                resource = gmail_resource()
+                outcomes = await poll_once(graph, resource=resource)
+            except Exception as exc:
+                print(f"poller: {instance_id} poll failed: {exc}")
+                record_failure(str(exc))
+                results[instance_id] = []
+                continue
+
+            results[instance_id] = outcomes
+            if outcomes:
+                print(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
+            record_success("polling")
+    return results
+
+
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
     interval = settings.poll_interval_minutes * 60
     renew = settings.gmail_watch_renew_hours * 3600
     setup_run_registry()
     setup_gmail_sync()
+    setup_sync_status()
     last_watch = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
@@ -276,10 +403,9 @@ async def run_forever() -> None:
                     print("poller: gmail watch registered")
                 except Exception as exc:
                     print(f"poller: gmail watch failed: {exc}")
+                    record_failure(str(exc))
             if settings.polling_fallback_enabled:
-                outcomes = await poll_once(graph)
-                if outcomes:
-                    print(f"poller: processed {len(outcomes)} email(s): {outcomes}")
+                await poll_active_instances_once(graph)
             await asyncio.sleep(interval)
 
 

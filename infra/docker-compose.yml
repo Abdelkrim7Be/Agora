@@ -71,12 +71,18 @@ services:
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
-      AGENT_DRY_RUN: "true"          # explicit: no real sends from the stack until flipped
+      AGENT_DRY_RUN: "false"         # real sends/mutations enabled — every send still passes HITL + security /authorize
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_SECURITY_TIMEOUT: 10
+      # Browser Gmail OAuth onboarding. Credentials mounted read-only (secret, not baked in the image).
+      # Redirect URI points at the gateway — the browser cannot reach email-agent directly.
+      GMAIL_CREDENTIALS_PATH: credentials.json
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8080/api/agent/connect/gmail/callback
+      GMAIL_OAUTH_STATE_SECRET: ${GMAIL_OAUTH_STATE_SECRET:-${AGENT_TOKEN_ENCRYPTION_KEY}}
     volumes:
       - agent_data:/app/data
+      - ../services/email-agent/credentials.json:/app/credentials.json:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -94,6 +100,7 @@ services:
   gateway:
     build:
       context: ../services/gateway
+      dockerfile: Dockerfile.runtime
       network: host
     ports:
       - "8080:8080"

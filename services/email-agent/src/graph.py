@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -13,6 +14,8 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
 
+import re as _re
+
 from src.automation import load_rules as load_automation_rules, suggest_rule_from_correction
 from src.capabilities import (
     approval_required,
@@ -23,6 +26,8 @@ from src.capabilities import (
     tools_by_name,
 )
 from src.config import load_config, settings
+from src.cost_tracker import llm_invoke_config
+from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
 from src.gmail_client import format_attachments
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.security_client import authorize_action
@@ -37,16 +42,95 @@ from src.utils import format_draft_markdown, format_email_markdown, parse_email
 
 load_dotenv()
 
-config = load_config()
+agent_config = load_config()
+config = agent_config
 
-tools, tools_prompt = load_capabilities(config.capabilities)
+tools, tools_prompt = load_capabilities(agent_config.capabilities)
 tools_by_name_map = tools_by_name(tools)
-approval_set = approval_required(config.capabilities)
+approval_set = approval_required(agent_config.capabilities)
 
 llm = init_chat_model("groq:llama-3.3-70b-versatile", temperature=0.0)
 llm_router = llm.with_structured_output(RouterSchema)
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 llm_memory = llm.with_structured_output(UserPreferences)
+
+
+def _failed_generation_from_exception(exc: Exception) -> str | None:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("failed_generation"), str):
+            return error["failed_generation"]
+        if isinstance(body.get("failed_generation"), str):
+            return body["failed_generation"]
+
+    text = str(exc)
+    start = text.find("{")
+    if start == -1:
+        return None
+    try:
+        parsed = json.loads(text[start:])
+    except json.JSONDecodeError:
+        try:
+            import ast
+
+            parsed = ast.literal_eval(text[start:])
+        except (SyntaxError, ValueError):
+            return None
+
+    if not isinstance(parsed, dict):
+        return None
+    error = parsed.get("error")
+    if isinstance(error, dict) and isinstance(error.get("failed_generation"), str):
+        return error["failed_generation"]
+    return None
+
+
+def _recover_tool_call_from_failed_generation(exc: Exception) -> AIMessage | None:
+    """Recover valid tool args from Groq tool-parser failures.
+
+    Groq sometimes rejects a llama tool call before LangChain receives it, even
+    when the model produced a usable payload, e.g.
+    `<function=write_email {"to": "...", ...}</function>`. Recovering that keeps
+    the graph on the normal HITL path instead of returning a 500.
+    """
+    failed = _failed_generation_from_exception(exc)
+    if not failed or "<function=" not in failed:
+        return None
+
+    marker = "<function="
+    marker_index = failed.find(marker)
+    name_start = marker_index + len(marker)
+    name_end = len(failed)
+    for delimiter in (" ", ">", "{"):
+        delimiter_index = failed.find(delimiter, name_start)
+        if delimiter_index != -1:
+            name_end = min(name_end, delimiter_index)
+    name = failed[name_start:name_end].strip()
+    if not name or name not in tools_by_name_map:
+        return None
+
+    args_start = failed.find("{", name_end)
+    if args_start == -1:
+        return None
+    try:
+        args, _ = json.JSONDecoder().raw_decode(failed[args_start:])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(args, dict):
+        return None
+
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": name,
+                "args": args,
+                "id": f"groq_recovered_{uuid.uuid4().hex}",
+                "type": "tool_call",
+            }
+        ],
+    )
 
 
 def reload_config() -> None:
@@ -57,17 +141,70 @@ def reload_config() -> None:
     is enough for the current process. Note: a separate poller process keeps its own
     copy and must be restarted (or reload itself) to pick up the change.
     """
-    global config, tools, tools_prompt, tools_by_name_map, approval_set, llm_with_tools
-    config = load_config()
+    global agent_config, config, tools, tools_prompt, tools_by_name_map, approval_set, llm_with_tools
+    agent_config = load_config()
+    config = agent_config
     tools, tools_prompt = load_capabilities(config.capabilities)
     tools_by_name_map = tools_by_name(tools)
     approval_set = approval_required(config.capabilities)
     llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 
 
+ROLE_ROUTE_TARGETS = {
+    "hr": "abdelkrimbellagnech99@gmail.com",
+    "human resources": "abdelkrimbellagnech99@gmail.com",
+    "rh": "abdelkrimbellagnech99@gmail.com",
+    "operations": "redacted@example.com",
+    "ops": "redacted@example.com",
+    "management": "redacted@example.com",
+    "finance": "redacted@example.com",
+    "accounting": "redacted@example.com",
+}
+
+
+def _resolve_route_target(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if "@" in cleaned:
+        return cleaned
+    return ROLE_ROUTE_TARGETS.get(cleaned.lower())
+
+
+def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | None:
+    if "forward_email" not in tools_by_name_map:
+        return None
+    raw_targets = category_update.get("workflow_route_to") or []
+    if isinstance(raw_targets, str):
+        raw_targets = [raw_targets]
+    candidates = [*raw_targets, category_update.get("workflow_owner")]
+    target = next((_resolve_route_target(item) for item in candidates if _resolve_route_target(item)), None)
+    if not target:
+        return None
+
+    author, _to, subject, _thread = parse_email(state["email_input"])
+    category = category_update.get("category_display_name") or category_update.get("category") or "Workflow"
+    owner = category_update.get("workflow_owner") or "unassigned"
+    approver = category_update.get("workflow_approver") or "workspace approver"
+    note = (
+        f"Agora workflow route: {category}.\n"
+        f"Owner: {owner}. Approver: {approver}.\n"
+        f"Original sender: {author}. Subject: {subject}.\n\n"
+        "Please handle this request or reply internally with the next action."
+    )
+    return {
+        "name": "forward_email",
+        "args": {"to": target, "note": note},
+        "id": f"workflow_forward_{uuid.uuid4().hex}",
+        "type": "tool_call",
+    }
+
+
 def automation_router(
     state: State, store: BaseStore
-) -> Command[Literal["environment", "triage_router", "__end__"]]:
+) -> Command[Literal["environment", "category_router", "__end__"]]:
     """Execute deterministic poller-provided automation before LLM triage."""
     automation = state["email_input"].get("automation") or {}
     terminal_status = automation.get("terminal_status")
@@ -86,33 +223,196 @@ def automation_router(
         return Command(goto="environment", update=update)
     if terminal_status == "notify":
         return Command(goto=END, update={"classification_decision": "notify"})
-    return Command(goto="triage_router")
+    return Command(goto="category_router")
 
 
-def llm_call(state: State, store: BaseStore):
+def category_router(
+    state: State,
+) -> Command[Literal["environment", "triage_router", "llm_call", "__end__"]]:
+    """Deterministic category routing before the triage LLM.
+
+    Classifies the email against configured categories. When a policy matches,
+    handles it directly (auto_draft, organize, notify, ignore) so the triage LLM
+    call is skipped entirely. Unmatched emails fall through to triage_router with
+    the category context already in state for the LLM to refine (B4).
+    """
+    categories_config = load_categories()
+    category_meta = classify_category(state["email_input"], categories_config)
+
+    cat = category_meta.get("category")
+    policy = category_meta.get("policy")
+    matched_contact = category_meta.get("contact")
+
+    category_update = {
+        "category": cat,
+        "category_display_name": category_meta.get("category_display_name"),
+        "priority": category_meta.get("priority") or "normal",
+        "template": category_meta.get("template"),
+        "category_policy": policy,
+        "workflow_owner": category_meta.get("owner"),
+        "workflow_approver": category_meta.get("approver"),
+        "workflow_route_to": category_meta.get("route_to") or [],
+    }
+
+    if not cat or not policy:
+        return Command(goto="triage_router", update=category_update)
+
+    if policy == "auto_draft":
+        template_tool_call = auto_draft_tool_call(
+            state["email_input"], categories_config, cat, contact=matched_contact
+        )
+        if template_tool_call is not None:
+            content = template_tool_call["args"].get("content", "")
+            remaining_vars = unresolved_vars(content)
+            author, to, subject, email_thread = parse_email(state["email_input"])
+            atts = state["email_input"].get("attachments") or []
+            email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
+            if remaining_vars:
+                print(f"📧 Category '{cat}': template has unresolved vars {remaining_vars}, routing to LLM for finalization")
+                return Command(
+                    goto="llm_call",
+                    update={
+                        "classification_decision": "respond",
+                        **category_update,
+                        "messages": [{
+                            "role": "user",
+                            "content": (
+                                f"This email matches the '{cat}' category. Draft a response using this "
+                                f"template as a starting point:\n\n"
+                                f"To: {template_tool_call['args']['to']}\n"
+                                f"Subject: {template_tool_call['args']['subject']}\n"
+                                f"Content: {content}\n\n"
+                                f"Fill in the unresolved placeholders "
+                                f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
+                                f"from the email context below, then call write_email:\n\n{email_markdown}"
+                            ),
+                        }],
+                    },
+                )
+            print(f"📧 Category '{cat}': auto-draft from template")
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "respond",
+                    **category_update,
+                    "messages": [
+                        {"role": "user", "content": f"Draft from category template for email: {email_markdown}"},
+                        AIMessage(content="", tool_calls=[template_tool_call]),
+                    ],
+                },
+            )
+        # auto_draft policy but no template resolved → fall through to triage
+        return Command(goto="triage_router", update=category_update)
+
+    if policy == "organize":
+        if "apply_label" not in tools_by_name_map or "archive_email" not in tools_by_name_map:
+            print(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
+            return Command(goto="triage_router", update=category_update)
+        cat_obj = next((c for c in categories_config.categories if c.name == cat), None)
+        labels = (cat_obj.labels if cat_obj and cat_obj.labels else [cat])
+        org_tool_calls = [
+            {"name": "apply_label", "args": {"label": label}, "id": f"org_label_{i}", "type": "tool_call"}
+            for i, label in enumerate(labels)
+        ] + [{"name": "archive_email", "args": {}, "id": "org_archive", "type": "tool_call"}]
+        print(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "ignore",
+                **category_update,
+                "auto_organized": True,
+                "messages": [AIMessage(content="", tool_calls=org_tool_calls)],
+            },
+        )
+
+    if policy == "notify":
+        forward_call = _workflow_forward_tool_call(state, category_update)
+        if forward_call is not None and not state["email_input"].get("email_id"):
+            error = (
+                "This workflow requires forwarding the original Gmail message, but this "
+                "run was created manually and has no trusted Gmail message id. Sync the "
+                "mailbox and process the Gmail-originated message instead."
+            )
+            print(f"🔔 Category '{cat}': manual forward rejected")
+            return Command(
+                goto=END,
+                update={
+                    "classification_decision": "notify",
+                    "email_send_failed": error,
+                    **category_update,
+                },
+            )
+        if forward_call is not None:
+            print(f"🔔 Category '{cat}': notify policy, routing for approval")
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "notify",
+                    **category_update,
+                    "messages": [AIMessage(content="", tool_calls=[forward_call])],
+                },
+            )
+        print(f"🔔 Category '{cat}': notify policy, terminating")
+        return Command(goto=END, update={"classification_decision": "notify", **category_update})
+
+    if policy == "ignore":
+        print(f"🚫 Category '{cat}': ignore policy")
+        if _can_auto_organize():
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "ignore",
+                    **category_update,
+                    "auto_organized": True,
+                    "messages": [_auto_organize_message()],
+                },
+            )
+        return Command(goto=END, update={"classification_decision": "ignore", **category_update})
+
+    # Unknown or unhandled policy → fall through
+    return Command(goto="triage_router", update=category_update)
+
+
+def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
+    try:
+        return llm_obj.invoke(messages, config=invoke_config)
+    except TypeError as exc:
+        if "config" not in str(exc):
+            raise
+        return llm_obj.invoke(messages)
+
+
+def llm_call(state: State, store: BaseStore, config=None):
     """LLM decides which tool to call to handle the email."""
     response_prefs = get_memory(
         store,
         namespace("response_preferences"),
-        config.agent.response_preferences,
+        agent_config.agent.response_preferences,
     )
-    return {
-        "messages": [
-            llm_with_tools.invoke(
-                [
-                    {
-                        "role": "system",
-                        "content": agent_system_prompt.format(
-                            tools_prompt=tools_prompt,
-                            background=config.agent.background,
-                            response_preferences=response_prefs,
-                        ),
-                    }
-                ]
-                + state["messages"]
-            )
-        ]
-    }
+    writing_style = get_memory(
+        store,
+        namespace("writing_style"),
+        agent_config.agent.writing_style_default,
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": agent_system_prompt.format(
+                tools_prompt=tools_prompt,
+                background=agent_config.agent.background,
+                response_preferences=response_prefs,
+                writing_style=writing_style,
+            ),
+        }
+    ] + state["messages"]
+    run_id = _run_id_from_config(config)
+    try:
+        response = _invoke_llm(llm_with_tools, messages, llm_invoke_config(run_id, "llm_call"))
+    except Exception as exc:
+        response = _recover_tool_call_from_failed_generation(exc)
+        if response is None:
+            raise
+    return {"messages": [response]}
 
 
 def _parse_decision(raw) -> tuple[str, object]:
@@ -248,6 +548,8 @@ def tool_node(state: State, store: BaseStore, config=None):
     """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
     sent = False
+    redraft_requested = False
+    redraft_cleared = False
     run_id = _run_id_from_config(config)
 
     # Load automation rules at most once per call, lazily — only when a human
@@ -291,6 +593,7 @@ def tool_node(state: State, store: BaseStore, config=None):
             decision_type, decision_data = _parse_decision(raw)
 
             if decision_type == "ignore":
+                redraft_cleared = True
                 # Answer the tool call FIRST (dangling-tool-call discipline: Groq
                 # rejects an unanswered tool_call in the message sequence).
                 result.append({
@@ -312,15 +615,21 @@ def tool_node(state: State, store: BaseStore, config=None):
                         ),
                     }],
                     llm_memory,
+                    llm_invoke_config(run_id, "memory"),
                 )
                 _suggest_rule("ignored_draft", {"tool": name})
                 continue
 
             if decision_type == "response":
                 feedback = decision_data
+                redraft_requested = True
                 result.append({
                     "role": "tool",
-                    "content": f"User gave feedback to incorporate: {feedback}",
+                    "content": (
+                        f"The user requested changes to this draft: {feedback}. "
+                        "Revise the draft by calling write_email again for approval. "
+                        "Do not call Done until a revised draft has been approved and sent."
+                    ),
                     "tool_call_id": tool_call["id"],
                 })
                 update_memory(
@@ -336,6 +645,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                         ),
                     }],
                     llm_memory,
+                    llm_invoke_config(run_id, "memory"),
                 )
                 _suggest_rule("draft_feedback", {"tool": name, "feedback": feedback})
                 continue
@@ -363,6 +673,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                             ),
                         }],
                         llm_memory,
+                        llm_invoke_config(run_id, "memory"),
                     )
                     _suggest_rule(
                         "edited_draft",
@@ -401,14 +712,17 @@ def tool_node(state: State, store: BaseStore, config=None):
             else:
                 observation = tool.invoke(args)
         except Exception as exc:
-            # A tool failure (e.g. an inbox tool invoked without a trusted email_id
-            # on the manual /run path) must not crash the run — surface it to the
-            # agent as a tool message so it can recover and call Done.
+            # A send failure after human approval must be terminal and visible to
+            # the UI/API. Otherwise the LLM can call Done and make a failed Gmail
+            # send look like a completed delivery.
+            message = f"The '{name}' action could not be completed: {exc}."
             result.append({
                 "role": "tool",
-                "content": f"The '{name}' action could not be completed: {exc}. Call Done.",
+                "content": f"{message} Call Done.",
                 "tool_call_id": tool_call["id"],
             })
+            if name in approval_set:
+                return {"messages": result, "email_send_failed": message}
             continue
         finally:
             current_gmail_thread_id.reset(thread_id_token)
@@ -416,37 +730,78 @@ def tool_node(state: State, store: BaseStore, config=None):
         result.append(
             {"role": "tool", "content": observation, "tool_call_id": tool_call["id"]}
         )
-        if name == "write_email":
+        if name in {"write_email", "forward_email", "reply_all"}:
             sent = True
 
     update = {"messages": result}
+    if redraft_requested:
+        update["redraft_requested"] = True
+    elif redraft_cleared:
+        update["redraft_requested"] = False
     if sent:
         update["email_sent"] = True
     return update
 
 
+def force_redraft_after_feedback(state: State) -> dict:
+    """Keep feedback runs pending until the model produces a revised draft."""
+    last_message = state["messages"][-1]
+    messages = []
+    for tool_call in getattr(last_message, "tool_calls", []) or []:
+        if tool_call["name"] == "Done":
+            messages.append({
+                "role": "tool",
+                "content": (
+                    "The user requested changes, so this run is still waiting for a revised draft. "
+                    "Call write_email with the updated draft for approval; do not call Done yet."
+                ),
+                "tool_call_id": tool_call["id"],
+            })
+    if not messages:
+        messages.append({
+            "role": "user",
+            "content": (
+                "A human gave feedback on the previous draft. Call write_email with a revised "
+                "draft for approval; do not call Done until that draft has been approved and sent."
+            ),
+        })
+    return {"messages": messages}
+
+
 def after_tools(state: State) -> Literal["llm_call", "__end__"]:
-    """Sending and auto-organization are terminal; other tools continue the loop."""
-    if state.get("email_sent") or state.get("auto_organized") or state.get("automation_acted"):
+    """Sending, send failures, and auto-organization are terminal."""
+    if (
+        state.get("email_sent")
+        or state.get("email_send_failed")
+        or state.get("auto_organized")
+        or state.get("automation_acted")
+    ):
         return END
     return "llm_call"
 
 
-def should_continue(state: State) -> Literal["environment", "__end__"]:
-    """Route to tools, or end once the Done tool is called."""
+def should_continue(state: State) -> Literal["environment", "force_redraft", "__end__"]:
+    """Route to tools, or keep feedback runs alive until a revised draft exists."""
     last_message = state["messages"][-1]
     if last_message.tool_calls:
         for tool_call in last_message.tool_calls:
             if tool_call["name"] == "Done":
-                return END
+                return "force_redraft" if state.get("redraft_requested") else END
             return "environment"
+    if state.get("redraft_requested"):
+        return "force_redraft"
     return END
 
 
 def triage_router(
-    state: State, store: BaseStore
+    state: State, store: BaseStore, config=None
 ) -> Command[Literal["llm_call", "environment", "__end__"]]:
-    """Classify the email as ignore / notify / respond and route accordingly."""
+    """Classify the email as ignore / notify / respond and route accordingly.
+
+    Category classification is already done by category_router. This node runs
+    the triage LLM on emails that did not match a deterministic category policy.
+    When categories are configured, the LLM may also tag one (B4 fallback).
+    """
     sec = state["email_input"].get("security")
     if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
         print("🛡️ Classification: NOTIFY - forced by security (injection or classifier unavailable)")
@@ -459,12 +814,30 @@ def triage_router(
     triage_instructions = get_memory(
         store,
         namespace("triage_preferences"),
-        config.agent.triage_instructions,
+        agent_config.agent.triage_instructions,
     )
 
+    # Build optional category section for B4 LLM fallback tagging.
+    categories_config = load_categories()
+    pre_classified_category = state.get("category")
+    if categories_config.enabled and categories_config.categories and not pre_classified_category:
+        cat_lines = "\n".join(
+            f"- {c.name}: {c.display_name}" for c in categories_config.categories
+        )
+        category_section = (
+            "\n< Email Categories >\n"
+            "If this email clearly fits one of the categories below and no rule matched it, "
+            "include the category name in your response. Leave it null if unsure.\n"
+            f"{cat_lines}\n"
+            "</ Email Categories >"
+        )
+    else:
+        category_section = ""
+
     system_prompt = triage_system_prompt.format(
-        background=config.agent.background,
+        background=agent_config.agent.background,
         triage_instructions=triage_instructions,
+        category_section=category_section,
     )
     user_prompt = triage_user_prompt.format(
         author=author, to=to, subject=subject, email_thread=email_thread,
@@ -472,19 +845,41 @@ def triage_router(
     )
     email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
 
-    result = llm_router.invoke(
+    run_id = _run_id_from_config(config)
+    result = _invoke_llm(
+        llm_router,
         [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ]
+        ],
+        llm_invoke_config(run_id, "triage"),
     )
 
     classification = result.classification
+
+    # Merge LLM-suggested category (B4) only when category_router found no match.
+    category_update: dict = {}
+    if not pre_classified_category and result.category:
+        category_by_name = {c.name: c for c in categories_config.categories}
+        if result.category in category_by_name:
+            c = category_by_name[result.category]
+            category_update = {
+                "category": c.name,
+                "category_display_name": c.display_name,
+                "priority": c.priority,
+                "template": c.template,
+                "category_policy": c.policy,
+                "workflow_owner": c.owner,
+                "workflow_approver": c.approver,
+                "workflow_route_to": c.route_to,
+            }
+
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")
         goto = "llm_call"
         update = {
             "classification_decision": classification,
+            **category_update,
             "messages": [
                 {
                     "role": "user",
@@ -498,16 +893,17 @@ def triage_router(
             goto = "environment"
             update = {
                 "classification_decision": classification,
+                **category_update,
                 "auto_organized": True,
                 "messages": [_auto_organize_message()],
             }
         else:
             goto = END
-            update = {"classification_decision": classification}
+            update = {"classification_decision": classification, **category_update}
     elif classification == "notify":
         print("🔔 Classification: NOTIFY - This email contains important information")
         goto = END
-        update = {"classification_decision": classification}
+        update = {"classification_decision": classification, **category_update}
     else:
         raise ValueError(f"Invalid classification: {classification}")
 
@@ -517,15 +913,18 @@ def triage_router(
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
     .add_node("automation_router", automation_router)
+    .add_node("category_router", category_router)
     .add_node("triage_router", triage_router)
     .add_node("llm_call", llm_call)
     .add_node("environment", tool_node)
+    .add_node("force_redraft", force_redraft_after_feedback)
     .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",
         should_continue,
-        {"environment": "environment", END: END},
+        {"environment": "environment", "force_redraft": "force_redraft", END: END},
     )
+    .add_edge("force_redraft", "llm_call")
     .add_conditional_edges(
         "environment",
         after_tools,

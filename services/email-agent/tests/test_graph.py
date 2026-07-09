@@ -4,13 +4,36 @@ import uuid
 
 from conftest import ai_tool_call
 
-from src.graph import email_assistant
+from src.graph import _recover_tool_call_from_failed_generation, email_assistant
 from src.config import AutoOrganizeConfig
 from src.utils import extract_tool_call_names
 
 
 def _cfg() -> dict:
     return {"configurable": {"thread_id": str(uuid.uuid4())}}
+
+
+class _GroqToolUseError(Exception):
+    body = {
+        "error": {
+            "failed_generation": (
+                '<function=write_email {"to": "alice@example.com", '
+                '"subject": "Re: question", "content": "Here you go."}</function>'
+            )
+        }
+    }
+
+
+def test_recovers_groq_failed_write_email_tool_call():
+    message = _recover_tool_call_from_failed_generation(_GroqToolUseError())
+
+    assert message is not None
+    assert message.tool_calls[0]["name"] == "write_email"
+    assert message.tool_calls[0]["args"] == {
+        "to": "alice@example.com",
+        "subject": "Re: question",
+        "content": "Here you go.",
+    }
 
 
 def test_respond_email_routes_to_agent(fake_llms, respond_email):
@@ -21,6 +44,65 @@ def test_respond_email_routes_to_agent(fake_llms, respond_email):
     )
     result = email_assistant.invoke({"email_input": respond_email}, _cfg())
     assert result["classification_decision"] == "respond"
+
+
+def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "approver": "redacted@example.com",
+                "route_to": ["redacted@example.com"],
+                "when": {"subject_contains": ["question"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    email = {**respond_email, "email_id": "msg-route"}
+
+    result = email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert result["classification_decision"] == "notify"
+    assert result["workflow_owner"] == "Operations"
+    assert result["workflow_route_to"] == ["redacted@example.com"]
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "forward_email"
+    assert request["action_request"]["args"]["to"] == "redacted@example.com"
+    assert "Réclamation" in request["action_request"]["args"]["note"]
+
+
+def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "route_to": ["ops@example.com"],
+                "when": {"subject_contains": ["question"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+
+    result = email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert "trusted Gmail message id" in result["email_send_failed"]
+    assert "__interrupt__" not in result
 
 
 def test_ignore_email_ends_after_triage(fake_llms, ignore_email):
@@ -47,7 +129,10 @@ def _enable_auto_organize(monkeypatch, label: str = "Auto/Ignored"):
 
 
 def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore_email):
+    from src.categories import CategoriesConfig
+
     g, inbox_tools = _enable_auto_organize(monkeypatch)
+    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g.settings, "security_enabled", False)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
@@ -86,7 +171,10 @@ def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore
 def test_auto_organize_uses_authorization_when_security_enabled(
     monkeypatch, fake_llms, ignore_email
 ):
+    from src.categories import CategoriesConfig
+
     g, inbox_tools = _enable_auto_organize(monkeypatch, label="Auto/Skip")
+    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
     g._authorization_cache.clear()
     monkeypatch.setattr(g.settings, "security_enabled", True)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
@@ -188,3 +276,113 @@ def test_automation_notify_rule_tags_classification(monkeypatch):
 
     assert result.get("automation_acted") is True
     assert result.get("classification_decision") == "notify"
+
+
+def test_llm_call_includes_writing_style_in_prompt(monkeypatch, fake_llms, respond_email):
+    from langchain_core.messages import AIMessage
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.store.memory import InMemoryStore
+    import src.graph as g
+    from src.memory import namespace, wrap_preferences
+
+    captured = {}
+
+    class _CaptureToolLLM:
+        def invoke(self, messages, config=None):
+            captured["system"] = messages[0]["content"]
+            return AIMessage(
+                content="",
+                tool_calls=[{"name": "Done", "args": {"done": True}, "id": "done-1", "type": "tool_call"}],
+            )
+
+    fake_llms(classification="respond")
+    from src.categories import CategoriesConfig
+    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "llm_with_tools", _CaptureToolLLM())
+    store = InMemoryStore()
+    store.put(namespace("writing_style"), "user_preferences", wrap_preferences("Use a warm concise voice."))
+    graph = g.overall_workflow.compile(checkpointer=MemorySaver(), store=store)
+
+    graph.invoke({"email_input": respond_email}, _cfg())
+
+    assert "< Writing Style >" in captured["system"]
+    assert "Use a warm concise voice." in captured["system"]
+    assert "< Response Preferences >" in captured["system"]
+
+
+def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "support",
+                "display_name": "Support",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Support team",
+                "approver": "support.manager@example.com",
+                "route_to": ["support@example.com"],
+                "when": {"sender_domain": ["example.com"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    fake_llms(
+        classification="respond",
+        tool_sequence=[ai_tool_call("Done", {"done": True})],
+    )
+
+    result = email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert result["category"] == "support"
+    assert result["category_display_name"] == "Support"
+    assert result["priority"] == "urgent"
+    assert result["workflow_owner"] == "Support team"
+    assert result["workflow_approver"] == "support.manager@example.com"
+    assert result["workflow_route_to"] == ["support@example.com"]
+
+
+def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Reclamation",
+                "priority": "urgent",
+                "policy": "auto_draft",
+                "template": "complaint_reply",
+                "owner": "Support team",
+                "approver": "support.manager@example.com",
+                "route_to": ["support@example.com"],
+                "when": {"sender_domain": ["example.com"]},
+            }
+        ],
+        templates=[
+            {
+                "name": "complaint_reply",
+                "subject": "Re: {{subject}}",
+                "body": "Thanks for the context. I will look into this.",
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    fake_llms(classification="notify")
+
+    result = email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert result["classification_decision"] == "respond"
+    assert result["category"] == "reclamation"
+    assert result["priority"] == "urgent"
+    assert result["workflow_owner"] == "Support team"
+    assert result["workflow_approver"] == "support.manager@example.com"
+    assert result["workflow_route_to"] == ["support@example.com"]
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "write_email"
+    assert request["action_request"]["args"]["subject"] == "Re: Quick question about the API"

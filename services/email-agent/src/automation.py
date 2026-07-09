@@ -89,9 +89,15 @@ class RulesConfig(BaseModel):
 def load_rules(path: str | Path | None = None) -> RulesConfig:
     """Load automation rules. Missing or empty files mean automation stays off."""
     rules_path = Path(path) if path else DEFAULT_RULES_PATH
-    if not rules_path.is_file():
-        return RulesConfig()
-    data = yaml.safe_load(rules_path.read_text()) or {}
+    if path is None:
+        from src.instance_config import read_instance_text
+
+        raw = read_instance_text("rules", rules_path)
+    elif rules_path.is_file():
+        raw = rules_path.read_text()
+    else:
+        raw = ""
+    data = yaml.safe_load(raw) or {}
     if data.get("rules") is None:
         data["rules"] = []
     return RulesConfig(**data)

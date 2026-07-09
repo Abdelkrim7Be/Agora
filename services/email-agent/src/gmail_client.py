@@ -46,6 +46,46 @@ def fetch_unread(max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+def _is_automated_address(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in ("no-reply", "noreply", "donotreply", "do-not-reply"))
+
+
+def fetch_sent(max_messages: int = 50, resource=None) -> list[dict]:
+    """Return usable sent-mail samples for writing-style learning.
+
+    The returned samples include distilled metadata and body text only; callers decide
+    whether to persist a learned profile. Trivial messages and automated recipients
+    are excluded so the profile is based on real authored mail.
+    """
+    resource = resource or gmail_resource()
+    refs = (
+        resource.users()
+        .messages()
+        .list(userId="me", q="in:sent", maxResults=max_messages)
+        .execute()
+        .get("messages", [])
+    )
+    samples: list[dict] = []
+    for ref in refs:
+        message = get_message(ref["id"], resource=resource)
+        body = _extract_message_part(message.get("payload", {})).strip()
+        to = _header_value(message, "To")
+        if len(body) < 20 or _is_automated_address(to):
+            continue
+        samples.append(
+            {
+                "id": message.get("id", ref.get("id")),
+                "thread_id": message.get("threadId", ref.get("threadId")),
+                "to": to,
+                "subject": _header_value(message, "Subject"),
+                "date": _header_value(message, "Date"),
+                "body": body,
+            }
+        )
+    return samples
+
+
 def list_messages_by_label(label_id: str, max_results: int, resource=None) -> list[dict]:
     """Return message refs carrying a Gmail label id."""
     resource = resource or gmail_resource()
@@ -68,6 +108,49 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
         .execute()
     )
     return results.get("messages", [])
+
+
+def list_inbox(max_results: int, resource=None) -> list[dict]:
+    """Return summarized inbox messages (newest first) for the management view.
+
+    Uses the lightweight metadata format (headers + snippet, no body) so the UI can
+    list many messages cheaply. Read and unread are both returned; the UNREAD label
+    is surfaced so the caller can render state and drive mark read/unread actions.
+    """
+    resource = resource or gmail_resource()
+    refs = (
+        resource.users()
+        .messages()
+        .list(userId="me", q="in:inbox", maxResults=max_results)
+        .execute()
+        .get("messages", [])
+    )
+    summaries: list[dict] = []
+    for ref in refs:
+        message = (
+            resource.users()
+            .messages()
+            .get(
+                userId="me",
+                id=ref["id"],
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            )
+            .execute()
+        )
+        labels = message.get("labelIds", [])
+        summaries.append(
+            {
+                "id": message["id"],
+                "thread_id": message.get("threadId"),
+                "from": _header_value(message, "From"),
+                "subject": _header_value(message, "Subject"),
+                "snippet": message.get("snippet", ""),
+                "date": _header_value(message, "Date"),
+                "unread": "UNREAD" in labels,
+            }
+        )
+    return summaries
 
 
 def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
@@ -153,6 +236,37 @@ def _send_email_message(
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
         gmail_message["threadId"] = thread_id
+    return (
+        resource.users()
+        .messages()
+        .send(userId="me", body=gmail_message)
+        .execute()
+    )
+
+
+def send_html_message(
+    to: str,
+    subject: str,
+    html: str,
+    text: str,
+    resource=None,
+    respect_dry_run: bool = True,
+) -> dict:
+    """Send a single multipart/alternative email (plaintext + HTML).
+
+    Used by the campaign broadcast path so recipients see real formatting in
+    Gmail rather than a raw markdown block. Honors AGENT_DRY_RUN like the other
+    send helpers so approval-gated broadcasts stay safe in dev.
+    """
+    if respect_dry_run and settings.dry_run:
+        return _dry_run_result("send_html", to=to, subject=subject)
+    resource = resource or gmail_resource()
+    message = EmailMessage()
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(text)
+    message.add_alternative(html, subtype="html")
+    gmail_message = {"raw": _encode_message(message)}
     return (
         resource.users()
         .messages()

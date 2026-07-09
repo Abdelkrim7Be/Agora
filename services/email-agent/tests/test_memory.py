@@ -4,7 +4,7 @@ import pytest
 from langgraph.store.memory import InMemoryStore
 
 from src.memory import UserPreferences, get_memory, namespace, update_memory
-from src.tenant import user_context
+from src.tenant import agent_instance_context, user_context
 from tests.conftest import _FakeMemoryLLM
 
 
@@ -26,7 +26,7 @@ def test_get_memory_writes_default_to_store_on_first_call():
     get_memory(store, ns, "seed value")
     item = store.get(ns, "user_preferences")
     assert item is not None
-    assert item.value == "seed value"
+    assert item.value == {"preferences": "seed value"}
 
 
 def test_get_memory_returns_stored_value_after_put():
@@ -55,7 +55,7 @@ def test_update_memory_writes_new_preferences():
     store.put(ns, "user_preferences", "original preferences")
     llm = _FakeMemoryLLM("updated preferences")
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
-    assert store.get(ns, "user_preferences").value == "updated preferences"
+    assert store.get(ns, "user_preferences").value == {"preferences": "updated preferences"}
 
 
 def test_update_memory_works_with_empty_store():
@@ -63,7 +63,7 @@ def test_update_memory_works_with_empty_store():
     ns = namespace("triage_preferences")
     llm = _FakeMemoryLLM("fresh preferences")
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
-    assert store.get(ns, "user_preferences").value == "fresh preferences"
+    assert store.get(ns, "user_preferences").value == {"preferences": "fresh preferences"}
 
 
 # ---------------------------------------------------------------------------
@@ -72,19 +72,46 @@ def test_update_memory_works_with_empty_store():
 
 def test_namespace_structure():
     ns = namespace("triage_preferences")
-    assert ns == ("email_agent", "default", "triage_preferences")
+    assert ns == (
+        "email_agent",
+        "default",
+        "default-email-agent",
+        "triage_preferences",
+    )
 
     ns2 = namespace("response_preferences")
-    assert ns2 == ("email_agent", "default", "response_preferences")
+    assert ns2 == (
+        "email_agent",
+        "default",
+        "default-email-agent",
+        "response_preferences",
+    )
 
 
 def test_namespace_uses_current_user_context():
     with user_context("alice@example.com"):
         assert namespace("triage_preferences") == (
             "email_agent",
-            "alice@example.com",
+            "alice@example_com",
+            "default-email-agent",
             "triage_preferences",
         )
+
+
+def test_namespace_uses_current_agent_instance_context():
+    with agent_instance_context("ceo-email-agent"):
+        assert namespace("triage_preferences") == (
+            "email_agent",
+            "default",
+            "ceo-email-agent",
+            "triage_preferences",
+        )
+
+
+def test_namespace_isolates_agent_instances():
+    assert namespace("response_preferences", agent_instance_id="ceo-email-agent") != namespace(
+        "response_preferences", agent_instance_id="hr-email-agent"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +150,7 @@ def test_reject_updates_triage_preferences(fake_llms):
 
     item = memory_store.get(namespace("triage_preferences"), "user_preferences")
     assert item is not None
-    assert item.value == "do not respond to API questions"
+    assert item.value == {"preferences": "do not respond to API questions"}
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +182,9 @@ def test_reject_memory_messages_have_no_dangling_tool_call(fake_llms, monkeypatc
     captured = {}
     real_update = g.update_memory
 
-    def spy(store, ns, messages, llm):
+    def spy(store, ns, messages, llm, invoke_config=None):
         captured["messages"] = messages
-        return real_update(store, ns, messages, llm)
+        return real_update(store, ns, messages, llm, invoke_config)
 
     monkeypatch.setattr(g, "update_memory", spy)
 
@@ -215,7 +242,7 @@ def test_edit_updates_response_preferences(fake_llms):
 
     item = memory_store.get(namespace("response_preferences"), "user_preferences")
     assert item is not None
-    assert item.value == "be more concise in replies"
+    assert item.value == {"preferences": "be more concise in replies"}
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +287,45 @@ def test_plain_approve_does_not_update_memory(fake_llms):
     # Sentinel values must be unchanged — update_memory was never called.
     assert memory_store.get(namespace("triage_preferences"), "user_preferences").value == sentinel_triage
     assert memory_store.get(namespace("response_preferences"), "user_preferences").value == sentinel_response
+
+
+def test_done_tool_accepts_stringified_argument():
+    """Groq's llama sometimes emits {"done": "true"}; the schema must not reject it."""
+    from src.capabilities.email_tools import Done
+
+    assert Done.invoke({"done": "true"}) is not None
+    assert Done.invoke({"done": True}) is not None
+    assert Done.invoke({}) is not None  # optional
+
+
+def test_memory_helpers_round_trip():
+    from src.memory import preferences_text, wrap_preferences
+
+    assert wrap_preferences("hello") == {"preferences": "hello"}
+    assert preferences_text({"preferences": "hello"}) == "hello"
+    assert preferences_text("legacy raw string") == "legacy raw string"  # sqlite back-compat
+    assert preferences_text(None) == ""
+
+
+def test_update_memory_skips_llm_failure_without_overwriting():
+    class Store:
+        def __init__(self):
+            self.value = {"preferences": "existing"}
+            self.put_calls = []
+
+        def get(self, ns, key):
+            return type("Item", (), {"value": self.value})()
+
+        def put(self, ns, key, value):
+            self.put_calls.append((ns, key, value))
+
+    class FailingLlm:
+        def invoke(self, messages):
+            raise RuntimeError("network unavailable")
+
+    store = Store()
+    ns = ("email_agent", "owner", "response_preferences")
+
+    update_memory(store, ns, [{"role": "user", "content": "feedback"}], FailingLlm())
+
+    assert store.put_calls == []

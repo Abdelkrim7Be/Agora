@@ -56,3 +56,18 @@ tools:
       max_content_chars: 20000
       max_per_run: 1
       max_per_day: 100
+
+  # Outbound broadcast campaigns. The batch approval in the control panel is the
+  # human gate, so the decision is allow — but every recipient is still checked
+  # against recipient policy, content caps, and a per-campaign / per-day ceiling.
+  # run_id carries the campaign id (per_run == max recipients per campaign);
+  # a unique action_id per recipient keeps the daily counter honest.
+  send_campaign:
+    decision: allow
+    recipients:
+      allow_domains: []
+      deny_domains: []
+    limits:
+      max_content_chars: 50000
+      max_per_run: 500
+      max_per_day: 2000
