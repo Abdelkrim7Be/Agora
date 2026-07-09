@@ -26,6 +26,7 @@ public class UserSeeder implements CommandLineRunner {
     public void run(String... args) {
         seed(props.getOwner().getUsername(), props.getOwner().getPassword(), "owner");
         seed(props.getViewer().getUsername(), props.getViewer().getPassword(), "viewer");
+        seed(props.getAdmin().getUsername(), props.getAdmin().getPassword(), "admin");
     }
 
     private void seed(String username, String password, String role) {

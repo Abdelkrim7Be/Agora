@@ -40,3 +40,6 @@ gateway:
   viewer:
     username: ${GATEWAY_VIEWER_USERNAME:}
     password: ${GATEWAY_VIEWER_PASSWORD:}
+  admin:
+    username: ${GATEWAY_ADMIN_USERNAME:}
+    password: ${GATEWAY_ADMIN_PASSWORD:}

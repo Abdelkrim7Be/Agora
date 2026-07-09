@@ -14,6 +14,7 @@ public class GatewayProperties {
     private Jwt jwt = new Jwt();
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
+    private Credentials admin = new Credentials();
 
     public Upstream getUpstream() { return upstream; }
     public void setUpstream(Upstream upstream) { this.upstream = upstream; }
@@ -32,6 +33,9 @@ public class GatewayProperties {
 
     public Credentials getViewer() { return viewer; }
     public void setViewer(Credentials viewer) { this.viewer = viewer; }
+
+    public Credentials getAdmin() { return admin; }
+    public void setAdmin(Credentials admin) { this.admin = admin; }
 
     public static class Upstream {
         private String emailAgentUrl = "http://localhost:8000";
