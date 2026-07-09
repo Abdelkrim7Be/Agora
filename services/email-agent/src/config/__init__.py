@@ -38,10 +38,12 @@ class Settings:
     gmail_credentials_path: str = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")
     gmail_token_path: str = os.getenv("GMAIL_TOKEN_PATH", "token.json")
     gmail_token_store_path: str = os.getenv("GMAIL_TOKEN_STORE_PATH", "logs/gmail_tokens.json")
+    gmail_oauth_redirect_uri: str = os.getenv("GMAIL_OAUTH_REDIRECT_URI", "http://localhost:8080/api/agent/connect/gmail/callback")
+    gmail_oauth_state_secret: str = os.getenv("GMAIL_OAUTH_STATE_SECRET", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
-    poll_interval_minutes: int = int(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
+    poll_interval_minutes: float = float(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
@@ -64,13 +66,19 @@ class Settings:
     redis_url: str = os.getenv("REDIS_URL", "")
     storage_backend: str = os.getenv("AGENT_STORAGE_BACKEND", "postgres" if database_url else "sqlite")
     run_registry_backend: str = os.getenv("AGENT_RUN_REGISTRY_BACKEND", "postgres" if database_url else "json")
+    cost_tracking_enabled: bool = _env_bool("AGENT_COST_TRACKING_ENABLED", "true")
+    cost_backend: str = os.getenv("AGENT_COST_BACKEND", "postgres" if database_url else "json")
+    costs_path: str = os.getenv("AGENT_COSTS_PATH", "logs/llm_costs.jsonl")
     tenant_mode: str = os.getenv("TENANT_MODE", "single")
     default_user_id: str = os.getenv("AGENT_DEFAULT_USER_ID", "default")
+    default_agent_instance_id: str = os.getenv("AGENT_DEFAULT_INSTANCE_ID", "default-email-agent")
     gmail_webhook_enabled: bool = _env_bool("GMAIL_WEBHOOK_ENABLED", "false")
     gmail_webhook_topic: str = os.getenv("GMAIL_WEBHOOK_TOPIC", "")
     gmail_webhook_secret: str = os.getenv("GMAIL_WEBHOOK_SECRET", "")
     # Per-user last-processed Gmail historyId baseline for incremental push sync.
     gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
+    # Per-instance sync observability state (connection status, last success/failure, etc.).
+    gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
     # Gmail watches expire after 7 days; re-register well inside that window.
     gmail_watch_renew_hours: int = int(os.getenv("GMAIL_WATCH_RENEW_HOURS", "24"))
     polling_fallback_enabled: bool = _env_bool("GMAIL_POLLING_FALLBACK_ENABLED", "true")
@@ -95,6 +103,14 @@ class AgentBehavior(BaseModel):
     background: str = Field(min_length=1)
     triage_instructions: str = Field(min_length=1)
     response_preferences: str = Field(min_length=1)
+    writing_style_default: str = "Neutral professional voice until learned from sent mail."
+
+
+class StyleLearningConfig(BaseModel):
+    """Opt-in style learning from the selected mailbox's sent mail."""
+
+    enabled: bool = False
+    max_samples: int = Field(default=8, ge=1, le=50)
 
 
 class AutoOrganizeConfig(BaseModel):
@@ -108,17 +124,24 @@ class AgentConfig(BaseModel):
     agent: AgentBehavior
     capabilities: dict[str, bool] = {"email": True}
     auto_organize: AutoOrganizeConfig = Field(default_factory=AutoOrganizeConfig)
+    style_learning: StyleLearningConfig = Field(default_factory=StyleLearningConfig)
 
 
 def load_config(path: str | Path | None = None) -> AgentConfig:
     """Load and validate config.yaml. Fails loud on missing file or empty/invalid fields."""
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
-    if not config_path.is_file():
+    if path is None:
+        from src.instance_config import read_instance_text
+
+        raw = read_instance_text("config", config_path)
+    elif config_path.is_file():
+        raw = config_path.read_text()
+    else:
         raise FileNotFoundError(
             f"Agent config not found at {config_path}. "
             "Copy config.yaml into the service root and fill in the agent behavior."
         )
-    data = yaml.safe_load(config_path.read_text())
+    data = yaml.safe_load(raw)
     if not data:
         raise ValueError(f"Agent config at {config_path} is empty.")
     return AgentConfig(**data)

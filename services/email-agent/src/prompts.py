@@ -22,7 +22,7 @@ Classify the below email into one of these categories.
 < Rules >
 {triage_instructions}
 </ Rules >
-"""
+{category_section}"""
 
 # Triage user prompt — the email to classify.
 triage_user_prompt = """
@@ -61,6 +61,11 @@ When handling emails, follow these steps:
 < Response Preferences >
 {response_preferences}
 </ Response Preferences >
+
+< Writing Style >
+Write in this person's established voice:
+{writing_style}
+</ Writing Style >
 """
 
 # Tool descriptions now come from each capability module's TOOLS_PROMPT,

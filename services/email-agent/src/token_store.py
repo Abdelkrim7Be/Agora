@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Iterator
 
 from src.config import SERVICE_ROOT, settings
-from src.tenant import current_user_id, normalize_user_id
+from src.tenant import (
+    current_agent_instance_id,
+    normalize_agent_instance_id,
+)
 
 
 def _service_path(path: str) -> Path:
@@ -20,15 +23,25 @@ def _token_store_dir() -> Path:
     return configured.with_suffix("") if configured.suffix else configured
 
 
-def token_file_for_user(user_id: str | None = None) -> Path:
-    resolved = normalize_user_id(user_id or current_user_id())
-    default_user = normalize_user_id(settings.default_user_id)
-    if settings.tenant_mode == "single" and resolved == default_user:
+def token_file_for_user(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> Path:
+    """Return the OAuth token path shared by one agent instance.
+
+    ``user_id`` remains accepted for API compatibility, but delegated users must
+    resolve the same mailbox token for a given instance.
+    """
+    resolved_instance = normalize_agent_instance_id(
+        agent_instance_id or current_agent_instance_id()
+    )
+    default_instance = normalize_agent_instance_id(settings.default_agent_instance_id)
+    if resolved_instance == default_instance:
         return _service_path(settings.gmail_token_path)
 
     token_dir = _token_store_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
-    return token_dir / f"{resolved}.json"
+    return token_dir / f"instance__{resolved_instance}.json"
 
 
 def _fernet():
@@ -43,8 +56,36 @@ def _encrypted_path(target: Path) -> Path:
     return target.with_name(target.name + ".enc")
 
 
+def has_stored_token(agent_instance_id: str | None = None) -> bool:
+    """Return whether an instance has a plaintext or encrypted Gmail token."""
+    target = token_file_for_user(agent_instance_id=agent_instance_id)
+    return target.is_file() or _encrypted_path(target).is_file()
+
+
+def delete_token(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> bool:
+    """Delete the stored OAuth token for the given user/instance.
+
+    Removes both the plaintext and encrypted-at-rest variants. Returns True if any
+    file was removed, False if no token was present.
+    """
+    target = token_file_for_user(user_id, agent_instance_id)
+    enc_path = _encrypted_path(target)
+    removed = False
+    for path in (target, enc_path):
+        if path.is_file():
+            path.unlink()
+            removed = True
+    return removed
+
+
 @contextmanager
-def prepared_token_file(user_id: str | None = None) -> Iterator[str]:
+def prepared_token_file(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+) -> Iterator[str]:
     """Yield a plaintext token path for the Google client, encrypting it at rest.
 
     When AGENT_TOKEN_ENCRYPTION_KEY is unset this is a passthrough (current behavior).
@@ -52,8 +93,13 @@ def prepared_token_file(user_id: str | None = None) -> Iterator[str]:
     it is decrypted to the plaintext path for the duration of the call and the
     plaintext is re-encrypted and removed on exit, so tokens are never left on disk
     in the clear.
+
+    Concurrency note: the decrypt→use→re-encrypt sequence is not protected by a file
+    lock. For the single-process dev setup (one uvicorn worker + one poller) this is
+    safe in practice. In a multi-process production deployment, move to a DB-backed
+    token store with row-level locking or use an external secrets manager.
     """
-    target = token_file_for_user(user_id)
+    target = token_file_for_user(user_id, agent_instance_id)
     if not settings.token_encryption_key:
         yield str(target)
         return

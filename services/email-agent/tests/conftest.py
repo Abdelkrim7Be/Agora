@@ -20,11 +20,12 @@ def ai_tool_call(name: str, args: dict, call_id: str = "call_1") -> AIMessage:
 
 
 class _FakeRouter:
-    def __init__(self, classification: str):
+    def __init__(self, classification: str, category: str | None = None):
         self._classification = classification
+        self._category = category
 
-    def invoke(self, _messages):
-        return SimpleNamespace(classification=self._classification)
+    def invoke(self, _messages, config=None):
+        return SimpleNamespace(classification=self._classification, category=self._category)
 
 
 class _FakeToolLLM:
@@ -32,7 +33,7 @@ class _FakeToolLLM:
         self._sequence = list(sequence)
         self._i = 0
 
-    def invoke(self, _messages):
+    def invoke(self, _messages, config=None):
         msg = self._sequence[min(self._i, len(self._sequence) - 1)]
         self._i += 1
         return msg
@@ -44,7 +45,7 @@ class _FakeMemoryLLM:
     def __init__(self, preference_text: str = "updated preference"):
         self._pref = preference_text
 
-    def invoke(self, _messages):
+    def invoke(self, _messages, config=None):
         return UserPreferences(
             chain_of_thought="fake reasoning",
             user_preferences=self._pref,

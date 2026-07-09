@@ -10,6 +10,7 @@ from src.gmail_client import (
     create_draft,
     ensure_label,
     fetch_history_message_refs,
+    fetch_sent,
     forward_message,
     format_thread,
     gmail_to_email_input,
@@ -40,9 +41,18 @@ class _Execute:
 
 
 class _FakeMessages:
-    def __init__(self, messages: dict[str, dict] | None = None):
+    def __init__(self, messages: dict[str, dict] | None = None, refs: list[dict] | None = None):
         self.messages = messages or {}
+        self.refs = refs
         self.calls: list[tuple[str, dict]] = []
+
+    def list(self, **kwargs):
+        self.calls.append(("list", kwargs))
+        refs = self.refs if self.refs is not None else [
+            {"id": msg_id, "threadId": message.get("threadId")}
+            for msg_id, message in self.messages.items()
+        ]
+        return _Execute({"messages": refs})
 
     def modify(self, **kwargs):
         self.calls.append(("modify", kwargs))
@@ -107,8 +117,9 @@ class _FakeUsers:
         messages: dict[str, dict] | None = None,
         profile_email: str = "me@example.com",
         history_pages: list[dict] | None = None,
+        message_refs: list[dict] | None = None,
     ):
-        self._messages = _FakeMessages(messages)
+        self._messages = _FakeMessages(messages, message_refs)
         self._labels = _FakeLabels(labels)
         self._history = _FakeHistory(history_pages)
         self._drafts = _FakeDrafts()
@@ -142,8 +153,9 @@ class _FakeGmailResource:
         messages: dict[str, dict] | None = None,
         profile_email: str = "me@example.com",
         history_pages: list[dict] | None = None,
+        message_refs: list[dict] | None = None,
     ):
-        self._users = _FakeUsers(labels, messages, profile_email, history_pages)
+        self._users = _FakeUsers(labels, messages, profile_email, history_pages, message_refs)
 
     def users(self):
         return self._users
@@ -154,6 +166,53 @@ HEADERS = [
     {"name": "To", "value": "Me <me@example.com>"},
     {"name": "Subject", "value": "Quick question"},
 ]
+
+
+# --- fetch_sent / style sampling ---
+
+def test_fetch_sent_returns_usable_style_samples():
+    messages = {
+        "m1": _message(
+            [
+                {"name": "To", "value": "Pat <pat@example.com>"},
+                {"name": "Subject", "value": "Project follow-up"},
+                {"name": "Date", "value": "Mon, 1 Jun 2026 10:00:00 +0000"},
+            ],
+            {"body": {"data": _b64("Hi Pat, thanks for the thoughtful notes. I will review and follow up tomorrow. Best, A")}},
+            msg_id="m1",
+            thread_id="t1",
+        ),
+        "m2": _message(
+            [{"name": "To", "value": "noreply@example.com"}, {"name": "Subject", "value": "Receipt"}],
+            {"body": {"data": _b64("This longer automated recipient message should be skipped by sampling.")}},
+            msg_id="m2",
+            thread_id="t2",
+        ),
+        "m3": _message(
+            [{"name": "To", "value": "Sam <sam@example.com>"}, {"name": "Subject", "value": "Short"}],
+            {"body": {"data": _b64("Thanks")}},
+            msg_id="m3",
+            thread_id="t3",
+        ),
+    }
+    resource = _FakeGmailResource(messages=messages)
+
+    samples = fetch_sent(max_messages=10, resource=resource)
+
+    assert samples == [
+        {
+            "id": "m1",
+            "thread_id": "t1",
+            "to": "Pat <pat@example.com>",
+            "subject": "Project follow-up",
+            "date": "Mon, 1 Jun 2026 10:00:00 +0000",
+            "body": "Hi Pat, thanks for the thoughtful notes. I will review and follow up tomorrow. Best, A",
+        }
+    ]
+    assert resource.users().messages().calls[0] == (
+        "list",
+        {"userId": "me", "q": "in:sent", "maxResults": 10},
+    )
 
 
 # --- Gmail mutation helpers ---

@@ -154,7 +154,7 @@ def test_edit_sends_with_edited_args_and_updates_memory(fake_llms, respond_email
         "Email sent to" in (getattr(m, "content", "") or "")
         for m in result["messages"]
     )
-    item = store.get(("email_agent", "default", "response_preferences"), "user_preferences")
+    item = store.get(("email_agent", "default", "default-email-agent", "response_preferences"), "user_preferences")
     assert item is not None
 
 
@@ -179,7 +179,7 @@ def test_ignore_does_not_send_and_updates_triage_memory(fake_llms, respond_email
         "Email sent to" in (getattr(m, "content", "") or "")
         for m in result["messages"]
     )
-    item = store.get(("email_agent", "default", "triage_preferences"), "user_preferences")
+    item = store.get(("email_agent", "default", "default-email-agent", "triage_preferences"), "user_preferences")
     assert item is not None
 
 

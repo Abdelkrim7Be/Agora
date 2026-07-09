@@ -19,10 +19,12 @@ import java.util.Map;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -130,6 +132,118 @@ class RbacTest {
                 .andExpect(jsonPath("$.error").value("forbidden"));
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/run")));
+    }
+
+    @Test
+    void viewer_cannot_sync_403() throws Exception {
+        mockMvc.perform(post("/api/agent/sync?limit=7")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/sync?limit=7")));
+    }
+
+    @Test
+    void owner_can_read_cost_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"period\":\"session\"}")));
+
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.period").value("session"));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+    @Test
+    void viewer_cannot_read_cost_summary_403() throws Exception {
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+
+
+    @Test
+    void owner_can_learn_style() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/style/learn"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"profile\":{}}")));
+
+        mockMvc.perform(post("/api/agent/style/learn")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.profile").exists());
+
+        wireMock.verify(1, postRequestedFor(urlEqualTo("/style/learn")));
+    }
+
+    @Test
+    void viewer_cannot_learn_style_403() throws Exception {
+        mockMvc.perform(post("/api/agent/style/learn")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/style/learn")));
+    }
+
+
+
+
+
+    @Test
+    void viewer_can_read_contacts() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/contacts"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"contacts\":[]}")));
+
+        mockMvc.perform(get("/api/agent/contacts")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contacts").isArray());
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/contacts")));
+    }
+
+    @Test
+    void viewer_can_read_drafts() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/drafts"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"drafts\":[]}")));
+
+        mockMvc.perform(get("/api/agent/drafts?priority=urgent")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.drafts").isArray());
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/drafts?priority=urgent")));
+    }
+
+    @Test
+    void viewer_cannot_update_categories_403() throws Exception {
+        mockMvc.perform(put("/api/agent/categories")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"categories_yaml\":\"enabled: false\\n\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlEqualTo("/categories")));
     }
 
     @Test

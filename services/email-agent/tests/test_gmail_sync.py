@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from src.config import settings
 from src import gmail_sync
-from src.tenant import user_context
+from src.tenant import agent_instance_context, user_context
 
 
 def _use_json(monkeypatch, tmp_path):
@@ -11,15 +11,14 @@ def _use_json(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "gmail_sync_path", str(tmp_path / "gmail_sync.json"))
 
 
-def test_baseline_round_trips_per_user(monkeypatch, tmp_path) -> None:
+def test_baseline_is_shared_by_delegated_users(monkeypatch, tmp_path) -> None:
     _use_json(monkeypatch, tmp_path)
 
     assert gmail_sync.get_last_history_id("alice@example.com") is None
     gmail_sync.set_last_history_id("100", "alice@example.com")
-    gmail_sync.set_last_history_id("250", "bob@example.com")
 
     assert gmail_sync.get_last_history_id("alice@example.com") == "100"
-    assert gmail_sync.get_last_history_id("bob@example.com") == "250"
+    assert gmail_sync.get_last_history_id("bob@example.com") == "100"
 
 
 def test_baseline_only_advances_forward(monkeypatch, tmp_path) -> None:
@@ -42,3 +41,23 @@ def test_baseline_uses_current_tenant_context(monkeypatch, tmp_path) -> None:
         assert gmail_sync.get_last_history_id() == "42"
 
     assert gmail_sync.get_last_history_id("carol@example.com") == "42"
+
+
+def test_baseline_round_trips_per_agent_instance(monkeypatch, tmp_path) -> None:
+    _use_json(monkeypatch, tmp_path)
+
+    gmail_sync.set_last_history_id("100", "alice@example.com", "ceo-email-agent")
+    gmail_sync.set_last_history_id("250", "alice@example.com", "hr-email-agent")
+
+    assert gmail_sync.get_last_history_id("alice@example.com", "ceo-email-agent") == "100"
+    assert gmail_sync.get_last_history_id("alice@example.com", "hr-email-agent") == "250"
+
+
+def test_baseline_uses_current_agent_instance_context(monkeypatch, tmp_path) -> None:
+    _use_json(monkeypatch, tmp_path)
+
+    with agent_instance_context("support-email-agent"):
+        gmail_sync.set_last_history_id("84", "carol@example.com")
+        assert gmail_sync.get_last_history_id("carol@example.com") == "84"
+
+    assert gmail_sync.get_last_history_id("carol@example.com") is None

@@ -16,6 +16,21 @@ server:
 gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}
+  default-agent-instance: ${GATEWAY_DEFAULT_AGENT_INSTANCE:default-email-agent}
+  agent-types:
+    - id: email-agent
+      display-name: Email Agent
+      description: Autonomous email triage, drafting, validation, style learning, and mailbox operations.
+      capabilities:
+        - email_triage
+        - draft_approval
+        - gmail_sync
+        - style_learning
+        - cost_observability
+      base-path: /api/agent
+      health-path: /health
+      color: "#38bdf8"
+      icon: mail
   jwt:
     secret: ${GATEWAY_JWT_SECRET:}
     ttl-minutes: ${GATEWAY_JWT_TTL_MINUTES:60}

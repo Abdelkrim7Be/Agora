@@ -19,8 +19,11 @@ public class AuditController {
     }
 
     @GetMapping("/audit")
-    public List<AuditEvent> getAudit(@RequestParam(defaultValue = "100") int limit) {
-        int clamped = Math.min(Math.max(limit, 1), MAX_LIMIT);
-        return auditRepository.findAllByOrderByTimestampDesc(PageRequest.of(0, clamped));
+    public List<AuditEvent> getAudit(
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(defaultValue = "0") int page) {
+        int clampedLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
+        int clampedPage = Math.max(page, 0);
+        return auditRepository.findAllByOrderByTimestampDesc(PageRequest.of(clampedPage, clampedLimit));
     }
 }

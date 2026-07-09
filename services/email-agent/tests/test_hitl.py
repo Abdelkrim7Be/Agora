@@ -18,6 +18,7 @@ def client():
         yield c
 
 DRAFT = {"to": "alice@example.com", "subject": "Re: question", "content": "Here you go."}
+DRAFT2 = {"to": "alice@example.com", "subject": "Re: question", "content": "Shorter answer."}
 
 
 def _cfg() -> dict:
@@ -102,6 +103,27 @@ def test_api_run_then_approve(client, fake_llms, respond_email):
     assert approved["status"] == "completed"
 
 
+def test_api_approve_reports_send_failure(client, fake_llms, respond_email, monkeypatch):
+    import src.graph as g
+
+    class FailingSendTool:
+        def invoke(self, _args):
+            raise RuntimeError("gmail token expired")
+
+    fake_llms(
+        classification="respond",
+        tool_sequence=[ai_tool_call("write_email", DRAFT, "c1")],
+    )
+    monkeypatch.setitem(g.tools_by_name_map, "write_email", FailingSendTool())
+
+    run = client.post("/run", json=respond_email).json()
+    assert run["status"] == "pending_approval"
+
+    approved = client.post(f"/run/{run['run_id']}/approve", json={}).json()
+    assert approved["status"] == "failed"
+    assert "gmail token expired" in approved["error"]
+
+
 def test_api_respond_returns_pending_approval_on_redraft(client, fake_llms, respond_email):
     fake_llms(
         classification="respond",
@@ -120,6 +142,37 @@ def test_api_respond_returns_pending_approval_on_redraft(client, fake_llms, resp
         f"/run/{run['run_id']}/respond", json={"feedback": "make it shorter"}
     ).json()
     assert responded["status"] == "pending_approval"
+
+
+def test_api_respond_forces_pending_when_model_tries_done(
+    client, fake_llms, respond_email, tmp_path, monkeypatch
+):
+    import src.run_registry as rr
+
+    monkeypatch.setattr(rr, "DEFAULT_RUN_INDEX", tmp_path / "runs.json")
+    monkeypatch.setattr(rr.settings, "run_registry_backend", "json")
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("Done", {"done": True}, "c_done"),
+            ai_tool_call("write_email", DRAFT2, "c2"),
+            ai_tool_call("Done", {"done": True}, "c3"),
+        ],
+    )
+
+    run = client.post("/run", json=respond_email).json()
+    assert run["status"] == "pending_approval"
+
+    responded = client.post(
+        f"/run/{run['run_id']}/respond", json={"feedback": "make it shorter"}
+    ).json()
+
+    assert responded["status"] == "pending_approval"
+    assert responded["pending_action"][0]["action_request"]["args"] == DRAFT2
+    pending = client.get("/runs?status=pending_approval").json()["runs"]
+    assert [item["run_id"] for item in pending] == [run["run_id"]]
+    assert pending[0]["pending_action"][0]["action_request"]["args"] == DRAFT2
 
 
 def test_reject_can_record_rule_suggestion(fake_llms, respond_email, monkeypatch):

@@ -16,6 +16,11 @@ class RouterSchema(BaseModel):
         "'notify' for important information that doesn't need a response, "
         "'respond' for emails that need a reply",
     )
+    category: str | None = Field(
+        default=None,
+        description="Optional: the category name from the configured list if this email clearly fits one "
+        "and no deterministic rule matched it. Leave null if unsure or if categories are not listed.",
+    )
 
 
 class EmailInput(TypedDict):
@@ -33,6 +38,9 @@ class EmailInput(TypedDict):
     # Verdict from the security service /sanitize, attached by the poller when
     # AGENT_SECURITY_ENABLED=true. Absent on the manual /run path. triage_router reads it.
     security: NotRequired[dict]
+    # Platform scoping — set by the poller and API from context variables so every
+    # run record carries explicit instance identity without relying solely on context lookups.
+    agent_instance_id: NotRequired[str]
 
 
 class StateInput(TypedDict):
@@ -43,8 +51,21 @@ class State(MessagesState):
     # MessagesState provides the `messages` key; we add email-specific fields.
     email_input: EmailInput
     classification_decision: Literal["ignore", "respond", "notify"]
+    category: NotRequired[str]
+    category_display_name: NotRequired[str]
+    priority: NotRequired[Literal["urgent", "normal", "low"]]
+    template: NotRequired[str]
+    category_policy: NotRequired[str]
+    workflow_owner: NotRequired[str]
+    workflow_approver: NotRequired[str]
+    workflow_route_to: NotRequired[list[str]]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
+    # Set when an approved send action fails after the human decision.
+    email_send_failed: NotRequired[str]
     # Set when deterministic post-triage organization has run; terminal after tools.
     auto_organized: NotRequired[bool]
     automation_acted: NotRequired[bool]
+    # Set after human feedback asks for a revised draft; the run must not finish
+    # until a new gated write_email draft has been produced and approved.
+    redraft_requested: NotRequired[bool]

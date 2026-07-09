@@ -130,6 +130,7 @@ def test_config_values_flow_into_prompts(tmp_path):
     triage = triage_system_prompt.format(
         background=cfg.agent.background,
         triage_instructions=cfg.agent.triage_instructions,
+        category_section="",
     )
     assert "UNIQUE_BACKGROUND_MARKER" in triage
     assert "UNIQUE_TRIAGE_MARKER" in triage
@@ -138,6 +139,7 @@ def test_config_values_flow_into_prompts(tmp_path):
         tools_prompt="(tools)",
         background=cfg.agent.background,
         response_preferences=cfg.agent.response_preferences,
+        writing_style=cfg.agent.writing_style_default,
     )
     assert "UNIQUE_BACKGROUND_MARKER" in agent
     assert "UNIQUE_PREFS_MARKER" in agent

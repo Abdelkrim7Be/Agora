@@ -48,12 +48,39 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/agent-instances").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/agent-instances/*/grants").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/agent-instances/*/grants").hasRole("OWNER")
+                .requestMatchers(HttpMethod.DELETE, "/agent-instances/*/grants/*").hasRole("OWNER")
+                .requestMatchers(HttpMethod.DELETE, "/agent-instances/*").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/disconnect/gmail").hasRole("OWNER")
+                .requestMatchers(HttpMethod.DELETE, "/api/agent/style").hasRole("OWNER")
+                .requestMatchers(HttpMethod.DELETE, "/api/agent/memory").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/agent/run").hasRole("OWNER")
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasRole("OWNER")
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasRole("OWNER")
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run").hasAnyRole("OWNER", "VIEWER")
+                // approve/reject/respond: JWT allows any authenticated; instance role enforced by ProxyController
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/agent/sync").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/sync/status").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/sync/pause").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/sync/resume").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/costs").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/costs/**").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/style").hasRole("OWNER")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/style").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/style/**").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/runs").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/inbox").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/archive").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/trash").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/read").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/unread").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/memory").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/memory").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/config").hasAnyRole("OWNER", "VIEWER")
@@ -61,8 +88,17 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/capabilities").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/capabilities").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/policy").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/categories").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/categories").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/templates").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/contacts").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/drafts").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/rules").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/rules").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/rules/suggestions").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/rules/suggestions/*/promote").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/rules/rule-toggle").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/rules/section-toggle").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/audit").hasRole("OWNER")
                 // Default-deny: anything not explicitly allowed above is rejected, so a future
@@ -90,7 +126,7 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Agora-Agent-Instance"));
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;
