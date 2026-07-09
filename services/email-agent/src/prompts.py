@@ -62,6 +62,10 @@ When handling emails, follow these steps:
 {response_preferences}
 </ Response Preferences >
 
+< Language >
+{reply_language}
+</ Language >
+
 < Writing Style >
 Write in this person's established voice:
 {writing_style}
