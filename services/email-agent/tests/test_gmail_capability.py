@@ -11,6 +11,37 @@ def test_write_email_dry_run():
     assert "dry run" in result
 
 
+def test_write_email_live_path_invokes_rich_gmail_helper_after_approval(monkeypatch):
+    from src.capabilities import email_tools
+
+    calls: list[dict] = []
+    monkeypatch.setattr(email_tools.settings, "dry_run", False)
+    monkeypatch.setattr(
+        "src.gmail_client.send_message",
+        lambda to, subject, body: calls.append({"to": to, "subject": subject, "body": body})
+        or {"id": "sent-write"},
+    )
+
+    approval_token = hitl_approved.set(True)
+    try:
+        result = write_email.invoke({
+            "to": "client@example.com",
+            "subject": "Re: hello",
+            "content": "Bonjour,\n\n- Point A\n- Point B",
+        })
+    finally:
+        hitl_approved.reset(approval_token)
+
+    assert result == "Email sent to client@example.com with subject 'Re: hello' (message id: sent-write)"
+    assert calls == [
+        {
+            "to": "client@example.com",
+            "subject": "Re: hello",
+            "body": "Bonjour,\n\n- Point A\n- Point B",
+        }
+    ]
+
+
 def test_forward_and_reply_all_schema_do_not_expose_email_id():
     assert set(forward_email.args_schema.model_json_schema()["properties"]) == {"to", "note"}
     assert set(reply_all.args_schema.model_json_schema()["properties"]) == {"content"}

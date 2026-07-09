@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from src.categories import classify_category, load_categories
 from src.run_registry import list_runs, upsert_run
@@ -42,6 +43,51 @@ contacts:
     category: internal
     priority: urgent
 """
+
+
+def test_default_template_catalog_has_operational_auto_drafts():
+    from src.categories import auto_draft_tool_call
+
+    cfg = load_categories(Path(__file__).resolve().parents[1] / "categories.yaml")
+    by_name = {category.name: category for category in cfg.categories}
+    template_names = {template.name for template in cfg.templates}
+
+    assert by_name["hr_requests"].template == "candidate_ack_reply"
+    assert by_name["finance_requests"].template == "finance_request_reply"
+    assert by_name["devis"].template == "quote_request_reply"
+    assert {"candidate_ack_reply", "finance_request_reply", "quote_request_reply"}.issubset(template_names)
+
+    call = auto_draft_tool_call(
+        {"author": "Candidate <candidate@example.com>", "subject": "Stage data", "email_thread": "CV attached"},
+        cfg,
+        "hr_requests",
+    )
+
+    assert call["name"] == "write_email"
+    assert call["args"]["to"] == "candidate@example.com"
+    assert "candidature" in call["args"]["content"]
+
+
+def test_ceo_instance_template_catalog_parses_when_present():
+    from src.categories import auto_draft_tool_call
+
+    path = Path(__file__).resolve().parents[1] / "logs" / "instances" / "ceo-email-agent" / "categories.yaml"
+    if not path.is_file():
+        return
+
+    cfg = load_categories(path)
+    names = {category.name for category in cfg.categories}
+    assert {"executive_meeting", "partnership_opportunity", "investor_update", "sensitive_escalation"}.issubset(names)
+
+    call = auto_draft_tool_call(
+        {"author": "Partner <partner@example.com>", "subject": "Partnership proposal", "email_thread": "Can we collaborate?"},
+        cfg,
+        "partnership_opportunity",
+    )
+
+    assert call["name"] == "write_email"
+    assert call["args"]["to"] == "partner@example.com"
+    assert "partenariat" in call["args"]["content"].lower()
 
 
 def test_load_categories_parses_templates_contacts_and_categories(tmp_path):
@@ -355,7 +401,8 @@ def test_shipped_categories_classify_new_workflows():
 
     devis = classify_category({"author": "buyer@corp.com", "subject": "Demande de devis produit"}, cfg)
     assert devis["category"] == "devis"
-    assert devis["policy"] == "notify"
+    assert devis["policy"] == "auto_draft"
+    assert devis["template"] == "quote_request_reply"
     assert devis["route_to"] == ["redacted@example.com"]
 
     # New templates resolve and carry a body.
