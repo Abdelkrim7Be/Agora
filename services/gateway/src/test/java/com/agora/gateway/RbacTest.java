@@ -258,4 +258,15 @@ class RbacTest {
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/unknownverb")));
     }
+
+    @Test
+    void unauthenticated_denied_on_unenumerated_route_401() throws Exception {
+        mockMvc.perform(post("/api/agent/run/abc/unknownverb")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("unauthorized"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/unknownverb")));
+    }
 }
