@@ -2,23 +2,11 @@ groups:
 - id: team_internal
   name: Équipe interne
   type: employees
-  members:
-  - email: abdelkrimbellagnech99@gmail.com
-    name: Abdelkrim Bellagnech
-    fields:
-      dept: HR
-  - email: redacted@example.com
-    name: Test User
-    fields:
-      dept: Finance
+  segment_id: team_internal
 - id: clients_demo
   name: Clients (démo)
   type: clients
-  members:
-  - email: abdelkrimbellagnech99@gmail.com
-    name: Abdelkrim Bellagnech
-    fields:
-      company: Agora
+  segment_id: clients_demo
 templates:
 - name: internal_announcement
   subject: 'Information interne : {{name}}'

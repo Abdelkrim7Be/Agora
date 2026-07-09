@@ -79,6 +79,46 @@ def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
     assert "Réclamation" in request["action_request"]["args"]["note"]
 
 
+def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+    from src.roles import ResolvedRole
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "finance_review",
+                "display_name": "Finance review",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Finance",
+                "approver": "finance.manager@example.com",
+                "route_to": ["finance"],
+                "when": {"subject_contains": ["question"]},
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(
+        g,
+        "resolve_role",
+        lambda key: ResolvedRole(
+            role_key="finance",
+            display_name="Finance",
+            dept="Finance",
+            emails=["finance@example.com", "backup@example.com"],
+        ) if key.strip().lower() == "finance" else None,
+    )
+    email = {**respond_email, "email_id": "msg-role-route"}
+
+    result = email_assistant.invoke({"email_input": email}, _cfg())
+
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["args"]["to"] == "finance@example.com"
+    assert result["workflow_route_to"] == ["finance"]
+
+
 def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeypatch, respond_email):
     import src.graph as g
     from src.categories import CategoriesConfig

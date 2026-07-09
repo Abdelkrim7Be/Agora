@@ -92,40 +92,157 @@ def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
 
 
 
-def test_contacts_endpoint_returns_configured_contacts(monkeypatch, tmp_path):
-    import src.api as api
+def test_roles_crud_round_trip(monkeypatch, tmp_path):
+    import src.roles as roles
 
-    path = tmp_path / "categories.yaml"
-    path.write_text("""enabled: true
-categories: []
-templates: []
-contacts:
-  - email: vip@example.com
-    category: support
-    display_name: VIP
-    priority: urgent
-""")
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+    path = tmp_path / "roles.yaml"
+    path.write_text(
+        "roles:\n"
+        "  hr:\n"
+        "    display_name: HR\n"
+        "    dept: HR\n"
+        "    emails:\n"
+        "      - hr@example.com\n"
+    )
+    monkeypatch.setattr(roles, "DEFAULT_ROLES_PATH", path)
 
     with TestClient(app) as client:
-        response = client.get("/contacts", headers={"X-Agora-Agent-Instance": "isolated-email-agent"})
+        listed = client.get("/roles", headers={"X-Agora-Agent-Instance": "isolated-email-agent"})
+        assert listed.status_code == 200
+        assert listed.json()["roles"][0]["role_key"] == "hr"
+
+        created = client.post("/roles", json={
+            "role_key": "finance",
+            "display_name": "Finance",
+            "dept": "Finance",
+            "emails": ["finance@example.com"],
+        })
+        assert created.status_code == 201
+        assert created.json()["role"]["primary_email"] == "finance@example.com"
+
+        duplicate = client.post("/roles", json={
+            "role_key": "finance",
+            "display_name": "Finance duplicate",
+            "dept": "Finance",
+            "emails": ["duplicate@example.com"],
+        })
+        assert duplicate.status_code == 409
+
+        updated = client.put("/roles/finance", json={
+            "role_key": "finance",
+            "display_name": "Finance Team",
+            "dept": "Finance",
+            "emails": ["finance@example.com", "backup@example.com"],
+        })
+        assert updated.status_code == 200
+        assert updated.json()["role"]["emails"] == ["finance@example.com", "backup@example.com"]
+
+        deleted = client.delete("/roles/finance")
+        assert deleted.status_code == 200
+
+        final_list = client.get("/roles")
+        assert [role["role_key"] for role in final_list.json()["roles"]] == ["hr"]
+
+
+def test_contacts_endpoint_returns_directory_contacts(monkeypatch, tmp_path):
+    import src.contacts as contacts
+
+    path = tmp_path / "contacts.yaml"
+    path.write_text("""contacts:
+- email: vip@example.com
+  name: VIP Contact
+  audience: client
+  fields:
+    company: Agora
+  tags:
+  - vip
+  active: true
+segments: []
+""", encoding="utf-8")
+    monkeypatch.setattr(contacts, "DEFAULT_CONTACTS_PATH", path)
+
+    with TestClient(app) as client:
+        response = client.get("/contacts")
 
     assert response.status_code == 200
     assert response.json() == {
-        "agent_instance_id": "isolated-email-agent",
+        "agent_instance_id": "default-email-agent",
         "contacts": [
             {
                 "email": "vip@example.com",
-                "domain": None,
-                "name": None,
-                "category": "support",
-                "display_name": "VIP",
-                "priority": "urgent",
+                "name": "VIP Contact",
+                "audience": "client",
+                "fields": {"company": "Agora"},
+                "tags": ["vip"],
+                "active": True,
             }
         ],
-        "storage": "instance-config",
+        "storage": "contacts-directory",
     }
 
+
+def test_contacts_and_segments_crud_round_trip(monkeypatch, tmp_path):
+    import src.contacts as contacts
+
+    path = tmp_path / "contacts.yaml"
+    path.write_text("contacts: []\nsegments: []\n", encoding="utf-8")
+    monkeypatch.setattr(contacts, "DEFAULT_CONTACTS_PATH", path)
+
+    with TestClient(app) as client:
+        created = client.post("/contacts", json={
+            "email": "owner@example.com",
+            "name": "Owner",
+            "audience": "employee",
+            "fields": {"dept": "Finance"},
+            "tags": ["approver"],
+            "active": True,
+        })
+        assert created.status_code == 201
+
+        updated = client.put("/contacts/owner@example.com", json={
+            "email": "owner@example.com",
+            "name": "Owner Updated",
+            "audience": "employee",
+            "fields": {"dept": "Finance"},
+            "tags": ["approver", "finance"],
+            "active": True,
+        })
+        assert updated.status_code == 200
+        assert updated.json()["contact"]["name"] == "Owner Updated"
+
+        segment = client.post("/segments", json={
+            "id": "finance_team",
+            "name": "Finance team",
+            "match": {"audience": "employee", "fields.dept": "Finance"},
+            "members": [],
+        })
+        assert segment.status_code == 201
+
+        listed = client.get("/segments")
+        assert listed.status_code == 200
+        assert listed.json()["segments"][0]["resolved_count"] == 1
+
+        deleted = client.delete("/contacts/owner@example.com")
+        assert deleted.status_code == 200
+
+
+def test_contacts_csv_import_reports_rejected_rows(monkeypatch, tmp_path):
+    import src.contacts as contacts
+
+    path = tmp_path / "contacts.yaml"
+    path.write_text("contacts: []\nsegments: []\n", encoding="utf-8")
+    monkeypatch.setattr(contacts, "DEFAULT_CONTACTS_PATH", path)
+
+    with TestClient(app) as client:
+        response = client.post("/contacts/import", json={
+            "csv_text": "email,name,audience\nvalid@example.com,Valid,client\nbad-row,Bad,client\n",
+            "audience_default": "client",
+        })
+
+    assert response.status_code == 200
+    assert response.json()["imported_count"] == 1
+    assert response.json()["rejected_count"] == 1
+    assert response.json()["rejected"][0]["email"] == "bad-row"
 
 def test_drafts_endpoint_filters_category_and_priority(monkeypatch):
     import src.api as api

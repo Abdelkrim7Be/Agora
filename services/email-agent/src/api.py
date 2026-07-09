@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
@@ -31,6 +31,37 @@ from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
 from src.poller import poll_history, poll_once
 from src.memory import namespace, preferences_text, wrap_preferences
+from src.roles import (
+    RoleConflictError,
+    RoleNotFoundError,
+    create_role,
+    delete_role,
+    list_roles,
+    normalize_role_key,
+    update_role,
+)
+from src.contacts import (
+    Contact,
+    ContactConflictError,
+    ContactNotFoundError,
+    Segment,
+    SegmentConflictError,
+    SegmentNotFoundError,
+    create_contact,
+    create_segment,
+    delete_contact,
+    delete_segment,
+    get_contact,
+    get_segment,
+    import_contacts_csv,
+    list_contacts as list_directory_contacts,
+    list_segments,
+    resolve_segment,
+    update_contact,
+    update_segment,
+    upsert_contact,
+    upsert_segment,
+)
 from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
@@ -75,6 +106,7 @@ from src.campaigns import (
     find_group,
     find_template,
     load_campaigns,
+    members_for_group,
     render_campaign,
     save_campaigns,
 )
@@ -209,19 +241,41 @@ class GroupInput(BaseModel):
     id: str
     name: str
     type: str = "clients"
-    members: list[dict] = []
+    segment_id: str | None = None
+    members: list[dict] = Field(default_factory=list)
 
 
 class CampaignTemplateInput(BaseModel):
     name: str
     subject: str
     body_markdown: str
-    variables: list[str] = []
+    variables: list[str] = Field(default_factory=list)
 
 
 class CampaignPrepareInput(BaseModel):
     group_id: str
     template_name: str
+
+
+class ContactInput(BaseModel):
+    email: str
+    name: str | None = None
+    audience: str
+    fields: dict[str, str] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    active: bool = True
+
+
+class SegmentInput(BaseModel):
+    id: str
+    name: str
+    match: dict[str, str] = Field(default_factory=dict)
+    members: list[str] = Field(default_factory=list)
+
+
+class ContactsImportInput(BaseModel):
+    csv_text: str
+    audience_default: str = "client"
 
 
 # Prepared-but-unapproved campaigns live in-process (single API worker). A
@@ -284,6 +338,28 @@ class StyleInput(BaseModel):
 
 class CategoriesInput(BaseModel):
     categories_yaml: str
+
+
+class RoleInput(BaseModel):
+    role_key: str
+    display_name: str
+    emails: list[str]
+    dept: str | None = None
+
+
+def _contact_from_input(body: ContactInput) -> Contact:
+    return Contact(
+        email=body.email,
+        name=body.name,
+        audience=body.audience,
+        fields=body.fields,
+        tags=body.tags,
+        active=body.active,
+    )
+
+
+def _segment_from_input(body: SegmentInput) -> Segment:
+    return Segment(id=body.id, name=body.name, match=body.match, members=body.members)
 
 
 class RunResponse(BaseModel):
@@ -733,6 +809,31 @@ async def gmail_connect_callback(code: str | None = None, state: str | None = No
     )
 
 
+def _serialize_role(role) -> dict:
+    return role.model_dump() | {"primary_email": role.primary_email}
+
+
+def _serialize_contact(contact: Contact) -> dict:
+    return contact.model_dump()
+
+
+def _serialize_segment(segment: Segment) -> dict:
+    resolved = resolve_segment(segment, agent_instance_id=current_agent_instance_id())
+    return segment.model_dump() | {
+        "resolved_count": len(resolved),
+        "resolved_members": [member.model_dump() for member in resolved],
+    }
+
+
+def _serialize_group(group: Group) -> dict:
+    members = members_for_group(group, agent_instance_id=current_agent_instance_id())
+    return group.model_dump() | {
+        "segment_id": group.segment_id or group.id,
+        "members": [member.model_dump() for member in members],
+        "member_count": len(members),
+    }
+
+
 def _current_categories() -> tuple[str, CategoriesConfig]:
     categories_yaml = read_instance_text("categories", DEFAULT_CATEGORIES_PATH)
     data = yaml.safe_load(categories_yaml) or {}
@@ -769,6 +870,61 @@ async def update_categories(body: CategoriesInput) -> dict:
     }
 
 
+@app.get("/roles")
+async def get_roles(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    roles = list_roles()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "roles": [_serialize_role(role) for role in roles],
+        "storage": "roles-directory",
+    }
+
+
+@app.post("/roles", status_code=201)
+async def create_role_entry(request: Request, body: RoleInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        role = create_role(body.role_key, body.display_name, body.emails, body.dept)
+    except RoleConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "role": _serialize_role(role),
+        "storage": "roles-directory",
+    }
+
+
+@app.put("/roles/{role_key}")
+async def update_role_entry(role_key: str, request: Request, body: RoleInput) -> dict:
+    _require_instance_role(request, "owner")
+    if normalize_role_key(body.role_key) != normalize_role_key(role_key):
+        raise HTTPException(status_code=400, detail="role_key in body must match the path")
+    try:
+        role = update_role(role_key, body.display_name, body.emails, body.dept)
+    except RoleNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "role": _serialize_role(role),
+        "storage": "roles-directory",
+    }
+
+
+@app.delete("/roles/{role_key}")
+async def delete_role_entry(role_key: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        delete_role(role_key)
+    except RoleNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "deleted": normalize_role_key(role_key),
+        "storage": "roles-directory",
+    }
+
+
 @app.get("/templates")
 async def get_templates() -> dict:
     _raw, cfg = _current_categories()
@@ -780,12 +936,129 @@ async def get_templates() -> dict:
 
 
 @app.get("/contacts")
-async def get_contacts() -> dict:
-    _raw, cfg = _current_categories()
+async def get_contacts(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    contacts = list_directory_contacts()
     return {
         "agent_instance_id": current_agent_instance_id(),
-        "contacts": [contact.model_dump() for contact in cfg.contacts],
-        "storage": "instance-config",
+        "contacts": [_serialize_contact(contact) for contact in contacts],
+        "storage": "contacts-directory",
+    }
+
+
+@app.post("/contacts", status_code=201)
+async def create_contact_entry(request: Request, body: ContactInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        contact = create_contact(_contact_from_input(body))
+    except ContactConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "contact": _serialize_contact(contact),
+        "storage": "contacts-directory",
+    }
+
+
+@app.put("/contacts/{email}")
+async def update_contact_entry(email: str, request: Request, body: ContactInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        contact = update_contact(email, _contact_from_input(body))
+    except ContactNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "contact": _serialize_contact(contact),
+        "storage": "contacts-directory",
+    }
+
+
+@app.delete("/contacts/{email}")
+async def delete_contact_entry(email: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        delete_contact(email)
+    except ContactNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "deleted": email.strip().lower(),
+        "storage": "contacts-directory",
+    }
+
+
+@app.post("/contacts/import")
+async def import_contacts_entries(request: Request, body: ContactsImportInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        result = import_contacts_csv(body.csv_text, audience_default=body.audience_default)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "imported": [_serialize_contact(contact) for contact in result["imported"]],
+        "rejected": result["rejected"],
+        "imported_count": result["imported_count"],
+        "rejected_count": result["rejected_count"],
+        "storage": "contacts-directory",
+    }
+
+
+@app.get("/segments")
+async def get_segments(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    segments = list_segments()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "segments": [_serialize_segment(segment) for segment in segments],
+        "storage": "contacts-directory",
+    }
+
+
+@app.post("/segments", status_code=201)
+async def create_segment_entry(request: Request, body: SegmentInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        segment = create_segment(_segment_from_input(body))
+    except SegmentConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "segment": _serialize_segment(segment),
+        "storage": "contacts-directory",
+    }
+
+
+@app.put("/segments/{segment_id}")
+async def update_segment_entry(segment_id: str, request: Request, body: SegmentInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        segment = update_segment(segment_id, _segment_from_input(body))
+    except SegmentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "segment": _serialize_segment(segment),
+        "storage": "contacts-directory",
+    }
+
+
+@app.delete("/segments/{segment_id}")
+async def delete_segment_entry(segment_id: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        delete_segment(segment_id)
+    except SegmentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "deleted": segment_id.strip(),
+        "storage": "contacts-directory",
     }
 
 
@@ -799,7 +1072,7 @@ async def list_groups() -> dict:
     cfg = load_campaigns()
     return {
         "agent_instance_id": current_agent_instance_id(),
-        "groups": [g.model_dump() for g in cfg.groups],
+        "groups": [_serialize_group(group) for group in cfg.groups],
     }
 
 
@@ -811,22 +1084,45 @@ async def upsert_group(request: Request, body: GroupInput) -> dict:
         id=body.id,
         name=body.name,
         type=body.type if body.type in ("employees", "clients") else "clients",
-        members=[GroupMember(**m) for m in body.members],
+        segment_id=body.segment_id or body.id,
+        members=[GroupMember(**member) for member in body.members],
     )
-    cfg.groups = [g for g in cfg.groups if g.id != group.id] + [group]
+    if group.members:
+        default_audience = "employee" if group.type == "employees" else "client"
+        for member in group.members:
+            existing = get_contact(member.email)
+            contact = Contact(
+                email=member.email,
+                name=member.name or (existing.name if existing else None),
+                audience=existing.audience if existing else default_audience,
+                fields=((existing.fields if existing else {}) | member.fields),
+                tags=list(existing.tags) if existing else [],
+                active=existing.active if existing else True,
+            )
+            upsert_contact(contact)
+        upsert_segment(Segment(id=group.segment_id or group.id, name=group.name, members=[member.email for member in group.members], match={}))
+    elif get_segment(group.segment_id or group.id) is None:
+        raise HTTPException(status_code=404, detail="segment not found")
+    cfg.groups = [item for item in cfg.groups if item.id != group.id] + [Group(id=group.id, name=group.name, type=group.type, segment_id=group.segment_id)]
     save_campaigns(cfg)
-    return {"group": group.model_dump()}
+    return {"group": _serialize_group(Group(id=group.id, name=group.name, type=group.type, segment_id=group.segment_id))}
 
 
 @app.delete("/campaigns/groups/{group_id}")
 async def delete_group(request: Request, group_id: str) -> dict:
     _require_instance_role(request, "owner")
     cfg = load_campaigns()
-    before = len(cfg.groups)
-    cfg.groups = [g for g in cfg.groups if g.id != group_id]
-    if len(cfg.groups) == before:
+    group = find_group(cfg, group_id)
+    if group is None:
         raise HTTPException(status_code=404, detail="group not found")
+    cfg.groups = [item for item in cfg.groups if item.id != group_id]
     save_campaigns(cfg)
+    segment_id = group.segment_id or group.id
+    if segment_id and not any((item.segment_id or item.id) == segment_id for item in cfg.groups):
+        try:
+            delete_segment(segment_id)
+        except SegmentNotFoundError:
+            pass
     return {"deleted": group_id}
 
 
@@ -870,6 +1166,7 @@ def _campaign_summary(campaign_id: str, record: dict) -> dict:
         "status": record["status"],
         "group_id": record["group_id"],
         "group_name": record["group_name"],
+        "segment_id": record.get("segment_id"),
         "template_name": record["template_name"],
         "recipient_count": len(rendered),
         "created_at": record["created_at"],
@@ -905,15 +1202,16 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
     template = find_template(cfg, body.template_name)
     if template is None:
         raise HTTPException(status_code=404, detail="template not found")
-    if not group.members:
-        raise HTTPException(status_code=400, detail="group has no members")
 
-    rendered = [r.model_dump() for r in render_campaign(group, template)]
+    rendered = [r.model_dump() for r in render_campaign(group, template, agent_instance_id=current_agent_instance_id())]
+    if not rendered:
+        raise HTTPException(status_code=400, detail="group has no members")
     campaign_id = str(uuid.uuid4())
     record = {
         "status": "pending_approval",
         "group_id": group.id,
         "group_name": group.name,
+        "segment_id": group.segment_id or group.id,
         "template_name": template.name,
         "rendered": rendered,
         "created_at": _now_iso(),
