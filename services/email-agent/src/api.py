@@ -192,6 +192,10 @@ def _request_user_id(request: Request) -> str | None:
     return request.headers.get("x-agora-user")
 
 
+def _request_user_dept(request: Request) -> str | None:
+    return request.headers.get("x-agora-user-dept")
+
+
 def _request_agent_instance_id(request: Request) -> str | None:
     return request.headers.get("x-agora-agent-instance")
 
@@ -213,6 +217,15 @@ def _require_instance_role(request: Request, min_role: str) -> None:
     required_tier = MIN_TIER.get(min_role, 99)
     if caller_tier < required_tier:
         raise HTTPException(status_code=403, detail="Insufficient instance role")
+
+
+def _require_dept_access(request: Request, record: dict | None) -> None:
+    if record is None:
+        return
+    user_dept = _request_user_dept(request)
+    workflow_dept = record.get("workflow_dept")
+    if user_dept and workflow_dept and workflow_dept != user_dept:
+        raise HTTPException(status_code=403, detail="Not authorized for this department's approval.")
 
 
 @app.middleware("http")
@@ -376,6 +389,26 @@ class RunResponse(BaseModel):
     workflow_owner: str | None = None
     workflow_approver: str | None = None
     workflow_route_to: list[str] | None = None
+    workflow_dept: str | None = None
+    assignee: str | None = None
+    action_type: str | None = None
+
+
+def _derive_action_type(pending_action: list | None, classification: str | None) -> str:
+    if not pending_action or len(pending_action) == 0:
+        return "unknown"
+    action = pending_action[0]
+    name = action.get("name") if isinstance(action, dict) else getattr(action, "name", "")
+    if name == "write_email":
+        return "reply_draft"
+    if name == "forward_email":
+        return "notify" if classification == "notify" else "forward"
+    if name in ("trash_email", "apply_label", "archive_email"):
+        return "organize"
+    if "campaign" in name:
+        return "campaign"
+    print(f"Unknown pending action tool name: {name}")
+    return "unknown"
 
 
 def _thread_config(run_id: str) -> dict:
@@ -411,6 +444,9 @@ def _format(result: dict, run_id: str) -> RunResponse:
             workflow_owner=result.get("workflow_owner"),
             workflow_approver=result.get("workflow_approver"),
             workflow_route_to=result.get("workflow_route_to") or [],
+            workflow_dept=result.get("workflow_dept"),
+            assignee=result.get("assignee"),
+            action_type=_derive_action_type(interrupts[0].value, result.get("classification_decision")),
         )
     return RunResponse(
         run_id=run_id,
@@ -547,6 +583,8 @@ def _execute_pending_action(run_id: str, args_override: dict | None = None) -> R
     )
     if not record or record.get("status") != "pending_approval":
         return None
+    # No request object available here to check dept, but this is an internal func 
+    # called by approve/reject/respond endpoints which do check it.
     pending = _pending_action(record)
     if pending is None:
         return None
@@ -1573,18 +1611,25 @@ async def costs(limit: int = Query(default=100, ge=1, le=500)) -> dict:
 
 @app.get("/runs")
 async def runs(
+    request: Request,
     status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
-    # Fetch one extra row to tell the UI whether a next page exists.
-    page = list_runs(
+    user_dept = _request_user_dept(request)
+    # Fetch extra limit so we can filter post-db and check has_more, wait, list_runs in json/postgres needs to return all if we filter post-db.
+    # To keep pagination working properly, we'll fetch an un-paginated chunk, filter it, and then paginate in python.
+    all_runs = await asyncio.to_thread(
+        list_runs,
         status=status,
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
-        limit=limit + 1,
-        offset=offset,
+        limit=5000,
     )
+    if user_dept:
+        all_runs = [r for r in all_runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+    
+    page = all_runs[offset:offset + limit + 1]
     has_more = len(page) > limit
     return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
 
@@ -1705,7 +1750,7 @@ def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
 
 
 @app.get("/inbox")
-async def inbox(limit: int = Query(default=25, ge=1, le=100)) -> dict:
+async def inbox(request: Request, limit: int = Query(default=25, ge=1, le=100)) -> dict:
     """List the tenant's recent inbox messages with the agent's verdict attached.
 
     The Gmail calls are blocking (googleapiclient), so they run in a worker thread to
@@ -1713,12 +1758,15 @@ async def inbox(limit: int = Query(default=25, ge=1, le=100)) -> dict:
     id so the UI can show the classification and link straight to the run.
     """
     user_id = current_user_id()
+    user_dept = _request_user_dept(request)
     try:
         resource = await asyncio.to_thread(gmail_resource)
         messages = await asyncio.to_thread(list_inbox, limit, resource)
     except Exception as exc:
         print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
         runs = await asyncio.to_thread(list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500)
+        if user_dept:
+            runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
         return {
             "messages": _fallback_inbox_messages(runs, limit),
             "warning": (
@@ -1727,6 +1775,8 @@ async def inbox(limit: int = Query(default=25, ge=1, le=100)) -> dict:
             ),
         }
     runs = await asyncio.to_thread(list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500)
+    if user_dept:
+        runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
     by_email: dict[str, dict] = {}
     for record in runs:
         email_id = record.get("email_id")
@@ -1774,6 +1824,49 @@ async def inbox_unread(msg_id: str) -> dict:
     return await _inbox_action(mark_as_unread, msg_id, "unread")
 
 
+class AssignInput(BaseModel):
+    assignee: str | None
+
+
+@app.post("/inbox/{run_id}/claim")
+async def claim_run_endpoint(request: Request, run_id: str) -> dict:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found")
+    _require_dept_access(request, record)
+    from src.run_registry import assign_run
+    assignee = _request_user_id(request)
+    result = await asyncio.to_thread(
+        assign_run,
+        run_id=run_id,
+        assignee=assignee,
+        agent_instance_id=current_agent_instance_id(),
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"ok": True, "assignee": assignee}
+
+
+@app.post("/inbox/{run_id}/assign")
+async def assign_run_endpoint(request: Request, run_id: str, body: AssignInput) -> dict:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found")
+    _require_dept_access(request, record)
+    from src.run_registry import assign_run
+    result = await asyncio.to_thread(
+        assign_run,
+        run_id=run_id,
+        assignee=body.assignee,
+        agent_instance_id=current_agent_instance_id(),
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"ok": True, "assignee": body.assignee}
+
+
 @app.get("/run/{run_id}", response_model=RunResponse)
 async def get_run(request: Request, run_id: str) -> RunResponse:
     record = get_run_record(
@@ -1781,6 +1874,7 @@ async def get_run(request: Request, run_id: str) -> RunResponse:
     )
     if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+    _require_dept_access(request, record)
     return _run_response_from_record(record)
 
 
@@ -1793,6 +1887,7 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
     record = get_run_record(
         run_id, user_id=None, agent_instance_id=current_agent_instance_id()
     )
+    _require_dept_access(request, record)
     if record is not None:
         detail.update({
             "status": record.get("status"),
@@ -1831,6 +1926,8 @@ async def run(request: Request, email: EmailInput) -> RunResponse:
 @app.post("/run/{run_id}/approve", response_model=RunResponse)
 async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
     _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     try:
@@ -1855,6 +1952,8 @@ async def approve(request: Request, run_id: str, approval: ApprovalInput) -> Run
 @app.post("/run/{run_id}/reject", response_model=RunResponse)
 async def reject(request: Request, run_id: str) -> RunResponse:
     _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     try:
@@ -1879,6 +1978,8 @@ async def reject(request: Request, run_id: str) -> RunResponse:
 @app.post("/run/{run_id}/respond", response_model=RunResponse)
 async def respond(request: Request, run_id: str, body: RespondInput) -> RunResponse:
     _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     try:

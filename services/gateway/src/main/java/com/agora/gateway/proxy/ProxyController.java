@@ -4,6 +4,7 @@ import com.agora.gateway.agent.AgentRegistryService;
 import com.agora.gateway.agent.InstanceGrantService;
 import com.agora.gateway.audit.AuditService;
 import com.agora.gateway.config.GatewayProperties;
+import com.agora.gateway.user.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -59,15 +60,18 @@ public class ProxyController {
     private final AgentRegistryService agentRegistryService;
     private final InstanceGrantService grantService;
     private final String defaultAgentInstance;
+    private final UserRepository userRepository;
 
     public ProxyController(GatewayProperties props, RestClient.Builder builder, AuditService auditService,
-                           AgentRegistryService agentRegistryService, InstanceGrantService grantService) {
+                           AgentRegistryService agentRegistryService, InstanceGrantService grantService,
+                           UserRepository userRepository) {
         this.upstreamBase = props.getUpstream().getEmailAgentUrl();
         this.defaultAgentInstance = props.getDefaultAgentInstance();
         this.restClient = builder.build();
         this.auditService = auditService;
         this.agentRegistryService = agentRegistryService;
         this.grantService = grantService;
+        this.userRepository = userRepository;
     }
 
     @RequestMapping("/api/agent/**")
@@ -140,6 +144,10 @@ public class ProxyController {
         }
         if (username != null) {
             spec = spec.header(USER_HEADER, username);
+            var userOpt = userRepository.findByUsername(username);
+            if (userOpt.isPresent() && userOpt.get().getDepartment() != null) {
+                spec = spec.header("X-Agora-User-Dept", userOpt.get().getDepartment());
+            }
         }
         spec = spec.header(AGENT_INSTANCE_HEADER, agentInstance);
         spec = spec.header(INSTANCE_ROLE_HEADER, effectiveRole);

@@ -85,6 +85,8 @@ def _record(
         "workflow_owner": email_input.get("workflow_owner"),
         "workflow_approver": email_input.get("workflow_approver"),
         "workflow_route_to": email_input.get("workflow_route_to") or [],
+        "workflow_dept": email_input.get("workflow_dept"),
+        "assignee": email_input.get("assignee"),
         "error": email_input.get("error"),
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -110,6 +112,8 @@ def _json_upsert(record: dict, path: str | Path | None = None) -> dict:
                 "workflow_owner",
                 "workflow_approver",
                 "workflow_route_to",
+                "workflow_dept",
+                "assignee",
                 "error",
             }:
                 existing[key] = value
@@ -206,13 +210,13 @@ def _postgres_upsert(record: dict) -> dict:
                     run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
-                    workflow_approver, workflow_route_to, error, updated_at
+                    workflow_approver, workflow_route_to, workflow_dept, assignee, error, updated_at
                 ) VALUES (
                     %(run_id)s, %(user_id)s, %(agent_instance_id)s, %(status)s,
                     %(classification)s, %(pending_action)s, %(subject)s, %(author)s,
                     %(email_id)s, %(gmail_thread_id)s, %(category)s,
                     %(category_display_name)s, %(priority)s, %(template)s, %(workflow_owner)s,
-                    %(workflow_approver)s, %(workflow_route_to)s, %(error)s, %(updated_at)s
+                    %(workflow_approver)s, %(workflow_route_to)s, %(workflow_dept)s, %(assignee)s, %(error)s, %(updated_at)s
                 )
                 ON CONFLICT (run_id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -231,12 +235,14 @@ def _postgres_upsert(record: dict) -> dict:
                     workflow_owner = COALESCE(EXCLUDED.workflow_owner, agent_runs.workflow_owner),
                     workflow_approver = COALESCE(EXCLUDED.workflow_approver, agent_runs.workflow_approver),
                     workflow_route_to = COALESCE(EXCLUDED.workflow_route_to, agent_runs.workflow_route_to),
+                    workflow_dept = COALESCE(EXCLUDED.workflow_dept, agent_runs.workflow_dept),
+                    assignee = COALESCE(EXCLUDED.assignee, agent_runs.assignee),
                     error = EXCLUDED.error,
                     updated_at = EXCLUDED.updated_at
                 RETURNING run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
-                    workflow_approver, workflow_route_to, error, updated_at
+                    workflow_approver, workflow_route_to, workflow_dept, assignee, error, updated_at
                 """,
                 params,
             )
@@ -446,6 +452,62 @@ def claim_run(
         if record is None:
             return None
         record["status"] = new_status
+        record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _write(index_path, data)
+        return record.copy()
+
+
+def assign_run(
+    run_id: str,
+    assignee: str | None,
+    path: str | Path | None = None,
+    agent_instance_id: str | None = None,
+) -> dict | None:
+    instance_id = normalize_agent_instance_id(
+        agent_instance_id or current_agent_instance_id()
+    )
+    if selected_run_registry_backend(path) == "postgres":
+        from psycopg.rows import dict_row
+
+        setup_run_registry()
+        with _connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    UPDATE agent_runs
+                    SET assignee = %(assignee)s, updated_at = NOW()
+                    WHERE run_id = %(run_id)s
+                      AND agent_instance_id = %(agent_instance_id)s
+                    RETURNING run_id, user_id, agent_instance_id, status,
+                        classification, pending_action, subject, author, email_id,
+                        gmail_thread_id, category, category_display_name, priority,
+                        template, workflow_owner, workflow_approver,
+                        workflow_route_to, workflow_dept, assignee, error, updated_at
+                    """,
+                    {
+                        "run_id": run_id,
+                        "agent_instance_id": instance_id,
+                        "assignee": assignee,
+                    },
+                )
+                row = cur.fetchone()
+                return _postgres_row(row) if row else None
+
+    with _json_transition_lock:
+        index_path = _path(path)
+        data = _read(index_path)
+        record = next(
+            (
+                item
+                for item in data.get("runs", [])
+                if item.get("run_id") == run_id
+                and normalize_agent_instance_id(item.get("agent_instance_id")) == instance_id
+            ),
+            None,
+        )
+        if record is None:
+            return None
+        record["assignee"] = assignee
         record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _write(index_path, data)
         return record.copy()
