@@ -12,6 +12,9 @@ def test_alembic_scaffold_and_scripts_exist() -> None:
     assert (SERVICE_ROOT / "alembic.ini").is_file()
     assert (SERVICE_ROOT / "migrations" / "env.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0001_baseline.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0002_roles_directory.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0003_contacts.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0004_segments.py").is_file()
     assert (SERVICE_ROOT / "scripts" / "backup.sh").is_file()
     assert (SERVICE_ROOT / "scripts" / "restore.sh").is_file()
     assert (SERVICE_ROOT / "docs" / "backup-restore.md").is_file()
@@ -32,6 +35,42 @@ def test_baseline_migration_covers_current_app_tables() -> None:
         'llm_costs_user_instance_timestamp_idx',
     ):
         assert marker in text
+
+
+def test_roles_migration_covers_directory_table() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0002_roles_directory.py").read_text(encoding="utf-8")
+    for marker in (
+        '"email_agent_roles"',
+        '"emails"',
+        'email_agent_roles_pkey',
+        'email_agent_roles_instance_dept_idx',
+        "'[]'::jsonb",
+    ):
+        assert marker in text
+
+
+def test_contacts_and_segments_migrations_cover_directory_tables() -> None:
+    contacts_text = (SERVICE_ROOT / "migrations" / "versions" / "0003_contacts.py").read_text(encoding="utf-8")
+    for marker in (
+        '"email_agent_contacts"',
+        '"audience"',
+        'email_agent_contacts_pkey',
+        'email_agent_contacts_instance_audience_idx',
+        "'{}'::jsonb",
+        "'[]'::jsonb",
+    ):
+        assert marker in contacts_text
+
+    segments_text = (SERVICE_ROOT / "migrations" / "versions" / "0004_segments.py").read_text(encoding="utf-8")
+    for marker in (
+        '"email_agent_segments"',
+        '"segment_id"',
+        'email_agent_segments_pkey',
+        'email_agent_segments_instance_idx',
+        "'{}'::jsonb",
+        "'[]'::jsonb",
+    ):
+        assert marker in segments_text
 
 
 def test_postgres_setup_functions_defer_to_alembic(monkeypatch) -> None:

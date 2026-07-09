@@ -37,6 +37,8 @@ class Settings:
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     llm_profile: str = os.getenv("AGENT_LLM_PROFILE", "dev")
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
+    roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")
+    contacts_path: str = os.getenv("AGENT_CONTACTS_PATH", "contacts.yaml")
     gmail_credentials_path: str = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")
     gmail_token_path: str = os.getenv("GMAIL_TOKEN_PATH", "token.json")
     gmail_token_store_path: str = os.getenv("GMAIL_TOKEN_STORE_PATH", "logs/gmail_tokens.json")

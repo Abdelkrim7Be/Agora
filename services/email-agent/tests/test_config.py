@@ -159,4 +159,6 @@ def test_platform_settings_default_to_single_user_dev():
     assert settings.gmail_webhook_secret == ""
     assert settings.poll_max_retries == 3
     assert settings.poll_backoff_base_seconds == 2
+    assert settings.roles_path == "roles.yaml"
+    assert settings.contacts_path == "contacts.yaml"
     assert settings.polling_fallback_enabled is True

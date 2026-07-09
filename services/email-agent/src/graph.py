@@ -30,6 +30,7 @@ from src.categories import auto_draft_tool_call, classify_category, load_categor
 from src.gmail_client import format_attachments
 from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
+from src.roles import resolve_role
 from src.security_client import authorize_action
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
@@ -157,18 +158,6 @@ def reload_config() -> None:
     llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
 
 
-ROLE_ROUTE_TARGETS = {
-    "hr": "abdelkrimbellagnech99@gmail.com",
-    "human resources": "abdelkrimbellagnech99@gmail.com",
-    "rh": "abdelkrimbellagnech99@gmail.com",
-    "operations": "zinebbellagnech@gmail.com",
-    "ops": "zinebbellagnech@gmail.com",
-    "management": "zinebbellagnech@gmail.com",
-    "finance": "zinebbellagnech@gmail.com",
-    "accounting": "zinebbellagnech@gmail.com",
-}
-
-
 def _resolve_route_target(value: str | None) -> str | None:
     if not value:
         return None
@@ -176,8 +165,11 @@ def _resolve_route_target(value: str | None) -> str | None:
     if not cleaned:
         return None
     if "@" in cleaned:
-        return cleaned
-    return ROLE_ROUTE_TARGETS.get(cleaned.lower())
+        return cleaned.lower()
+    resolved = resolve_role(cleaned)
+    # TODO(wave-2): fan out forward_email to every resolved recipient instead of
+    # taking only the primary address.
+    return resolved.primary_email if resolved else None
 
 
 def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | None:
@@ -187,7 +179,11 @@ def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | N
     if isinstance(raw_targets, str):
         raw_targets = [raw_targets]
     candidates = [*raw_targets, category_update.get("workflow_owner")]
-    target = next((_resolve_route_target(item) for item in candidates if _resolve_route_target(item)), None)
+    target = None
+    for item in candidates:
+        target = _resolve_route_target(item)
+        if target:
+            break
     if not target:
         return None
 
