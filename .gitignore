@@ -67,3 +67,6 @@ logs/
 .coverage
 htmlcov/
 .mypy_cache/
+
+# Planning docs (local only)
+services/saas-hardening.md
