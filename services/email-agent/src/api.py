@@ -66,6 +66,7 @@ from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
+from src.health import aggregate_health
 from src.migrate import upgrade_to_head
 from src.sync_status import (
     get_status as get_sync_status,
@@ -738,7 +739,8 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "storage_backend": settings.storage_backend}
+    components = await aggregate_health()
+    return {"status": "ok", "storage_backend": settings.storage_backend, **components}
 
 
 @app.get("/agent-instances/{instance_id}/connect/gmail/start", response_model=GmailConnectStartResponse)
