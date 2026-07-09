@@ -108,11 +108,11 @@ contacts:
     monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
 
     with TestClient(app) as client:
-        response = client.get("/contacts", headers={"X-Agora-Agent-Instance": "ceo-email-agent"})
+        response = client.get("/contacts", headers={"X-Agora-Agent-Instance": "isolated-email-agent"})
 
     assert response.status_code == 200
     assert response.json() == {
-        "agent_instance_id": "ceo-email-agent",
+        "agent_instance_id": "isolated-email-agent",
         "contacts": [
             {
                 "email": "vip@example.com",

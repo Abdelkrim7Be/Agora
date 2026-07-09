@@ -29,13 +29,13 @@ def write_email(to: str, subject: str, content: str) -> str:
     if settings.dry_run:
         return f"Email sent to {to} with subject '{subject}' [dry run]"
     _require_approval("write_email")
-    from langchain_google_community import GmailToolkit
+    from src.gmail_client import send_message
 
-    from src.gmail_client import gmail_resource
-
-    toolkit = GmailToolkit(api_resource=gmail_resource())
-    send_tool = next(t for t in toolkit.get_tools() if t.name == "send_gmail_message")
-    return send_tool.invoke({"message": content, "to": [to], "subject": subject})
+    result = send_message(to=to, subject=subject, body=content)
+    sent_id = result.get("id") if isinstance(result, dict) else None
+    return f"Email sent to {to} with subject '{subject}'" + (
+        f" (message id: {sent_id})" if sent_id else ""
+    )
 
 
 @tool
