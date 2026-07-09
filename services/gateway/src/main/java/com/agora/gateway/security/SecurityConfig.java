@@ -97,6 +97,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/capabilities").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/capabilities").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/policy").hasAnyRole("OWNER", "VIEWER")
+                // Distinct from the top-level /health (gateway's own liveness, permitAll,
+                // used by the Docker healthcheck unauthenticated). This is the proxied
+                // email-agent System Health aggregate for the browser control panel.
+                .requestMatchers(HttpMethod.GET, "/api/agent/health").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/roles").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/roles").hasRole("OWNER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/roles/*").hasRole("OWNER")
