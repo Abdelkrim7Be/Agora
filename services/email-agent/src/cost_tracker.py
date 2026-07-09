@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal
 import uuid
@@ -11,6 +12,7 @@ import yaml
 from langchain_core.callbacks import BaseCallbackHandler
 
 from src.config import SERVICE_ROOT, settings
+from src.llm import active_profile_name, load_llm_profile
 from src.tenant import (
     current_agent_instance_id,
     current_user_id,
@@ -27,6 +29,9 @@ PRICES: dict[str, dict[str, float]] = {
     "llama-3.3-70b-versatile": {"in": 0.54, "out": 0.79},
 }
 
+DEFAULT_UNKNOWN_MODEL_PRICE = {"in": 0.0, "out": 0.0}
+logger = logging.getLogger(__name__)
+
 
 def _path(path: str | Path | None = None) -> Path:
     if path is None:
@@ -39,15 +44,37 @@ def _load_prices() -> dict[str, dict[str, float]]:
     prices = {model: dict(price) for model, price in PRICES.items()}
     path = SERVICE_ROOT / "costs.yaml"
     if not path.is_file():
-        return prices
-    data = yaml.safe_load(path.read_text()) or {}
+        data = {}
+    else:
+        data = yaml.safe_load(path.read_text()) or {}
     for model, row in data.get("models", data).items():
         if isinstance(row, dict):
             prices[str(model)] = {
                 "in": float(row.get("in", row.get("input", 0.0)) or 0.0),
                 "out": float(row.get("out", row.get("output", 0.0)) or 0.0),
             }
+    for alias, price in _profile_price_aliases().items():
+        prices.setdefault(alias, price)
     return prices
+
+
+def _profile_price_aliases() -> dict[str, dict[str, float]]:
+    try:
+        profile = load_llm_profile(profile_name=active_profile_name())
+    except (FileNotFoundError, ValueError, yaml.YAMLError):
+        return {}
+
+    aliases: dict[str, dict[str, float]] = {}
+    for model_name in set(profile.roles.values()):
+        if model_name in PRICES:
+            aliases[model_name] = dict(PRICES[model_name])
+            continue
+        if ":" not in model_name:
+            continue
+        bare_name = model_name.split(":", 1)[1]
+        if bare_name in PRICES:
+            aliases[model_name] = dict(PRICES[bare_name])
+    return aliases
 
 
 def selected_cost_backend(path: str | Path | None = None) -> str:
@@ -72,30 +99,8 @@ def _connect():
 def setup_cost_tracker() -> None:
     if selected_cost_backend() != "postgres":
         return
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS llm_costs (
-                    id BIGSERIAL PRIMARY KEY,
-                    event_id TEXT UNIQUE NOT NULL,
-                    timestamp TIMESTAMPTZ NOT NULL,
-                    user_id TEXT NOT NULL,
-                    agent_instance_id TEXT NOT NULL,
-                    run_id TEXT,
-                    node TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    input_tokens INTEGER NOT NULL,
-                    output_tokens INTEGER NOT NULL,
-                    total_tokens INTEGER NOT NULL,
-                    cost_eur DOUBLE PRECISION NOT NULL
-                )
-                """
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS llm_costs_user_instance_timestamp_idx "
-                "ON llm_costs (user_id, agent_instance_id, timestamp DESC)"
-            )
+    # Postgres schema is owned by Alembic migrations. JSON dev path stays unchanged.
+    return
 
 
 def _json_append(entry: dict, path: str | Path | None = None) -> dict:
@@ -338,7 +343,13 @@ def _model_from_response(response) -> str:
 
 
 def compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    price = _load_prices().get(model) or {}
+    prices = _load_prices()
+    price = prices.get(model)
+    if price is None and ":" in model:
+        price = prices.get(model.split(":", 1)[1])
+    if price is None:
+        logger.warning("No pricing configured for model '%s'; defaulting to zero cost.", model)
+        price = DEFAULT_UNKNOWN_MODEL_PRICE
     return round(
         (input_tokens / 1_000_000) * float(price.get("in") or 0.0)
         + (output_tokens / 1_000_000) * float(price.get("out") or 0.0),

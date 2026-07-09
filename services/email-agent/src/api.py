@@ -34,7 +34,8 @@ from src.memory import namespace, preferences_text, wrap_preferences
 from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
-from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
+from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
+from src.migrate import upgrade_to_head
 from src.sync_status import (
     get_status as get_sync_status,
     public_error_message as public_sync_error_message,
@@ -111,6 +112,7 @@ async def _watch_renewal_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    upgrade_to_head()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
@@ -583,6 +585,30 @@ def _decode_pubsub_data(message: dict) -> dict:
     return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
 
 
+def _http_status_code(exc: Exception) -> int | None:
+    response = getattr(exc, "resp", None)
+    status = getattr(response, "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_stale_history_error(exc: Exception) -> bool:
+    status = _http_status_code(exc)
+    if status in {404, 410}:
+        return True
+    message = str(exc).lower()
+    return "starthistoryid" in message and any(marker in message for marker in (
+        "too old",
+        "not found",
+        "expired",
+        "invalid",
+    ))
+
+
 def _require_webhook_secret(request: Request) -> None:
     secret = settings.gmail_webhook_secret
     if not secret:
@@ -617,12 +643,15 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
         if baseline is None:
             set_last_history_id(pushed_history_id)
             return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
+        if not history_id_is_newer(pushed_history_id, baseline):
+            return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
         try:
             outcomes = await poll_history(request.app.state.graph, baseline)
         except Exception as exc:
             # Stale baseline (history older than ~1 week is purged by Gmail). Reset
             # forward and ack so Pub/Sub stops retrying an unrecoverable window.
-            set_last_history_id(pushed_history_id)
+            if _is_stale_history_error(exc):
+                set_last_history_id(pushed_history_id)
             record_sync_failure(str(exc))
             return {"accepted": True, "history_id": pushed_history_id, "outcomes": [], "synced": False}
         set_last_history_id(pushed_history_id)

@@ -175,73 +175,8 @@ def _connect():
 def setup_run_registry() -> None:
     if selected_run_registry_backend() != "postgres":
         return
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    run_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    agent_instance_id TEXT NOT NULL DEFAULT 'default-email-agent',
-                    status TEXT NOT NULL,
-                    classification TEXT,
-                    pending_action JSONB,
-                    subject TEXT,
-                    author TEXT,
-                    email_id TEXT,
-                    gmail_thread_id TEXT,
-                    category TEXT,
-                    category_display_name TEXT,
-                    priority TEXT NOT NULL DEFAULT 'normal',
-                    template TEXT,
-                    workflow_owner TEXT,
-                    workflow_approver TEXT,
-                    workflow_route_to JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    error TEXT,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs "
-                "ADD COLUMN IF NOT EXISTS agent_instance_id TEXT NOT NULL DEFAULT 'default-email-agent'"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS category TEXT"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS category_display_name TEXT"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal'"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS template TEXT"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workflow_approver TEXT"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workflow_owner TEXT"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workflow_route_to JSONB NOT NULL DEFAULT '[]'::jsonb"
-            )
-            cur.execute(
-                "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS error TEXT"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS agent_runs_user_instance_status_updated_idx "
-                "ON agent_runs (user_id, agent_instance_id, status, updated_at DESC)"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS agent_runs_user_instance_updated_idx "
-                "ON agent_runs (user_id, agent_instance_id, updated_at DESC)"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS agent_runs_instance_status_updated_idx "
-                "ON agent_runs (agent_instance_id, status, updated_at DESC)"
-            )
+    # Postgres schema is owned by Alembic migrations. SQLite/json dev paths stay unchanged.
+    return
 
 
 def _postgres_row(row: dict[str, Any]) -> dict:

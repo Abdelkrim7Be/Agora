@@ -29,6 +29,11 @@ def _is_newer(candidate: str, existing: str | None) -> bool:
         return candidate != existing
 
 
+def history_id_is_newer(candidate: str, existing: str | None) -> bool:
+    """Public helper for webhook/poller idempotency decisions."""
+    return _is_newer(candidate, existing)
+
+
 def _connect():
     try:
         import psycopg
@@ -40,28 +45,8 @@ def _connect():
 def setup_gmail_sync() -> None:
     if selected_run_registry_backend() != "postgres":
         return
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS gmail_sync_state (
-                    user_id TEXT NOT NULL,
-                    agent_instance_id TEXT NOT NULL DEFAULT 'default-email-agent',
-                    history_id TEXT NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (user_id, agent_instance_id)
-                )
-                """
-            )
-            cur.execute(
-                "ALTER TABLE gmail_sync_state "
-                "ADD COLUMN IF NOT EXISTS agent_instance_id TEXT NOT NULL DEFAULT 'default-email-agent'"
-            )
-            cur.execute("ALTER TABLE gmail_sync_state DROP CONSTRAINT IF EXISTS gmail_sync_state_pkey")
-            cur.execute(
-                "ALTER TABLE gmail_sync_state "
-                "ADD PRIMARY KEY (user_id, agent_instance_id)"
-            )
+    # Postgres schema is owned by Alembic migrations. JSON dev path stays unchanged.
+    return
 
 
 def _json_read() -> dict:

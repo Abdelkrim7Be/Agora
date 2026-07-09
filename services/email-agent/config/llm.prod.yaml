@@ -1,0 +1,7 @@
+endpoint: "http://litellm:4000/v1"
+temperature: 0.0
+roles:
+  triage: "openai:agora-triage"
+  draft: "openai:agora-draft"
+  reason: "openai:agora-reason"
+  memory_style: "openai:agora-memory-style"
