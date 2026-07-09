@@ -48,6 +48,11 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.GET, "/users").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/users").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/users/*/disable").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/users/*/enable").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/agent-instances").hasRole("OWNER")
@@ -62,12 +67,14 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasAnyRole("OWNER", "VIEWER")
-                // approve/reject/respond: limit the JWT gate to shipped roles; the instance-level
-                // owner/approver check still happens in ProxyController.
-                // TODO(wave-1b): allow a dedicated APPROVER JWT role if/when it ships.
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasAnyRole("OWNER", "VIEWER")
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER")
-                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasAnyRole("OWNER", "VIEWER")
+                // approve/reject/respond: VIEWER stays in the gate so a user whose global JWT
+                // role is viewer but holds a per-instance approver grant can still reach
+                // ProxyController, which enforces the real (instance-level) authorization.
+                // APPROVER is now a first-class JWT role (wave-1b) for users who are globally
+                // approvers, not just grant-delegated.
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasAnyRole("OWNER", "VIEWER", "APPROVER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER", "APPROVER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasAnyRole("OWNER", "VIEWER", "APPROVER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/sync/status").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync/pause").hasRole("OWNER")

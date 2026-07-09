@@ -43,7 +43,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "gateway.owner.username=owner",
         "gateway.owner.password=ownerpass",
         "gateway.viewer.username=viewer",
-        "gateway.viewer.password=viewerpass"
+        "gateway.viewer.password=viewerpass",
+        "gateway.admin.username=admin",
+        "gateway.admin.password=adminpass"
 })
 class RbacTest {
 
@@ -62,6 +64,15 @@ class RbacTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private com.agora.gateway.user.UserRepository userRepository;
+
+    @Autowired
+    private org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private com.agora.gateway.agent.InstanceGrantService instanceGrantService;
 
     @AfterEach
     void resetWireMock() {
@@ -400,6 +411,105 @@ class RbacTest {
                 .andExpect(jsonPath("$.error").value("forbidden"));
 
         wireMock.verify(0, deleteRequestedFor(urlPathEqualTo("/segments/seg1")));
+    }
+
+    @Test
+    void admin_can_list_users() throws Exception {
+        mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void owner_cannot_list_users_403() throws Exception {
+        mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+    }
+
+    @Test
+    void viewer_cannot_create_user_403() throws Exception {
+        mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"hrapprover\",\"password\":\"pw123456\",\"role\":\"approver\",\"department\":\"HR\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+    }
+
+    @Test
+    void admin_can_create_user_with_role_and_department() throws Exception {
+        mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"hrapprover\",\"password\":\"pw123456\",\"role\":\"approver\",\"department\":\"HR\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.username").value("hrapprover"))
+                .andExpect(jsonPath("$.role").value("approver"))
+                .andExpect(jsonPath("$.department").value("HR"))
+                .andExpect(jsonPath("$.enabled").value(true))
+                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+    }
+
+    @Test
+    void admin_disable_prevents_login() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"tempstaff\",\"password\":\"pw123456\",\"role\":\"viewer\"}"))
+                .andExpect(status().isCreated());
+
+        var user = userRepository.findByUsername("tempstaff").orElseThrow();
+        mockMvc.perform(post("/users/" + user.getId() + "/disable")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"tempstaff\",\"password\":\"pw123456\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void approver_role_passes_approve_route_gate() throws Exception {
+        // A global "approver" JWT role must clear the SecurityConfig JWT gate on
+        // /approve (the slice-05 TODO this slice resolves), then the existing
+        // instance-grant model (unchanged) authorizes the actual send.
+        userRepository.save(new com.agora.gateway.user.AppUser(
+                "hrapprover2", passwordEncoder.encode("pw123456"), "approver", "HR"));
+        instanceGrantService.addGrant("default-email-agent", "hrapprover2", "approver", "admin");
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/run/abc/approve"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_id\":\"abc\",\"status\":\"completed\"}")));
+
+        mockMvc.perform(post("/api/agent/run/abc/approve")
+                        .header("Authorization", "Bearer " + login("hrapprover2", "pw123456"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/run/abc/approve")));
+    }
+
+    @Test
+    void approver_without_grant_still_403_at_instance_level() throws Exception {
+        // Clearing the JWT gate is not enough: without an instance grant (and the
+        // default instance's allowedRoles = "owner" only), ProxyController still denies.
+        userRepository.save(new com.agora.gateway.user.AppUser(
+                "hrapprover3", passwordEncoder.encode("pw123456"), "approver", "HR"));
+
+        mockMvc.perform(post("/api/agent/run/abc/approve")
+                        .header("Authorization", "Bearer " + login("hrapprover3", "pw123456"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/run/abc/approve")));
     }
 
     @Test
