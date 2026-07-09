@@ -131,6 +131,38 @@ async def test_poll_once_leaves_paused_runs_unread(mocked_gmail, fake_llms):
     assert marked == []  # paused run must stay unread
 
 
+async def test_poll_once_notifies_on_pending_approval(mocked_gmail, fake_llms, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(poller, "notify_pending_approval", lambda run_id, email_input, result: calls.append(run_id))
+
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m3b", "Quick question", "can you help?")])
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, "c1"),
+        ],
+    )
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert len(calls) == 1
+    assert calls[0] == outcomes[0][2]  # notified with the run's own run_id
+
+
+async def test_poll_once_does_not_notify_on_completed(mocked_gmail, fake_llms, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(poller, "notify_pending_approval", lambda run_id, email_input, result: calls.append(run_id))
+
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m3c", "FYI newsletter", "deals deals deals")])
+    fake_llms(classification="ignore")
+
+    await poller.poll_once(_graph(), resource=object())
+
+    assert calls == []
+
+
 async def test_poll_once_skips_email_with_active_run(mocked_gmail, fake_llms):
     """A pending email reprocessed on the next cycle must reuse its run, not duplicate it."""
     set_unread, marked = mocked_gmail

@@ -69,6 +69,13 @@ class Settings:
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
     security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "10"))
 
+    # Pending-approval email notifications (off by default). Routes through the same
+    # connected Gmail mailbox as agent sends; recipient resolves via the role directory.
+    notify_enabled: bool = _env_bool("AGENT_NOTIFY_ENABLED", "false")
+    # Optional base URL of the web control panel, used to link back to the approval
+    # instead of including the email body in the notification (Part H guardrail).
+    notify_app_base_url: str = os.getenv("AGENT_NOTIFY_APP_BASE_URL", "")
+
     # Phase 4 platform mode. Empty DATABASE_URL keeps the current SQLite dev backend.
     database_url: str = os.getenv("DATABASE_URL", "")
     redis_url: str = os.getenv("REDIS_URL", "")

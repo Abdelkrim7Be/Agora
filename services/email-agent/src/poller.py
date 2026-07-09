@@ -39,6 +39,7 @@ from src.gmail_client import (
 )
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
+from src.notifications import notify_pending_approval
 from src.gmail_sync import set_last_history_id, setup_gmail_sync
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
 from src.run_registry import (
@@ -320,6 +321,10 @@ async def process_message(
         pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
         agent_instance_id=current_agent_instance_id(),
     )
+    if outcome_status == "pending_approval":
+        # Run is already durably persisted above; a notification failure must not
+        # affect the approval that was just created.
+        notify_pending_approval(run_id, email_input, result)
     if outcome_status in {"completed", "notify"}:
         mark_as_read(msg_id, resource=resource)
     return (msg_id, outcome_status, run_id)
