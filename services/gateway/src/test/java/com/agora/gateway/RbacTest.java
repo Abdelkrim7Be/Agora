@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.deleteRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
@@ -25,6 +26,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -203,6 +205,22 @@ class RbacTest {
 
 
     @Test
+    void viewer_can_read_roles() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/roles"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"roles\":[{\"role_key\":\"hr\",\"emails\":[\"hr@example.com\"]}]}")));
+
+        mockMvc.perform(get("/api/agent/roles")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roles").isArray());
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/roles")));
+    }
+
+    @Test
     void viewer_can_read_contacts() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/contacts"))
                 .willReturn(aResponse()
@@ -235,6 +253,18 @@ class RbacTest {
     }
 
     @Test
+    void viewer_cannot_create_role_403() throws Exception {
+        mockMvc.perform(post("/api/agent/roles")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role_key\":\"finance\",\"display_name\":\"Finance\",\"emails\":[\"finance@example.com\"]}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/roles")));
+    }
+
+    @Test
     void viewer_cannot_update_categories_403() throws Exception {
         mockMvc.perform(put("/api/agent/categories")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
@@ -244,6 +274,132 @@ class RbacTest {
                 .andExpect(jsonPath("$.error").value("forbidden"));
 
         wireMock.verify(0, putRequestedFor(urlEqualTo("/categories")));
+    }
+
+    @Test
+    void owner_can_create_role() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/roles"))
+                .willReturn(aResponse()
+                        .withStatus(201)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"role\":{\"role_key\":\"finance\",\"primary_email\":\"finance@example.com\"}}")));
+
+        mockMvc.perform(post("/api/agent/roles")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role_key\":\"finance\",\"display_name\":\"Finance\",\"emails\":[\"finance@example.com\"]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.role.role_key").value("finance"));
+
+        wireMock.verify(1, postRequestedFor(urlEqualTo("/roles")));
+    }
+
+    @Test
+    void viewer_cannot_create_contact_403() throws Exception {
+        mockMvc.perform(post("/api/agent/contacts")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"a@example.com\",\"audience\":\"client\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/contacts")));
+    }
+
+    @Test
+    void owner_can_create_contact() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/contacts"))
+                .willReturn(aResponse()
+                        .withStatus(201)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"contact\":{\"email\":\"a@example.com\",\"audience\":\"client\"}}")));
+
+        mockMvc.perform(post("/api/agent/contacts")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"a@example.com\",\"audience\":\"client\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.contact.email").value("a@example.com"));
+
+        wireMock.verify(1, postRequestedFor(urlEqualTo("/contacts")));
+    }
+
+    @Test
+    void viewer_cannot_delete_contact_403() throws Exception {
+        mockMvc.perform(delete("/api/agent/contacts/a@example.com")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, deleteRequestedFor(urlPathEqualTo("/contacts/a@example.com")));
+    }
+
+    @Test
+    void viewer_cannot_import_contacts_403() throws Exception {
+        mockMvc.perform(post("/api/agent/contacts/import")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"csv_text\":\"email,audience\\na@example.com,client\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/contacts/import")));
+    }
+
+    @Test
+    void viewer_can_read_segments() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/segments"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"segments\":[]}")));
+
+        mockMvc.perform(get("/api/agent/segments")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.segments").isArray());
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/segments")));
+    }
+
+    @Test
+    void viewer_cannot_create_segment_403() throws Exception {
+        mockMvc.perform(post("/api/agent/segments")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"seg1\",\"name\":\"Segment 1\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/segments")));
+    }
+
+    @Test
+    void owner_can_create_segment() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/segments"))
+                .willReturn(aResponse()
+                        .withStatus(201)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"segment\":{\"id\":\"seg1\",\"name\":\"Segment 1\"}}")));
+
+        mockMvc.perform(post("/api/agent/segments")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"seg1\",\"name\":\"Segment 1\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.segment.id").value("seg1"));
+
+        wireMock.verify(1, postRequestedFor(urlEqualTo("/segments")));
+    }
+
+    @Test
+    void viewer_cannot_delete_segment_403() throws Exception {
+        mockMvc.perform(delete("/api/agent/segments/seg1")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, deleteRequestedFor(urlPathEqualTo("/segments/seg1")));
     }
 
     @Test
