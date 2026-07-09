@@ -27,6 +27,7 @@ from src.capabilities import (
 from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config
 from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
+from src.contacts import get_contact
 from src.gmail_client import format_attachments
 from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
@@ -246,6 +247,11 @@ def category_router(
     policy = category_meta.get("policy")
     matched_contact = category_meta.get("contact")
 
+    author, _, _, _ = parse_email(state["email_input"])
+    agent_instance_id = state["email_input"].get("agent_instance_id")
+    contact_dir = get_contact(author, agent_instance_id=agent_instance_id)
+    contact_lang = contact_dir.fields.get("lang") if contact_dir and contact_dir.fields else None
+
     category_update = {
         "category": cat,
         "category_display_name": category_meta.get("category_display_name"),
@@ -255,6 +261,7 @@ def category_router(
         "workflow_owner": category_meta.get("owner"),
         "workflow_approver": category_meta.get("approver"),
         "workflow_route_to": category_meta.get("route_to") or [],
+        "contact_lang": contact_lang,
     }
 
     if not cat or not policy:
@@ -397,6 +404,18 @@ def llm_call(state: State, store: BaseStore, config=None):
         namespace("writing_style"),
         agent_config.agent.writing_style_default,
     )
+    
+    reply_language = "Veuillez rédiger la réponse en français (fr-FR)."
+    contact_lang = state.get("contact_lang")
+    if contact_lang:
+        lang = contact_lang.lower()
+        if lang == "en":
+            reply_language = "Please write the response in English (en-US)."
+        elif lang == "fr":
+            reply_language = "Veuillez rédiger la réponse en français (fr-FR)."
+        else:
+            reply_language = f"Please write the response in {lang}."
+
     messages = [
         {
             "role": "system",
@@ -405,6 +424,7 @@ def llm_call(state: State, store: BaseStore, config=None):
                 background=agent_config.agent.background,
                 response_preferences=response_prefs,
                 writing_style=writing_style,
+                reply_language=reply_language,
             ),
         }
     ] + state["messages"]
