@@ -8,6 +8,8 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+from src.managed_secrets import get_secret
+
 load_dotenv()
 
 
@@ -32,11 +34,12 @@ def _parse_user_map() -> dict[str, str]:
 
 
 class Settings:
-    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    groq_api_key: str = get_secret("AGENT", "GROQ_API_KEY")
+    openai_api_key: str = get_secret("AGENT", "OPENAI_API_KEY")
+    anthropic_api_key: str = get_secret("AGENT", "ANTHROPIC_API_KEY")
     llm_profile: str = os.getenv("AGENT_LLM_PROFILE", "dev")
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
+    llm_streaming_enabled: bool = _env_bool("AGENT_LLM_STREAMING_ENABLED", "true")
     roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")
     contacts_path: str = os.getenv("AGENT_CONTACTS_PATH", "contacts.yaml")
     gmail_credentials_path: str = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")
@@ -77,13 +80,20 @@ class Settings:
     notify_app_base_url: str = os.getenv("AGENT_NOTIFY_APP_BASE_URL", "")
 
     # Phase 4 platform mode. Empty DATABASE_URL keeps the current SQLite dev backend.
-    database_url: str = os.getenv("DATABASE_URL", "")
-    redis_url: str = os.getenv("REDIS_URL", "")
+    database_url: str = get_secret("AGENT", "DATABASE_URL")
+    redis_url: str = get_secret("AGENT", "REDIS_URL")
     storage_backend: str = os.getenv("AGENT_STORAGE_BACKEND", "postgres" if database_url else "sqlite")
     run_registry_backend: str = os.getenv("AGENT_RUN_REGISTRY_BACKEND", "postgres" if database_url else "json")
     cost_tracking_enabled: bool = _env_bool("AGENT_COST_TRACKING_ENABLED", "true")
     cost_backend: str = os.getenv("AGENT_COST_BACKEND", "postgres" if database_url else "json")
     costs_path: str = os.getenv("AGENT_COSTS_PATH", "logs/llm_costs.jsonl")
+    trace_backend: str = os.getenv("AGENT_TRACE_BACKEND", "postgres" if database_url else "json")
+    traces_path: str = os.getenv("AGENT_TRACES_PATH", "logs/llm_traces.jsonl")
+    alerts_path: str = os.getenv("AGENT_ALERTS_PATH", "alerts.yaml")
+    alerts_state_path: str = os.getenv("AGENT_ALERT_STATE_PATH", "logs/alert_state.yaml")
+    retention_path: str = os.getenv("AGENT_RETENTION_PATH", "retention.yaml")
+    dlq_backend: str = os.getenv("AGENT_DLQ_BACKEND", "redis" if redis_url else ("postgres" if database_url else "json"))
+    dlq_path: str = os.getenv("AGENT_DLQ_PATH", "logs/dlq.json")
     tenant_mode: str = os.getenv("TENANT_MODE", "single")
     default_user_id: str = os.getenv("AGENT_DEFAULT_USER_ID", "default")
     default_agent_instance_id: str = os.getenv("AGENT_DEFAULT_INSTANCE_ID", "default-email-agent")

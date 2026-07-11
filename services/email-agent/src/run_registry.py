@@ -51,6 +51,16 @@ def _write(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _record(
     run_id: str,
     status: str,
@@ -59,12 +69,16 @@ def _record(
     pending_action: list | None,
     user_id: str | None,
     agent_instance_id: str | None,
+    created_at: str | None,
+    decision: str | None,
+    decision_at: str | None,
 ) -> dict:
     email_input = email_input or {}
     resolved_user_id = normalize_user_id(user_id or current_user_id())
     resolved_instance_id = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         "user_id": resolved_user_id,
         "agent_instance_id": resolved_instance_id,
@@ -88,7 +102,10 @@ def _record(
         "workflow_dept": email_input.get("workflow_dept"),
         "assignee": email_input.get("assignee"),
         "error": email_input.get("error"),
-        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": created_at or now,
+        "decision": decision,
+        "decision_at": decision_at,
+        "updated_at": now,
     }
 
 
@@ -117,6 +134,12 @@ def _json_upsert(record: dict, path: str | Path | None = None) -> dict:
                 "error",
             }:
                 existing[key] = value
+        if not existing.get("created_at"):
+            existing["created_at"] = record.get("created_at") or existing.get("updated_at")
+        if record.get("decision") is not None:
+            existing["decision"] = record["decision"]
+        if record.get("decision_at") is not None:
+            existing["decision_at"] = record["decision_at"]
         saved = existing
     else:
         runs.append(record)
@@ -184,10 +207,21 @@ def setup_run_registry() -> None:
 
 
 def _postgres_row(row: dict[str, Any]) -> dict:
+    created = row.get("created_at")
+    decision_at = row.get("decision_at")
     updated = row.get("updated_at")
+    if hasattr(created, "isoformat"):
+        created = created.isoformat(timespec="seconds")
+    if hasattr(decision_at, "isoformat"):
+        decision_at = decision_at.isoformat(timespec="seconds")
     if hasattr(updated, "isoformat"):
         updated = updated.isoformat(timespec="seconds")
-    return {**row, "updated_at": updated}
+    return {
+        **row,
+        "created_at": created or updated,
+        "decision_at": decision_at,
+        "updated_at": updated,
+    }
 
 
 def _postgres_upsert(record: dict) -> dict:
@@ -210,13 +244,15 @@ def _postgres_upsert(record: dict) -> dict:
                     run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
-                    workflow_approver, workflow_route_to, workflow_dept, assignee, error, updated_at
+                    workflow_approver, workflow_route_to, workflow_dept, assignee,
+                    created_at, decision, decision_at, error, updated_at
                 ) VALUES (
                     %(run_id)s, %(user_id)s, %(agent_instance_id)s, %(status)s,
                     %(classification)s, %(pending_action)s, %(subject)s, %(author)s,
                     %(email_id)s, %(gmail_thread_id)s, %(category)s,
                     %(category_display_name)s, %(priority)s, %(template)s, %(workflow_owner)s,
-                    %(workflow_approver)s, %(workflow_route_to)s, %(workflow_dept)s, %(assignee)s, %(error)s, %(updated_at)s
+                    %(workflow_approver)s, %(workflow_route_to)s, %(workflow_dept)s, %(assignee)s,
+                    %(created_at)s, %(decision)s, %(decision_at)s, %(error)s, %(updated_at)s
                 )
                 ON CONFLICT (run_id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -237,12 +273,16 @@ def _postgres_upsert(record: dict) -> dict:
                     workflow_route_to = COALESCE(EXCLUDED.workflow_route_to, agent_runs.workflow_route_to),
                     workflow_dept = COALESCE(EXCLUDED.workflow_dept, agent_runs.workflow_dept),
                     assignee = COALESCE(EXCLUDED.assignee, agent_runs.assignee),
+                    created_at = COALESCE(agent_runs.created_at, EXCLUDED.created_at),
+                    decision = COALESCE(EXCLUDED.decision, agent_runs.decision),
+                    decision_at = COALESCE(EXCLUDED.decision_at, agent_runs.decision_at),
                     error = EXCLUDED.error,
                     updated_at = EXCLUDED.updated_at
                 RETURNING run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
-                    workflow_approver, workflow_route_to, workflow_dept, assignee, error, updated_at
+                    workflow_approver, workflow_route_to, workflow_dept, assignee,
+                    created_at, decision, decision_at, error, updated_at
                 """,
                 params,
             )
@@ -281,7 +321,8 @@ def _postgres_list(
                 SELECT run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
-                    workflow_approver, workflow_route_to, error, updated_at
+                    workflow_approver, workflow_route_to, workflow_dept, assignee,
+                    created_at, decision, decision_at, error, updated_at
                 FROM agent_runs
                 """
                 + where
@@ -315,7 +356,8 @@ def _postgres_get(
                 SELECT run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
-                    workflow_approver, workflow_route_to, error, updated_at
+                    workflow_approver, workflow_route_to, workflow_dept, assignee,
+                    created_at, decision, decision_at, error, updated_at
                 FROM agent_runs
                 WHERE
                 """
@@ -335,6 +377,9 @@ def upsert_run(
     path: str | Path | None = None,
     user_id: str | None = None,
     agent_instance_id: str | None = None,
+    created_at: str | None = None,
+    decision: str | None = None,
+    decision_at: str | None = None,
 ) -> dict:
     record = _record(
         run_id,
@@ -344,6 +389,9 @@ def upsert_run(
         pending_action,
         user_id,
         agent_instance_id,
+        created_at,
+        decision,
+        decision_at,
     )
     if selected_run_registry_backend(path) == "postgres":
         return _postgres_upsert(record)
@@ -424,7 +472,8 @@ def claim_run(
                         classification, pending_action, subject, author, email_id,
                         gmail_thread_id, category, category_display_name, priority,
                         template, workflow_owner, workflow_approver,
-                        workflow_route_to, error, updated_at
+                        workflow_route_to, workflow_dept, assignee,
+                        created_at, decision, decision_at, error, updated_at
                     """,
                     {
                         "run_id": run_id,
@@ -482,7 +531,8 @@ def assign_run(
                         classification, pending_action, subject, author, email_id,
                         gmail_thread_id, category, category_display_name, priority,
                         template, workflow_owner, workflow_approver,
-                        workflow_route_to, workflow_dept, assignee, error, updated_at
+                        workflow_route_to, workflow_dept, assignee,
+                        created_at, decision, decision_at, error, updated_at
                     """,
                     {
                         "run_id": run_id,
@@ -511,6 +561,101 @@ def assign_run(
         record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _write(index_path, data)
         return record.copy()
+
+
+
+
+
+def list_runs_before(
+    cutoff: datetime,
+    path: str | Path | None = None,
+    agent_instance_id: str | None = None,
+) -> list[dict]:
+    cutoff = cutoff.astimezone(timezone.utc)
+    if selected_run_registry_backend(path) == "postgres":
+        from psycopg.rows import dict_row
+
+        setup_run_registry()
+        params: dict[str, Any] = {"cutoff": cutoff}
+        clauses = ["COALESCE(created_at, updated_at) < %(cutoff)s"]
+        if agent_instance_id is not None:
+            clauses.append("agent_instance_id = %(agent_instance_id)s")
+            params["agent_instance_id"] = normalize_agent_instance_id(agent_instance_id)
+        with _connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, user_id, agent_instance_id, status, classification,
+                        pending_action, subject, author, email_id, gmail_thread_id,
+                        category, category_display_name, priority, template, workflow_owner,
+                        workflow_approver, workflow_route_to, workflow_dept, assignee,
+                        created_at, decision, decision_at, error, updated_at
+                    FROM agent_runs
+                    WHERE
+                    """
+                    + " AND ".join(clauses)
+                    + " ORDER BY COALESCE(created_at, updated_at) ASC",
+                    params,
+                )
+                return [_postgres_row(row) for row in cur.fetchall()]
+    records = _json_list(
+        status=None,
+        path=path,
+        user_id=None,
+        agent_instance_id=agent_instance_id,
+        limit=None,
+        offset=0,
+    )
+    selected: list[dict] = []
+    for record in records:
+        stamp = _parse_timestamp(record.get("created_at") or record.get("updated_at"))
+        if stamp is not None and stamp < cutoff:
+            selected.append(record)
+    selected.sort(key=lambda item: item.get("created_at") or item.get("updated_at") or "")
+    return selected
+
+
+
+def delete_runs(
+    run_ids: list[str],
+    path: str | Path | None = None,
+    agent_instance_id: str | None = None,
+) -> int:
+    run_ids = [str(run_id) for run_id in run_ids if run_id]
+    if not run_ids:
+        return 0
+    if selected_run_registry_backend(path) == "postgres":
+        setup_run_registry()
+        clauses = ["run_id = ANY(%(run_ids)s)"]
+        params: dict[str, Any] = {"run_ids": run_ids}
+        if agent_instance_id is not None:
+            clauses.append("agent_instance_id = %(agent_instance_id)s")
+            params["agent_instance_id"] = normalize_agent_instance_id(agent_instance_id)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM agent_runs WHERE " + " AND ".join(clauses),
+                    params,
+                )
+                return cur.rowcount or 0
+    index_path = _path(path)
+    data = _read(index_path)
+    runs = data.get("runs", [])
+    kept = []
+    deleted = 0
+    for record in runs:
+        matches_run = record.get("run_id") in run_ids
+        matches_instance = (
+            agent_instance_id is None
+            or normalize_agent_instance_id(record.get("agent_instance_id")) == normalize_agent_instance_id(agent_instance_id)
+        )
+        if matches_run and matches_instance:
+            deleted += 1
+        else:
+            kept.append(record)
+    data["runs"] = kept
+    _write(index_path, data)
+    return deleted
 
 
 # Statuses where the email is still awaiting a human and is left UNREAD on purpose.

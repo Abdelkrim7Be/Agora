@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 from unittest.mock import MagicMock
 
 from src.automation import AutomationRule, FollowUpConfig, RuleThen, RuleWhen, RulesConfig, SnoozeConfig
+from src.categories import CategoriesConfig, Category, CategoryInstructions
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -767,3 +769,71 @@ def test_ensure_watch_noop_when_webhooks_disabled(monkeypatch):
 
     assert poller.ensure_watch() is None
     assert called["watch"] is False
+
+
+def test_sla_sweep_escalates_only_once(monkeypatch):
+    pending_run = {
+        "run_id": "run-sla",
+        "status": "pending_approval",
+        "category": "payroll",
+        "subject": "Need approval",
+        "author": "alice@example.com",
+        "workflow_approver": "hr",
+        "workflow_owner": "literal-owner@example.com",
+        "created_at": "2026-06-16T08:00:00+00:00",
+    }
+    monkeypatch.setattr(poller, "list_runs", lambda **kwargs: [pending_run])
+    monkeypatch.setattr(
+        poller,
+        "load_categories",
+        lambda agent_instance_id=None: CategoriesConfig(
+            enabled=True,
+            categories=[
+                Category(
+                    name="payroll",
+                    display_name="Payroll",
+                    instructions=CategoryInstructions(sla="1h", escalation="owner"),
+                )
+            ],
+        ),
+    )
+    marks: list[tuple[str, str]] = []
+    notifications: list[str] = []
+    state = {"runs": {}}
+    monkeypatch.setattr(poller, "load_escalation_state", lambda: state)
+    monkeypatch.setattr(poller, "mark_run_escalated", lambda run_id, escalation_target, now=None: marks.append((run_id, escalation_target)))
+    monkeypatch.setattr(
+        poller,
+        "notify_overdue_approval",
+        lambda run_id, run, overdue_by_seconds, due_at: notifications.append(run_id) or "literal-owner@example.com",
+    )
+
+    first = poller.sweep_pending_approval_slas(now=datetime(2026, 6, 16, 10, 30, tzinfo=poller.timezone.utc))
+    assert first == [("run-sla", "literal-owner@example.com")]
+    assert notifications == ["run-sla"]
+    assert marks == [("run-sla", "literal-owner@example.com")]
+
+    state["runs"]["run-sla"] = {"escalated_at": "2026-06-16T10:30:00+00:00", "escalation_target": "literal-owner@example.com"}
+    second = poller.sweep_pending_approval_slas(now=datetime(2026, 6, 16, 11, 30, tzinfo=poller.timezone.utc))
+    assert second == []
+    assert notifications == ["run-sla"]
+
+
+
+async def test_retry_exhausted_records_dlq(monkeypatch):
+    rules = RulesConfig()
+    calls = []
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("429 rate_limit_exceeded")
+
+    monkeypatch.setattr(poller.settings, "poll_max_retries", 1)
+    monkeypatch.setattr(poller, "process_message", boom)
+    monkeypatch.setattr(poller, "record_dead_letter", lambda entry: calls.append(entry))
+    monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: _raw_message(msg_id, "Subject", "Body"))
+    monkeypatch.setattr(poller, "fetch_thread", lambda thread_id, resource=None: [_raw_message("m-dlq", "Subject", "Body")])
+
+    outcome = await poller._process_message_with_retry(object(), "m-dlq", object(), rules)
+
+    assert outcome == ("m-dlq", "failed", "")
+    assert calls[0]["reason"] == "retry_exhausted"

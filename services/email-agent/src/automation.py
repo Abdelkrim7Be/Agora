@@ -1,16 +1,22 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
 import json
 from pathlib import Path
+import re
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
+from typing_extensions import Any
 
 from src.config import SERVICE_ROOT
 
 DEFAULT_RULES_PATH = SERVICE_ROOT / "rules.yaml"
+_SLA_PATTERN = re.compile(
+    r"(?P<value>\d+)\s*(?P<unit>d|day|days|h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b",
+    re.IGNORECASE,
+)
 
 
 class RuleWhen(BaseModel):
@@ -124,6 +130,93 @@ def _email_address(sender: str) -> str:
     return address or sender
 
 
+def _normalize_route_targets(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw_values = value if isinstance(value, list) else [value]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        cleaned = str(raw).strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    return slug or "workflow"
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_sla_duration(value: str | None) -> timedelta | None:
+    """Parse a simple SLA duration from workflow instructions text."""
+    if value is None or not str(value).strip():
+        return None
+    total = timedelta()
+    matched = False
+    for match in _SLA_PATTERN.finditer(str(value)):
+        matched = True
+        amount = int(match.group("value"))
+        unit = match.group("unit").lower()
+        if unit.startswith("d"):
+            total += timedelta(days=amount)
+        elif unit.startswith("h"):
+            total += timedelta(hours=amount)
+        else:
+            total += timedelta(minutes=amount)
+    return total if matched else None
+
+
+def workflow_sla_snapshot(
+    run: dict,
+    categories_config,
+    escalation_state: dict | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """Return SLA metadata for a pending approval run."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+    category_name = run.get("category")
+    category = next((item for item in categories_config.categories if item.name == category_name), None)
+    instructions = category.instructions.model_dump(exclude_none=True) if category and category.instructions else {}
+    created_at = _parse_datetime(run.get("created_at"))
+    sla_label = instructions.get("sla")
+    duration = parse_sla_duration(sla_label)
+    due_at = created_at + duration if created_at and duration else None
+    overdue = bool(due_at and now > due_at)
+    overdue_by_seconds = max(0, int((now - due_at).total_seconds())) if overdue and due_at else 0
+    state_row = (escalation_state or {}).get("runs", {}).get(run.get("run_id"), {})
+    return {
+        "sla_label": sla_label,
+        "due_at": due_at.isoformat(timespec="seconds") if due_at else None,
+        "overdue": overdue,
+        "overdue_by_seconds": overdue_by_seconds,
+        "escalated_at": state_row.get("escalated_at"),
+        "escalation_target": state_row.get("escalation_target"),
+        "workflow_escalation": instructions.get("escalation"),
+    }
+
+
 def _matches_rule(rule: AutomationRule, email_input: dict) -> bool:
     when = rule.when
     sender = email_input.get("author", "")
@@ -228,6 +321,31 @@ def _read_json(path: Path, default: dict) -> dict:
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def load_escalation_state(path: str | Path | None = None) -> dict:
+    return _read_json(_state_path(path, "logs/approval_sla_state.json"), {"runs": {}})
+
+
+def mark_run_escalated(
+    run_id: str,
+    escalation_target: str,
+    path: str | Path | None = None,
+    now: datetime | None = None,
+) -> dict:
+    state_path = _state_path(path, "logs/approval_sla_state.json")
+    state = _read_json(state_path, {"runs": {}})
+    when = now or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    else:
+        when = when.astimezone(timezone.utc)
+    state.setdefault("runs", {})[run_id] = {
+        "escalated_at": when.isoformat(timespec="seconds"),
+        "escalation_target": escalation_target,
+    }
+    _write_json(state_path, state)
+    return state["runs"][run_id]
 
 
 def record_digest_item(
@@ -361,11 +479,13 @@ def suggest_rule_from_correction(
     sender = email_input.get("author", "")
     subject = email_input.get("subject", "")
     domain = _sender_domain(sender)
+    category_name = str(email_input.get("category") or "").strip()
+    category_display_name = str(email_input.get("category_display_name") or category_name or "").strip()
     when = {
         "sender_domain": [domain] if domain else [],
         "subject_contains": _subject_keywords(subject),
     }
-    suggestion = {
+    suggestion: dict[str, Any] = {
         "created_at": now.isoformat(timespec="seconds"),
         "correction_type": correction_type,
         "source": {
@@ -373,15 +493,33 @@ def suggest_rule_from_correction(
             "subject": subject,
             "email_id": email_input.get("email_id"),
             "gmail_thread_id": email_input.get("gmail_thread_id"),
+            "category": category_name or None,
         },
         "details": details or {},
-        "suggested_rule": {
+    }
+    tool_name = str((details or {}).get("tool") or "")
+    edited = (details or {}).get("edited") or {}
+    if tool_name == "forward_email":
+        route_to = _normalize_route_targets(edited.get("to"))
+        workflow_name = category_name or _slugify(category_display_name or domain or sender or subject or "workflow")
+        suggestion["suggested_workflow"] = {
+            "name": workflow_name,
+            "display_name": category_display_name or workflow_name.replace("_", " ").title(),
+            "priority": email_input.get("priority") or "normal",
+            "policy": "notify",
+            "owner": email_input.get("workflow_owner"),
+            "approver": email_input.get("workflow_approver"),
+            "route_to": route_to,
+            "when": when,
+            "instructions": email_input.get("workflow_instructions"),
+        }
+    else:
+        suggestion["suggested_rule"] = {
             "name": f"review {correction_type} for {domain or sender or 'sender'}",
             "enabled": False,
             "when": when,
             "then": {"notify": True},
-        },
-    }
+        }
     path = _state_path(state_path or rules_config.learning.suggestions_path, "logs/rule_suggestions.jsonl")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

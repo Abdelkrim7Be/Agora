@@ -120,7 +120,7 @@ def test_forward_email_live_path_invokes_gmail_helper_after_approval(monkeypatch
         hitl_approved.reset(approval_token)
         current_email_id.reset(email_token)
 
-    assert result == "Forwarded current email to a@example.com (message id: sent-forward)"
+    assert result == "Forwarded current email to a@example.com (message ids: sent-forward)"
     assert calls == [{"message_id": "msg-1", "to": "a@example.com", "note": "FYI"}]
 
 

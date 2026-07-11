@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import time
 import uuid
 
@@ -15,9 +16,12 @@ from src.automation import (
     build_rule_plan,
     due_snooze_labels,
     follow_up_query,
+    load_escalation_state,
     load_rules,
+    mark_run_escalated,
     maybe_emit_daily_digest,
     record_digest_item,
+    workflow_sla_snapshot,
 )
 from src.config import settings
 from src.security_client import sanitize_email
@@ -37,14 +41,22 @@ from src.gmail_client import (
     search_messages,
     watch_mailbox,
 )
+from src.categories import load_categories
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
-from src.notifications import notify_pending_approval
+from src.notifications import notify_overdue_approval, notify_pending_approval
+from src.dlq import record_dead_letter, setup_dlq
+from src.metrics import inc_counter
+from src.health import aggregate_health
+from src.alerts import evaluate_alerts
+from src.retention import run_retention
+from src.trace import setup_trace_store
 from src.gmail_sync import set_last_history_id, setup_gmail_sync
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
 from src.run_registry import (
     ACTIVE_RUN_STATUSES,
     find_run_by_email,
+    list_runs,
     setup_run_registry,
     upsert_run,
 )
@@ -107,11 +119,22 @@ async def _process_message_with_retry(
             if not _is_transient_error(exc):
                 print(f"poller: {msg_id} failed without retry: {exc}")
                 record_failure(str(exc))
+                record_dead_letter({"message_id": msg_id, "reason": "terminal_failure", "error": str(exc), "payload": {"email_id": msg_id}})
+                inc_counter("agora_poller_dlq_total", reason="terminal_failure")
                 return (msg_id, "failed", "")
             attempt += 1
+            inc_counter("agora_poller_retry_total", reason="transient")
             if attempt > max_retries:
                 print(f"poller: {msg_id} exhausted retries: {exc}")
                 record_failure(str(exc))
+                try:
+                    message = get_message(msg_id, resource=resource)
+                    thread = fetch_thread(message["threadId"], resource=resource)
+                    payload = gmail_to_email_input(message, thread_messages=thread)
+                except Exception:
+                    payload = {"email_id": msg_id}
+                record_dead_letter({"message_id": msg_id, "reason": "retry_exhausted", "error": str(exc), "payload": payload})
+                inc_counter("agora_poller_dlq_total", reason="retry_exhausted")
                 return (msg_id, "failed", "")
             delay = _backoff_seconds(attempt)
             print(f"poller: {msg_id} transient failure (attempt {attempt}/{max_retries}): {exc}")
@@ -129,6 +152,39 @@ def _run_email_input(email_input: dict, result: dict) -> dict:
         "workflow_approver": result.get("workflow_approver"),
         "workflow_route_to": result.get("workflow_route_to") or [],
     }
+
+
+def sweep_pending_approval_slas(now: datetime | None = None) -> list[tuple[str, str]]:
+    """Escalate overdue approvals once per run."""
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    categories_cfg = load_categories(agent_instance_id=current_agent_instance_id())
+    escalation_state = load_escalation_state()
+    escalated: list[tuple[str, str]] = []
+    now_iso = now.isoformat(timespec="seconds")
+    for run in list_runs(
+        status="pending_approval",
+        user_id=None,
+        agent_instance_id=current_agent_instance_id(),
+        limit=5000,
+    ):
+        snapshot = workflow_sla_snapshot(run, categories_cfg, escalation_state=escalation_state, now=now)
+        if not snapshot.get("overdue") or snapshot.get("escalated_at"):
+            continue
+        recipient = notify_overdue_approval(
+            run["run_id"],
+            run,
+            int(snapshot.get("overdue_by_seconds") or 0),
+            snapshot.get("due_at"),
+        )
+        if not recipient:
+            continue
+        mark_run_escalated(run["run_id"], recipient, now=now)
+        escalation_state.setdefault("runs", {})[run["run_id"]] = {
+            "escalated_at": now_iso,
+            "escalation_target": recipient,
+        }
+        escalated.append((run["run_id"], recipient))
+    return escalated
 
 
 def ensure_watch(resource=None) -> dict | None:
@@ -376,6 +432,9 @@ async def poll_once(
         outcomes.append(await _process_message_with_retry(graph, ref["id"], resource, rules_config))
 
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    for _msg_id, status, _run_id in outcomes:
+        inc_counter("agora_poller_processed_total", status=status)
+    await asyncio.to_thread(sweep_pending_approval_slas)
     maybe_emit_daily_digest(rules_config)
     return outcomes
 
@@ -420,28 +479,74 @@ async def poll_active_instances_once(
     for raw_instance_id in instances:
         instance_id = normalize_agent_instance_id(raw_instance_id)
         with agent_instance_context(instance_id):
-            if get_status().get("paused"):
-                print(f"poller: {instance_id} is paused")
-                results[instance_id] = []
-                continue
-            if not has_stored_token(instance_id):
-                print(f"poller: {instance_id} has no Gmail token; skipping")
-                results[instance_id] = []
-                continue
             try:
-                reload_config()
-                resource = gmail_resource()
-                outcomes = await poll_once(graph, resource=resource)
-            except Exception as exc:
-                print(f"poller: {instance_id} poll failed: {exc}")
-                record_failure(str(exc))
-                results[instance_id] = []
-                continue
+                if get_status().get("paused"):
+                    print(f"poller: {instance_id} is paused")
+                    results[instance_id] = []
+                    continue
+                if not has_stored_token(instance_id):
+                    print(f"poller: {instance_id} has no Gmail token; skipping")
+                    results[instance_id] = []
+                    continue
+                try:
+                    reload_config()
+                    resource = gmail_resource()
+                    outcomes = await poll_once(graph, resource=resource)
+                except Exception as exc:
+                    print(f"poller: {instance_id} poll failed: {exc}")
+                    record_failure(str(exc))
+                    results[instance_id] = []
+                    continue
 
-            results[instance_id] = outcomes
-            if outcomes:
-                print(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
-            record_success("polling")
+                results[instance_id] = outcomes
+                if outcomes:
+                    print(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
+                record_success("polling")
+            finally:
+                await _run_instance_maintenance(instance_id)
+    return results
+
+
+
+
+async def _run_instance_maintenance(instance_id: str) -> None:
+    try:
+        retention_result = await asyncio.to_thread(run_retention)
+        deleted_runs = int((retention_result.get("deleted") or {}).get("runs") or 0)
+        if deleted_runs:
+            print(f"poller: {instance_id} purged {deleted_runs} old run(s)")
+    except Exception as exc:
+        print(f"poller: {instance_id} retention sweep failed: {exc}")
+    try:
+        health_snapshot = await aggregate_health()
+        events = await asyncio.to_thread(evaluate_alerts, health_snapshot)
+        if events:
+            print(f"poller: {instance_id} emitted {len(events)} alert event(s): {events}")
+    except Exception as exc:
+        print(f"poller: {instance_id} alert evaluation failed: {exc}")
+
+
+async def sweep_active_instances_once(
+    instance_ids: list[str] | None = None,
+) -> dict[str, list[tuple[str, str]]]:
+    instances = instance_ids or active_email_agent_instance_ids()
+    results: dict[str, list[tuple[str, str]]] = {}
+    for raw_instance_id in instances:
+        instance_id = normalize_agent_instance_id(raw_instance_id)
+        with agent_instance_context(instance_id):
+            try:
+                if get_status().get("paused") or not has_stored_token(instance_id):
+                    results[instance_id] = []
+                    continue
+                try:
+                    reload_config()
+                    results[instance_id] = await asyncio.to_thread(sweep_pending_approval_slas)
+                except Exception as exc:
+                    print(f"poller: {instance_id} SLA sweep failed: {exc}")
+                    record_failure(str(exc))
+                    results[instance_id] = []
+            finally:
+                await _run_instance_maintenance(instance_id)
     return results
 
 
@@ -453,6 +558,8 @@ async def run_forever() -> None:
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
+    setup_trace_store()
+    setup_dlq()
     last_watch = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
@@ -479,6 +586,11 @@ async def run_forever() -> None:
                     record_failure(str(exc))
             if settings.polling_fallback_enabled:
                 await poll_active_instances_once(graph)
+            else:
+                escalations = await sweep_active_instances_once()
+                for instance_id, items in escalations.items():
+                    if items:
+                        print(f"poller: {instance_id} escalated {len(items)} overdue approval(s): {items}")
             await asyncio.sleep(interval)
 
 

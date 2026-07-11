@@ -140,6 +140,8 @@ def test_config_values_flow_into_prompts(tmp_path):
         background=cfg.agent.background,
         response_preferences=cfg.agent.response_preferences,
         writing_style=cfg.agent.writing_style_default,
+        reply_language="",
+        workflow_instructions_section="",
     )
     assert "UNIQUE_BACKGROUND_MARKER" in agent
     assert "UNIQUE_PREFS_MARKER" in agent
@@ -161,4 +163,11 @@ def test_platform_settings_default_to_single_user_dev():
     assert settings.poll_backoff_base_seconds == 2
     assert settings.roles_path == "roles.yaml"
     assert settings.contacts_path == "contacts.yaml"
+    assert settings.llm_streaming_enabled is True
     assert settings.polling_fallback_enabled is True
+
+
+def test_dlq_settings_default_to_local_backend():
+    from src.config import settings
+    assert settings.dlq_backend in {"json", "postgres", "redis"}
+    assert settings.dlq_path == "logs/dlq.json"

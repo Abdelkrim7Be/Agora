@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
+import time
 import uuid
+from datetime import datetime, timezone
+from functools import wraps
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -25,7 +29,7 @@ from src.capabilities import (
     tools_by_name,
 )
 from src.config import load_config, settings
-from src.cost_tracker import llm_invoke_config
+from src.cost_tracker import llm_invoke_config, totals_for_run_node
 from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
 from src.contacts import get_contact
 from src.gmail_client import format_attachments
@@ -36,11 +40,13 @@ from src.security_client import authorize_action
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
+    format_workflow_instructions,
     triage_system_prompt,
     triage_user_prompt,
 )
 from src.state import RouterSchema, State, StateInput
 from src.utils import format_draft_markdown, format_email_markdown, parse_email
+from src.trace import record_trace
 
 load_dotenv()
 
@@ -159,18 +165,16 @@ def reload_config() -> None:
     llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
 
 
-def _resolve_route_target(value: str | None) -> str | None:
+def _resolve_route_targets(value: str | None) -> list[str]:
     if not value:
-        return None
+        return []
     cleaned = str(value).strip()
     if not cleaned:
-        return None
+        return []
     if "@" in cleaned:
-        return cleaned.lower()
+        return [cleaned.lower()]
     resolved = resolve_role(cleaned)
-    # TODO(wave-2): fan out forward_email to every resolved recipient instead of
-    # taking only the primary address.
-    return resolved.primary_email if resolved else None
+    return resolved.emails if resolved and resolved.emails else []
 
 
 def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | None:
@@ -179,13 +183,17 @@ def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | N
     raw_targets = category_update.get("workflow_route_to") or []
     if isinstance(raw_targets, str):
         raw_targets = [raw_targets]
-    candidates = [*raw_targets, category_update.get("workflow_owner")]
-    target = None
-    for item in candidates:
-        target = _resolve_route_target(item)
-        if target:
-            break
-    if not target:
+    
+    targets = []
+    for item in raw_targets:
+        targets.extend(_resolve_route_targets(item))
+    
+    if not targets and category_update.get("workflow_owner"):
+        targets.extend(_resolve_route_targets(category_update.get("workflow_owner")))
+        
+    # Deduplicate while preserving order
+    targets = list(dict.fromkeys(targets))
+    if not targets:
         return None
 
     author, _to, subject, _thread = parse_email(state["email_input"])
@@ -200,14 +208,14 @@ def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | N
     )
     return {
         "name": "forward_email",
-        "args": {"to": target, "note": note},
+        "args": {"to": targets, "note": note},
         "id": f"workflow_forward_{uuid.uuid4().hex}",
         "type": "tool_call",
     }
 
 
 def automation_router(
-    state: State, store: BaseStore
+    state: State, store: BaseStore, config=None
 ) -> Command[Literal["environment", "category_router", "__end__"]]:
     """Execute deterministic poller-provided automation before LLM triage."""
     automation = state["email_input"].get("automation") or {}
@@ -231,7 +239,7 @@ def automation_router(
 
 
 def category_router(
-    state: State,
+    state: State, config=None
 ) -> Command[Literal["environment", "triage_router", "llm_call", "__end__"]]:
     """Deterministic category routing before the triage LLM.
 
@@ -261,6 +269,7 @@ def category_router(
         "workflow_owner": category_meta.get("owner"),
         "workflow_approver": category_meta.get("approver"),
         "workflow_route_to": category_meta.get("route_to") or [],
+        "workflow_instructions": category_meta.get("instructions"),
         "contact_lang": contact_lang,
     }
 
@@ -416,6 +425,8 @@ def llm_call(state: State, store: BaseStore, config=None):
         else:
             reply_language = f"Please write the response in {lang}."
 
+    workflow_instructions_section = format_workflow_instructions(state.get("workflow_instructions"))
+
     messages = [
         {
             "role": "system",
@@ -425,6 +436,7 @@ def llm_call(state: State, store: BaseStore, config=None):
                 response_preferences=response_prefs,
                 writing_style=writing_style,
                 reply_language=reply_language,
+                workflow_instructions_section=workflow_instructions_section,
             ),
         }
     ] + state["messages"]
@@ -493,6 +505,82 @@ def _parse_decision(raw) -> tuple[str, object]:
 def _run_id_from_config(config) -> str:
     configurable = (config or {}).get("configurable") or {}
     return str(configurable.get("thread_id", ""))
+
+
+
+
+
+def _trace_delta(before: dict, after: dict) -> dict:
+    return {
+        "input_tokens": max(0, int(after.get("input_tokens") or 0) - int(before.get("input_tokens") or 0)),
+        "output_tokens": max(0, int(after.get("output_tokens") or 0) - int(before.get("output_tokens") or 0)),
+        "total_tokens": max(0, int(after.get("total_tokens") or 0) - int(before.get("total_tokens") or 0)),
+        "cost_eur": round(float(after.get("cost_eur") or 0.0) - float(before.get("cost_eur") or 0.0), 8),
+    }
+
+
+def _record_node_trace(
+    run_id: str,
+    node_name: str,
+    status: str,
+    started_at: str,
+    started_perf: float,
+    before: dict,
+    error: str = "",
+) -> None:
+    if not run_id:
+        return
+    finished_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    latency_ms = max(0, int((time.perf_counter() - started_perf) * 1000))
+    after = before
+    try:
+        after = totals_for_run_node(run_id, node_name)
+    except Exception:
+        pass
+    delta = _trace_delta(before, after)
+    try:
+        record_trace({
+            "run_id": run_id,
+            "node": node_name,
+            "status": status,
+            "latency_ms": latency_ms,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            **delta,
+            "error": error,
+        })
+    except Exception:
+        pass
+
+
+def _traced_node(node_name: str, fn):
+    signature = inspect.signature(fn)
+    config_index = list(signature.parameters).index("config") if "config" in signature.parameters else None
+
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        config = kwargs.get("config")
+        if config is None and config_index is not None and len(args) > config_index:
+            config = args[config_index]
+        run_id = _run_id_from_config(config)
+        if not run_id:
+            return fn(*args, **kwargs)
+        before = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_eur": 0.0}
+        try:
+            before = totals_for_run_node(run_id, node_name)
+        except Exception:
+            pass
+        started_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        started_perf = time.perf_counter()
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            _record_node_trace(run_id, node_name, "error", started_at, started_perf, before, error=str(exc))
+            raise
+        _record_node_trace(run_id, node_name, "ok", started_at, started_perf, before)
+        return result
+
+    return wrapped
 
 
 def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
@@ -582,8 +670,17 @@ def tool_node(state: State, store: BaseStore, config=None):
     def _suggest_rule(correction_type: str, details: dict) -> None:
         if not _rules_cache:
             _rules_cache.append(load_automation_rules())
+        learned_email_input = {
+            **state["email_input"],
+            "category": state.get("category"),
+            "category_display_name": state.get("category_display_name"),
+            "priority": state.get("priority"),
+            "workflow_owner": state.get("workflow_owner"),
+            "workflow_approver": state.get("workflow_approver"),
+            "workflow_instructions": state.get("workflow_instructions"),
+        }
         suggest_rule_from_correction(
-            _rules_cache[0], state["email_input"], correction_type, details
+            _rules_cache[0], learned_email_input, correction_type, details
         )
 
     for tool_call in state["messages"][-1].tool_calls:
@@ -766,7 +863,7 @@ def tool_node(state: State, store: BaseStore, config=None):
     return update
 
 
-def force_redraft_after_feedback(state: State) -> dict:
+def force_redraft_after_feedback(state: State, config=None) -> dict:
     """Keep feedback runs pending until the model produces a revised draft."""
     last_message = state["messages"][-1]
     messages = []
@@ -935,12 +1032,12 @@ def triage_router(
 
 overall_workflow = (
     StateGraph(State, input_schema=StateInput)
-    .add_node("automation_router", automation_router)
-    .add_node("category_router", category_router)
-    .add_node("triage_router", triage_router)
-    .add_node("llm_call", llm_call)
-    .add_node("environment", tool_node)
-    .add_node("force_redraft", force_redraft_after_feedback)
+    .add_node("automation_router", _traced_node("automation_router", automation_router))
+    .add_node("category_router", _traced_node("category_router", category_router))
+    .add_node("triage_router", _traced_node("triage_router", triage_router))
+    .add_node("llm_call", _traced_node("llm_call", llm_call))
+    .add_node("environment", _traced_node("environment", tool_node))
+    .add_node("force_redraft", _traced_node("force_redraft", force_redraft_after_feedback))
     .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",

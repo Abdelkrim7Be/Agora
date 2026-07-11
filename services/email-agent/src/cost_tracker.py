@@ -309,6 +309,128 @@ def summarize(
     }
 
 
+
+
+
+def totals_for_run_node(
+    run_id: str,
+    node: str,
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+    path: str | Path | None = None,
+) -> dict:
+    zero = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_eur": 0.0}
+    if not run_id:
+        return zero
+    if selected_cost_backend(path) == "postgres":
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                clauses = ["run_id = %(run_id)s", "node = %(node)s"]
+                params: dict[str, Any] = {"run_id": run_id, "node": node}
+                if user_id is not None:
+                    clauses.append("user_id = %(user_id)s")
+                    params["user_id"] = normalize_user_id(user_id)
+                if agent_instance_id is not None:
+                    clauses.append("agent_instance_id = %(agent_instance_id)s")
+                    params["agent_instance_id"] = normalize_agent_instance_id(agent_instance_id)
+                cur.execute(
+                    "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_eur), 0) FROM llm_costs WHERE "
+                    + " AND ".join(clauses),
+                    params,
+                )
+                row = cur.fetchone() or (0, 0, 0, 0.0)
+                return {
+                    "input_tokens": int(row[0] or 0),
+                    "output_tokens": int(row[1] or 0),
+                    "total_tokens": int(row[2] or 0),
+                    "cost_eur": float(row[3] or 0.0),
+                }
+    totals = dict(zero)
+    for entry in _json_entries(path):
+        if entry.get("run_id") != run_id or entry.get("node") != node:
+            continue
+        if user_id is not None and normalize_user_id(entry.get("user_id")) != normalize_user_id(user_id):
+            continue
+        if agent_instance_id is not None and normalize_agent_instance_id(entry.get("agent_instance_id")) != normalize_agent_instance_id(agent_instance_id):
+            continue
+        totals["input_tokens"] += int(entry.get("input_tokens") or 0)
+        totals["output_tokens"] += int(entry.get("output_tokens") or 0)
+        totals["total_tokens"] += int(entry.get("total_tokens") or 0)
+        totals["cost_eur"] += float(entry.get("cost_eur") or 0.0)
+    totals["cost_eur"] = round(totals["cost_eur"], 8)
+    return totals
+
+
+def count_costs_for_runs(
+    run_ids: list[str],
+    agent_instance_id: str | None = None,
+    path: str | Path | None = None,
+) -> int:
+    run_ids = [str(run_id) for run_id in run_ids if run_id]
+    if not run_ids:
+        return 0
+    if selected_cost_backend(path) == "postgres":
+        clauses = ["run_id = ANY(%(run_ids)s)"]
+        params: dict[str, Any] = {"run_ids": run_ids}
+        if agent_instance_id is not None:
+            clauses.append("agent_instance_id = %(agent_instance_id)s")
+            params["agent_instance_id"] = normalize_agent_instance_id(agent_instance_id)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM llm_costs WHERE " + " AND ".join(clauses),
+                    params,
+                )
+                row = cur.fetchone()
+                return int(row[0] if row else 0)
+    count = 0
+    for entry in _json_entries(path):
+        if entry.get("run_id") not in run_ids:
+            continue
+        if agent_instance_id is not None and normalize_agent_instance_id(entry.get("agent_instance_id")) != normalize_agent_instance_id(agent_instance_id):
+            continue
+        count += 1
+    return count
+
+
+def delete_costs_for_runs(
+    run_ids: list[str],
+    agent_instance_id: str | None = None,
+    path: str | Path | None = None,
+) -> int:
+    run_ids = [str(run_id) for run_id in run_ids if run_id]
+    if not run_ids:
+        return 0
+    if selected_cost_backend(path) == "postgres":
+        clauses = ["run_id = ANY(%(run_ids)s)"]
+        params: dict[str, Any] = {"run_ids": run_ids}
+        if agent_instance_id is not None:
+            clauses.append("agent_instance_id = %(agent_instance_id)s")
+            params["agent_instance_id"] = normalize_agent_instance_id(agent_instance_id)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM llm_costs WHERE " + " AND ".join(clauses),
+                    params,
+                )
+                return cur.rowcount or 0
+    target = _path(path)
+    if not target.is_file():
+        return 0
+    kept: list[dict] = []
+    deleted = 0
+    for entry in _json_entries(path):
+        matches_run = entry.get("run_id") in run_ids
+        matches_instance = (
+            agent_instance_id is None
+            or normalize_agent_instance_id(entry.get("agent_instance_id")) == normalize_agent_instance_id(agent_instance_id)
+        )
+        if matches_run and matches_instance:
+            deleted += 1
+        else:
+            kept.append(entry)
+    target.write_text("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in kept), encoding="utf-8")
+    return deleted
 def _message_from_response(response) -> Any:
     generations = getattr(response, "generations", None) or []
     if generations and generations[0]:

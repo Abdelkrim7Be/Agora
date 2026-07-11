@@ -109,3 +109,29 @@ def test_forward_action_label_names_the_workflow_owner(sent):
     notifications.notify_pending_approval("run-8", {"subject": "Facture", "author": "a@b.com"}, result)
 
     assert "Transfert vers Finance" in sent[0]["subject"]
+
+
+def test_overdue_notification_uses_owner_fallback(sent):
+    recipient = notifications.notify_overdue_approval(
+        "run-9",
+        {
+            "subject": "Demande urgente",
+            "author": "alice@example.com",
+            "workflow_approver": None,
+            "workflow_owner": "literal-owner@example.com",
+        },
+        overdue_by_seconds=5400,
+        due_at="2026-06-16T10:00:00+00:00",
+    )
+
+    assert recipient == "literal-owner@example.com"
+    assert sent[0]["to"] == "literal-owner@example.com"
+    assert "Escalade SLA" in sent[0]["subject"]
+    assert "Retard cumulé" in sent[0]["body"]
+
+
+
+def test_notify_admin_alert_routes_through_directory_email(sent):
+    delivered = notifications.notify_admin_alert("hr", "Sujet", "Corps")
+    assert delivered is True
+    assert sent == [{"to": "abdelkrimbellagnech99@gmail.com", "subject": "Sujet", "body": "Corps"}]

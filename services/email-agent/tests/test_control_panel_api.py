@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from src import api
 from src import automation
 from src.api import app, _require_run, _run_detail
+from src.categories import CategoriesConfig, Category, CategoryInstructions
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
 from src.tenant import current_agent_instance_id, current_user_id
 
@@ -48,6 +49,58 @@ def test_rule_and_section_toggle(monkeypatch, tmp_path):
         assert client.post("/rules/section-toggle", json={"section": "bogus", "enabled": True}).status_code == 400
 
 
+def test_rule_crud_and_section_config(monkeypatch, tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text("enabled: true\nrules: []\n")
+    monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+
+    with TestClient(app) as client:
+        # Add a rule via structured form (no YAML).
+        r = client.post("/rules/rule", json={
+            "name": "archive promos",
+            "enabled": True,
+            "when": {"labels": ["CATEGORY_PROMOTIONS"]},
+            "then": {"archive": True, "mark_read": True},
+        })
+        assert r.status_code == 200
+        rule = r.json()["parsed"]["rules"][0]
+        assert rule["name"] == "archive promos"
+        assert rule["then"]["archive"] is True
+
+        # Update in place (same name) toggles a field.
+        r = client.post("/rules/rule", json={
+            "name": "archive promos", "enabled": False,
+            "when": {"labels": ["CATEGORY_PROMOTIONS"]}, "then": {"archive": True},
+        })
+        assert r.json()["parsed"]["rules"][0]["enabled"] is False
+        assert len(r.json()["parsed"]["rules"]) == 1
+
+        # Rename via original_name.
+        r = client.post("/rules/rule", json={
+            "name": "archive marketing", "original_name": "archive promos",
+            "enabled": True, "when": {}, "then": {"notify": True},
+        })
+        names = [x["name"] for x in r.json()["parsed"]["rules"]]
+        assert names == ["archive marketing"]
+
+        # Structured subsystem config.
+        r = client.put("/rules/section-config", json={
+            "section": "digest", "config": {"hour": 9, "statuses": ["notify"]},
+        })
+        assert r.json()["parsed"]["digest"]["hour"] == 9
+        assert r.json()["parsed"]["digest"]["statuses"] == ["notify"]
+        # enabled flag preserved (not supplied in config).
+        assert "enabled" in r.json()["parsed"]["digest"]
+
+        assert client.put("/rules/section-config", json={"section": "bogus", "config": {}}).status_code == 400
+
+        # Delete.
+        assert client.post("/rules/rule-delete", json={"name": "archive marketing"}).status_code == 200
+        assert client.get("/rules").json()["parsed"]["rules"] == []
+        assert client.post("/rules/rule-delete", json={"name": "ghost"}).status_code == 404
+
+
 def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
     rules_path = tmp_path / "rules.yaml"
     rules_path.write_text(
@@ -83,6 +136,7 @@ def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
 
         promoted = client.post("/rules/suggestions/0/promote")
         assert promoted.status_code == 200
+        assert promoted.json()["kind"] == "rule"
         names = [r["name"] for r in promoted.json()["parsed"]["rules"]]
         assert "review ignored_draft for example.com" in names
 
@@ -90,6 +144,72 @@ def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
         assert client.get("/rules/suggestions").json()["suggestions"] == []
 
 
+def test_workflow_suggestion_promotes_and_dismisses(monkeypatch, tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    categories_path = tmp_path / "categories.yaml"
+    rules_path.write_text(
+        "enabled: true\n"
+        "rules: []\n"
+        "learning:\n"
+        "  enabled: true\n"
+        "  suggestions_path: logs/rule_suggestions.jsonl\n"
+    )
+    categories_path.write_text(
+        "enabled: true\n"
+        "categories:\n"
+        "  - name: payroll\n"
+        "    display_name: Payroll\n"
+        "    priority: normal\n"
+        "    policy: notify\n"
+        "    route_to:\n"
+        "      - old@example.com\n"
+        "templates: []\n"
+        "contacts: []\n"
+    )
+    suggestions_path = tmp_path / "logs" / "rule_suggestions.jsonl"
+    suggestions_path.parent.mkdir(parents=True, exist_ok=True)
+    suggestions_path.write_text(
+        json.dumps({
+            "correction_type": "edited_draft",
+            "suggested_workflow": {
+                "name": "payroll",
+                "display_name": "Payroll",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "HR",
+                "approver": "hr",
+                "route_to": ["hr@example.com"],
+                "when": {"sender_domain": ["example.com"]},
+                "instructions": {"sla": "12h"},
+            },
+        }, sort_keys=True) + "\n" + json.dumps({
+            "correction_type": "ignored_draft",
+            "suggested_rule": {
+                "name": "review ignored_draft for sample.com",
+                "enabled": False,
+                "when": {"sender_domain": ["sample.com"]},
+                "then": {"notify": True},
+            },
+        }, sort_keys=True) + "\n"
+    )
+    monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    monkeypatch.setattr(api, "SERVICE_ROOT", tmp_path)
+
+    with TestClient(app) as client:
+        promoted = client.post("/rules/suggestions/0/promote")
+        assert promoted.status_code == 200
+        assert promoted.json()["kind"] == "workflow"
+        categories = client.get("/categories").json()["parsed"]["categories"]
+        payroll = next(category for category in categories if category["name"] == "payroll")
+        assert payroll["route_to"] == ["hr@example.com"]
+        assert payroll["instructions"]["sla"] == "12h"
+        assert payroll["when"]["sender_domain"] == ["example.com"]
+
+        dismissed = client.delete("/rules/suggestions/0")
+        assert dismissed.status_code == 200
+        assert client.get("/rules/suggestions").json()["suggestions"] == []
 
 
 def test_roles_crud_round_trip(monkeypatch, tmp_path):
@@ -585,9 +705,38 @@ def test_runs_endpoint_returns_registry(monkeypatch):
         captured["agent_instance_id"] = agent_instance_id
         captured["limit"] = limit
         captured["offset"] = offset
-        return [{"run_id": "run-1", "status": status, "user_id": user_id}]
+        return [{
+            "run_id": "run-1",
+            "status": status,
+            "user_id": user_id,
+            "category": "support",
+            "created_at": "2026-06-16T08:00:00+00:00",
+            "pending_action": [{"action_request": {"action": "write_email", "args": {}}}],
+        }]
 
     monkeypatch.setattr("src.api.list_runs", fake_list_runs)
+    monkeypatch.setattr(
+        api,
+        "load_categories",
+        lambda agent_instance_id=None: CategoriesConfig(
+            enabled=True,
+            categories=[Category(name="support", display_name="Support", instructions=CategoryInstructions(sla="12h"))],
+        ),
+    )
+    monkeypatch.setattr(api, "load_escalation_state", lambda: {"runs": {}})
+    monkeypatch.setattr(
+        api,
+        "workflow_sla_snapshot",
+        lambda record, categories_cfg, escalation_state=None, now=None: {
+            "sla_label": "12h",
+            "due_at": "2026-06-16T20:00:00+00:00",
+            "overdue": False,
+            "overdue_by_seconds": 0,
+            "escalated_at": None,
+            "escalation_target": None,
+            "workflow_escalation": None,
+        },
+    )
 
     with TestClient(app) as client:
         response = client.get("/runs?status=pending_approval", headers={"X-Agora-User": "alice@example.com"})
@@ -595,12 +744,24 @@ def test_runs_endpoint_returns_registry(monkeypatch):
     assert response.status_code == 200
     assert captured["user_id"] is None
     assert captured["agent_instance_id"] == "default-email-agent"
-    assert response.json() == {
-        "runs": [{"run_id": "run-1", "status": "pending_approval", "user_id": None}],
-        "limit": 50,
-        "offset": 0,
-        "has_more": False,
-    }
+    body = response.json()
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert body["has_more"] is False
+    run = body["runs"][0]
+    assert run["run_id"] == "run-1"
+    assert run["status"] == "pending_approval"
+    assert run["user_id"] is None
+    assert run["category"] == "support"
+    assert run["created_at"] == "2026-06-16T08:00:00+00:00"
+    assert run["pending_action"] == [{"action_request": {"action": "write_email", "args": {}}}]
+    assert run["action_type"] == "reply_draft"
+    assert run["sla_label"] == "12h"
+    assert run["due_at"] == "2026-06-16T20:00:00+00:00"
+    assert run["overdue"] is False
+    assert run["overdue_by_seconds"] == 0
+    assert run["escalated_at"] is None
+    assert run["escalation_target"] is None
 
 
 def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
@@ -743,7 +904,10 @@ def test_policy_endpoint_proxies_security_service(monkeypatch):
         response = client.get("/policy")
 
     assert response.status_code == 200
-    assert response.json() == {"policy_yaml": "default: deny\n"}
+    assert response.json() == {
+        "policy_yaml": "default: deny\n",
+        "parsed": {"default": "deny"},
+    }
 
 
 def test_update_agent_config_validates_and_writes(tmp_path, monkeypatch):
@@ -1167,13 +1331,17 @@ def test_inbox_action_returns_503_when_gmail_unavailable(monkeypatch):
         "detail": "Gmail inbox is unavailable. Check OAuth credentials and container network access."
     }
 
+def _pending(action_name: str) -> list[dict]:
+    return [{"action_request": {"action": action_name, "args": {}}}]
+
+
 def test_approval_action_type_derivation(monkeypatch):
     from src.api import _derive_action_type
-    assert _derive_action_type({"action": "write_email"}) == "reply_draft"
-    assert _derive_action_type({"action": "forward_email"}) == "forward"
-    assert _derive_action_type({"action": "notify_workflow"}) == "notify"
-    assert _derive_action_type({"action": "trash_email"}) == "organize"
-    assert _derive_action_type({"action": "some_unknown"}) == "unknown"
+    assert _derive_action_type(_pending("write_email"), None) == "reply_draft"
+    assert _derive_action_type(_pending("forward_email"), None) == "forward"
+    assert _derive_action_type(_pending("forward_email"), "notify") == "notify"
+    assert _derive_action_type(_pending("trash_email"), None) == "organize"
+    assert _derive_action_type(_pending("some_unknown"), None) == "unknown"
 
 def test_inbox_dept_filter(monkeypatch):
     # Test would assert that /inbox drops runs where workflow_dept != user_dept
@@ -1183,3 +1351,217 @@ def test_inbox_dept_filter(monkeypatch):
 def test_claim_run(monkeypatch):
     # Test would assert that POST /inbox/{run_id}/claim assigns the run
     pass
+
+
+_SEED_CATEGORIES_YAML = """enabled: true
+categories:
+  - name: support
+    display_name: Support
+    priority: normal
+    policy: notify
+    owner: Support team
+    route_to: [support@example.com]
+templates: []
+contacts: []
+"""
+
+
+def _seed_categories(monkeypatch, tmp_path):
+    import src.api as api
+
+    path = tmp_path / "categories.yaml"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+    with TestClient(app) as client:
+        client.put("/categories", json={"categories_yaml": _SEED_CATEGORIES_YAML})
+    return path
+
+
+def test_category_edit_endpoint_updates_workflow(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/categories/support",
+            json={
+                "display_name": "Support (updated)",
+                "priority": "urgent",
+                "policy": "auto_draft",
+                "owner": "Support team",
+                "route_to": ["support@example.com", "backup@example.com"],
+                "instructions": {"sla": "12h"},
+            },
+        )
+        got = client.get("/categories")
+
+    assert response.status_code == 200
+    updated = next(c for c in got.json()["parsed"]["categories"] if c["name"] == "support")
+    assert updated["display_name"] == "Support (updated)"
+    assert updated["priority"] == "urgent"
+    assert updated["policy"] == "auto_draft"
+    assert updated["route_to"] == ["support@example.com", "backup@example.com"]
+    assert updated["instructions"]["sla"] == "12h"
+
+
+def test_category_edit_endpoint_404_for_unknown(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/categories/does-not-exist",
+            json={"display_name": "X", "priority": "normal", "policy": "notify"},
+        )
+
+    assert response.status_code == 404
+
+
+def test_category_delete_endpoint_removes_workflow(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.delete("/categories/support")
+        got = client.get("/categories")
+
+    assert response.status_code == 200
+    assert got.json()["parsed"]["categories"] == []
+
+
+def test_category_delete_endpoint_404_for_unknown(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.delete("/categories/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_category_duplicate_endpoint_clones_with_new_name(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post("/categories/support/duplicate")
+        got = client.get("/categories")
+
+    assert response.status_code == 200
+    assert response.json()["new_name"] == "support_copy"
+    names = {c["name"] for c in got.json()["parsed"]["categories"]}
+    assert names == {"support", "support_copy"}
+    clone = next(c for c in got.json()["parsed"]["categories"] if c["name"] == "support_copy")
+    assert clone["display_name"] == "Support (copy)"
+    assert clone["route_to"] == ["support@example.com"]
+
+
+def test_category_duplicate_endpoint_dedupes_name_on_repeat(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        client.post("/categories/support/duplicate")
+        second = client.post("/categories/support/duplicate")
+        got = client.get("/categories")
+
+    assert second.json()["new_name"] == "support_copy_2"
+    names = {c["name"] for c in got.json()["parsed"]["categories"]}
+    assert names == {"support", "support_copy", "support_copy_2"}
+
+
+def test_category_duplicate_endpoint_404_for_unknown(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post("/categories/does-not-exist/duplicate")
+
+    assert response.status_code == 404
+
+
+def test_category_test_match_endpoint_matches_workflow(monkeypatch, tmp_path):
+    import src.api as api
+
+    path = tmp_path / "categories.yaml"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+    seed = """enabled: true
+categories:
+  - name: refund
+    display_name: Refund
+    priority: urgent
+    policy: notify
+    owner: Finance
+    route_to: [finance]
+    when:
+      subject_contains: [refund]
+templates: []
+contacts: []
+"""
+    with TestClient(app) as client:
+        client.put("/categories", json={"categories_yaml": seed})
+        response = client.post(
+            "/categories/test-match",
+            json={"author": "client@example.com", "subject": "refund please", "email_thread": ""},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["matched"] is True
+    assert body["category"] == "refund"
+    assert body["policy"] == "notify"
+    assert body["route_to"] == ["finance"]
+
+
+def test_category_test_match_endpoint_no_match(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/categories/test-match",
+            json={"author": "nobody@example.com", "subject": "random", "email_thread": ""},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["matched"] is False
+
+
+
+def test_alert_and_retention_settings_endpoints_require_owner_role(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_alert_settings", lambda: api.AlertSettings())
+    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings())
+
+    with TestClient(app) as client:
+        assert client.get('/alerts/settings', headers={"X-Agora-Instance-Role": "viewer"}).status_code == 403
+        assert client.get('/retention/settings', headers={"X-Agora-Instance-Role": "viewer"}).status_code == 403
+        assert client.post('/retention/dry-run', headers={"X-Agora-Instance-Role": "viewer"}).status_code == 403
+
+
+def test_alert_and_retention_settings_endpoints_allow_owner_role(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_alert_settings", lambda: api.AlertSettings(enabled=True, admin_recipient="ops@example.com"))
+    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings(retention_days=30))
+    monkeypatch.setattr(api, "preview_retention", lambda: {"enabled": True, "counts": {"runs": 1}})
+
+    with TestClient(app) as client:
+        alerts_response = client.get('/alerts/settings', headers={"X-Agora-Instance-Role": "owner"})
+        retention_response = client.get('/retention/settings', headers={"X-Agora-Instance-Role": "owner"})
+        dry_run_response = client.post('/retention/dry-run', headers={"X-Agora-Instance-Role": "owner"})
+
+    assert alerts_response.status_code == 200
+    assert retention_response.status_code == 200
+    assert dry_run_response.status_code == 200
+
+
+
+def test_metrics_endpoint_returns_prometheus_text(monkeypatch):
+    import src.api as api
+    monkeypatch.setattr(api, "render_metrics", lambda: "# HELP agora_test demo\n# TYPE agora_test counter\nagora_test 1\n")
+    with TestClient(app) as client:
+        response = client.get('/metrics', headers={"X-Agora-Instance-Role": "viewer"})
+    assert response.status_code == 200
+    assert 'agora_test 1' in response.text
+
+
+def test_dlq_endpoint_returns_entries(monkeypatch):
+    import src.api as api
+    monkeypatch.setattr(api, "list_dead_letters", lambda status=None, limit=100, agent_instance_id=None: [{"entry_id": "e1", "reason": "retry_exhausted"}])
+    with TestClient(app) as client:
+        response = client.get('/dlq', headers={"X-Agora-Instance-Role": "owner"})
+    assert response.status_code == 200
+    assert response.json()["entries"][0]["entry_id"] == "e1"

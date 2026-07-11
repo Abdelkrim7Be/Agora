@@ -11,19 +11,31 @@ import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
+from src.trace import list_traces, setup_trace_store
+from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, record_dead_letter, setup_dlq
+from src.metrics import render_metrics
 from src.categories import (
     CategoriesConfig,
     DEFAULT_CATEGORIES_PATH,
+    classify_category,
     dump_categories,
     load_categories,
 )
-from src.automation import AutomationRule, DEFAULT_RULES_PATH, RulesConfig, load_rules
+from src.automation import (
+    AutomationRule,
+    DEFAULT_RULES_PATH,
+    RulesConfig,
+    load_escalation_state,
+    load_rules,
+    workflow_sla_snapshot,
+)
+from src.analytics import summarize as summarize_analytics
 from src.config import AgentConfig, DEFAULT_CONFIG_PATH, SERVICE_ROOT, load_config
 from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
@@ -67,6 +79,8 @@ from src.run_registry import get_run as get_run_record
 from src.run_registry import list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
 from src.health import aggregate_health
+from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
+from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
 from src.migrate import upgrade_to_head
 from src.sync_status import (
     get_status as get_sync_status,
@@ -104,11 +118,15 @@ from src.campaigns import (
     DEFAULT_CAMPAIGNS_PATH,
     Group,
     GroupMember,
+    audience_guard,
+    contacts_for_segment,
     find_group,
     find_template,
     load_campaigns,
     members_for_group,
+    missing_variable_warnings,
     render_campaign,
+    render_campaign_for_segment,
     save_campaigns,
 )
 from src.tenant import (
@@ -150,6 +168,8 @@ async def lifespan(app: FastAPI):
     setup_gmail_sync()
     setup_sync_status()
     setup_cost_tracker()
+    setup_trace_store()
+    setup_dlq()
     async with open_graph_storage() as storage:
         # The graph's nodes are sync, so LangGraph runs them in a threadpool where
         # sync store.get/put works. A future ASYNC node must use aget/aput instead.
@@ -264,10 +284,13 @@ class CampaignTemplateInput(BaseModel):
     subject: str
     body_markdown: str
     variables: list[str] = Field(default_factory=list)
+    audience: list[str] = Field(default_factory=list)
+    category: str | None = None
 
 
 class CampaignPrepareInput(BaseModel):
-    group_id: str
+    segment_id: str | None = None
+    group_id: str | None = None
     template_name: str
 
 
@@ -337,6 +360,31 @@ class SectionToggleInput(BaseModel):
     enabled: bool
 
 
+class RuleUpsertInput(BaseModel):
+    """Structured add/update of a single automation rule (no YAML editing).
+
+    ``original_name`` lets the UI rename a rule in place; when omitted the rule is
+    matched (and, if absent, created) by ``name``.
+    """
+
+    name: str = Field(min_length=1)
+    original_name: str | None = None
+    enabled: bool = True
+    when: dict = Field(default_factory=dict)
+    then: dict = Field(default_factory=dict)
+
+
+class RuleDeleteInput(BaseModel):
+    name: str
+
+
+class SectionConfigInput(BaseModel):
+    """Structured update of a rules subsystem (digest/snooze/follow_ups) from a form."""
+
+    section: str
+    config: dict
+
+
 class CapabilitiesInput(BaseModel):
     capabilities: dict[str, bool]
 
@@ -392,13 +440,22 @@ class RunResponse(BaseModel):
     workflow_dept: str | None = None
     assignee: str | None = None
     action_type: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    sla_label: str | None = None
+    due_at: str | None = None
+    overdue: bool = False
+    overdue_by_seconds: int = 0
+    escalated_at: str | None = None
+    escalation_target: str | None = None
 
 
 def _derive_action_type(pending_action: list | None, classification: str | None) -> str:
     if not pending_action or len(pending_action) == 0:
         return "unknown"
     action = pending_action[0]
-    name = action.get("name") if isinstance(action, dict) else getattr(action, "name", "")
+    action_request = action.get("action_request") or {} if isinstance(action, dict) else {}
+    name = action_request.get("action", "")
     if name == "write_email":
         return "reply_draft"
     if name == "forward_email":
@@ -430,6 +487,9 @@ def _format(result: dict, run_id: str) -> RunResponse:
             workflow_owner=result.get("workflow_owner"),
             workflow_approver=result.get("workflow_approver"),
             workflow_route_to=result.get("workflow_route_to") or [],
+            workflow_dept=result.get("workflow_dept"),
+            assignee=result.get("assignee"),
+            action_type=_derive_action_type(interrupts[0].value, result.get("classification_decision")),
         )
     if result.get("email_send_failed"):
         return RunResponse(
@@ -446,7 +506,6 @@ def _format(result: dict, run_id: str) -> RunResponse:
             workflow_route_to=result.get("workflow_route_to") or [],
             workflow_dept=result.get("workflow_dept"),
             assignee=result.get("assignee"),
-            action_type=_derive_action_type(interrupts[0].value, result.get("classification_decision")),
         )
     return RunResponse(
         run_id=run_id,
@@ -472,6 +531,7 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
         "workflow_owner": run.workflow_owner,
         "workflow_approver": run.workflow_approver,
         "workflow_route_to": run.workflow_route_to,
+        "workflow_dept": run.workflow_dept,
     }
     record_input["error"] = run.error
     for key, value in optional_fields.items():
@@ -487,7 +547,46 @@ def _record_response(run: RunResponse, email_input: dict | None = None) -> None:
         agent_instance_id=current_agent_instance_id(),
     )
 
+
+def _record_decision_metadata(run: RunResponse, record: dict, decision: str) -> None:
+    upsert_run(
+        run.run_id,
+        run.status,
+        email_input=_record_email_input(record),
+        classification=run.classification,
+        pending_action=run.pending_action,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+        decision=decision,
+        decision_at=_now_iso(),
+    )
+
+
+def _annotate_run_record(
+    record: dict,
+    categories_cfg: CategoriesConfig | None = None,
+    escalation_state: dict | None = None,
+) -> dict:
+    enriched = dict(record)
+    enriched["action_type"] = _derive_action_type(record.get("pending_action"), record.get("classification"))
+    if record.get("status") == "pending_approval":
+        categories_cfg = categories_cfg or load_categories(agent_instance_id=current_agent_instance_id())
+        escalation_state = escalation_state or load_escalation_state()
+        enriched.update(workflow_sla_snapshot(record, categories_cfg, escalation_state=escalation_state))
+    else:
+        enriched.update({
+            "sla_label": None,
+            "due_at": None,
+            "overdue": False,
+            "overdue_by_seconds": 0,
+            "escalated_at": None,
+            "escalation_target": None,
+        })
+    return enriched
+
+
 def _run_response_from_record(record: dict) -> RunResponse:
+    record = _annotate_run_record(record)
     return RunResponse(
         run_id=record["run_id"],
         status=record.get("status") or "completed",
@@ -500,8 +599,56 @@ def _run_response_from_record(record: dict) -> RunResponse:
         workflow_owner=record.get("workflow_owner"),
         workflow_approver=record.get("workflow_approver"),
         workflow_route_to=record.get("workflow_route_to") or [],
+        workflow_dept=record.get("workflow_dept"),
+        assignee=record.get("assignee"),
+        action_type=record.get("action_type"),
+        created_at=record.get("created_at"),
+        updated_at=record.get("updated_at"),
+        sla_label=record.get("sla_label"),
+        due_at=record.get("due_at"),
+        overdue=bool(record.get("overdue")),
+        overdue_by_seconds=int(record.get("overdue_by_seconds") or 0),
+        escalated_at=record.get("escalated_at"),
+        escalation_target=record.get("escalation_target"),
         error=record.get("error"),
     )
+
+
+def _draft_content_from_response(response: RunResponse) -> str:
+    pending = response.pending_action or []
+    if not pending:
+        return ""
+    first = pending[0] if isinstance(pending[0], dict) else {}
+    request = first.get("action_request") or {}
+    if request.get("action") != "write_email":
+        return ""
+    args = request.get("args") or {}
+    return str(args.get("content") or "")
+
+
+def _sse_event(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _stream_run_response(response: RunResponse):
+    draft_content = _draft_content_from_response(response)
+    if settings.llm_streaming_enabled and draft_content:
+        emitted = ""
+        chunk_size = 96
+        for index in range(0, len(draft_content), chunk_size):
+            delta = draft_content[index:index + chunk_size]
+            emitted += delta
+            yield _sse_event(
+                "draft",
+                {
+                    "run_id": response.run_id,
+                    "delta": delta,
+                    "content": emitted,
+                },
+            )
+            await asyncio.sleep(0)
+    yield _sse_event("result", response.model_dump())
+    yield _sse_event("end", {"run_id": response.run_id, "status": response.status})
 
 
 def _pending_response_after_decision_error(run_id: str, exc: Exception, action: str) -> RunResponse | None:
@@ -554,6 +701,7 @@ def _record_email_input(record: dict) -> dict:
         "workflow_owner": record.get("workflow_owner"),
         "workflow_approver": record.get("workflow_approver"),
         "workflow_route_to": record.get("workflow_route_to") or [],
+        "workflow_dept": record.get("workflow_dept"),
         "error": record.get("error"),
     }
 
@@ -572,6 +720,7 @@ def _complete_pending_rejection(run_id: str) -> RunResponse | None:
         classification=record.get("classification"),
     )
     _record_response(response, email_input=_record_email_input(record))
+    _record_decision_metadata(response, record, "rejected")
     return response
 
 
@@ -626,6 +775,7 @@ def _execute_pending_action(run_id: str, args_override: dict | None = None) -> R
         current_email_id.reset(email_id_token)
 
     _record_response(response, email_input=_record_email_input(record))
+    _record_decision_metadata(response, record, "approved")
     return response
 
 
@@ -781,6 +931,98 @@ async def health() -> dict:
     return {"status": "ok", "storage_backend": settings.storage_backend, **components}
 
 
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics(request: Request) -> PlainTextResponse:
+    _require_instance_role(request, "viewer")
+    return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
+
+
+@app.get("/dlq")
+async def dlq_list(request: Request, status: str | None = Query(default=None), limit: int = Query(default=100, ge=1, le=500)) -> dict:
+    _require_instance_role(request, "owner")
+    return {
+        "entries": list_dead_letters(status=status, limit=limit, agent_instance_id=current_agent_instance_id()),
+        "limit": limit,
+    }
+
+
+async def _reprocess_dead_letter(entry: dict, graph) -> dict:
+    payload = dict(entry.get("payload") or {})
+    run_id = str(uuid.uuid4())
+    result = await _invoke_graph(
+        graph,
+        {"email_input": {**payload, "agent_instance_id": current_agent_instance_id()}},
+        {"configurable": {"thread_id": run_id}},
+    )
+    status = "pending_approval" if result.get("__interrupt__") else ("failed" if result.get("email_send_failed") else ("notify" if result.get("classification_decision") == "notify" else "completed"))
+    upsert_run(
+        run_id,
+        status,
+        email_input=payload,
+        classification=result.get("classification_decision"),
+        pending_action=result["__interrupt__"][0].value if result.get("__interrupt__") else None,
+        agent_instance_id=current_agent_instance_id(),
+    )
+    claim_dead_letter(entry["entry_id"], "requeued", "resolved", agent_instance_id=current_agent_instance_id())
+    return {"entry_id": entry["entry_id"], "status": "requeued", "run_id": run_id}
+
+
+@app.post("/dlq/{entry_id}/requeue")
+async def dlq_requeue(request: Request, entry_id: str) -> dict:
+    _require_instance_role(request, "owner")
+    entry = get_dead_letter(entry_id, agent_instance_id=current_agent_instance_id())
+    if entry is None:
+        raise HTTPException(status_code=404, detail="DLQ entry not found")
+    claimed = claim_dead_letter(
+        entry_id,
+        "dead_letter",
+        "requeued",
+        agent_instance_id=current_agent_instance_id(),
+        requeue_token=str(uuid.uuid4()),
+    )
+    if claimed is None:
+        return {"entry_id": entry_id, "status": entry.get("status")}
+    return await _reprocess_dead_letter(claimed, request.app.state.graph)
+
+
+
+@app.get("/alerts/settings")
+async def alerts_settings(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    return load_alert_settings().model_dump()
+
+
+@app.put("/alerts/settings")
+async def update_alerts_settings(request: Request, body: AlertSettings) -> dict:
+    _require_instance_role(request, "owner")
+    return save_alert_settings(body).model_dump()
+
+
+@app.get("/retention/settings")
+async def retention_settings(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    return load_retention_settings().model_dump()
+
+
+@app.put("/retention/settings")
+async def update_retention_settings(request: Request, body: RetentionSettings) -> dict:
+    _require_instance_role(request, "owner")
+    return save_retention_settings(body).model_dump()
+
+
+@app.post("/retention/dry-run")
+async def retention_dry_run(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    return await asyncio.to_thread(preview_retention)
+
+
+@app.post("/retention/run")
+async def retention_execute(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    return await asyncio.to_thread(run_retention)
+
+
 @app.get("/agent-instances/{instance_id}/connect/gmail/start", response_model=GmailConnectStartResponse)
 async def gmail_connect_start(instance_id: str, request: Request) -> GmailConnectStartResponse:
     user_id = _request_user_id(request) or current_user_id()
@@ -907,6 +1149,129 @@ async def update_categories(body: CategoriesInput) -> dict:
         "categories_yaml": body.categories_yaml,
         "parsed": parsed.model_dump(),
         "storage": "instance-config",
+    }
+
+class CategoryUpdateInput(BaseModel):
+    display_name: str
+    priority: str = "normal"
+    policy: str = "notify"
+    owner: str | None = None
+    approver: str | None = None
+    route_to: list[str] = Field(default_factory=list)
+    instructions: dict | None = None
+    when: dict | None = None
+    template: str | None = None
+
+
+@app.put("/categories/{name}")
+async def update_category_endpoint(name: str, body: CategoryUpdateInput, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    from src.categories import Category, CategoryInstructions
+    categories_yaml, cfg = _current_categories()
+    for cat in cfg.categories:
+        if cat.name == name:
+            cat.display_name = body.display_name
+            cat.priority = body.priority
+            cat.policy = body.policy
+            cat.owner = body.owner
+            cat.approver = body.approver
+            cat.route_to = body.route_to
+            if body.instructions:
+                cat.instructions = CategoryInstructions(**body.instructions)
+            else:
+                cat.instructions = None
+            if body.when:
+                from src.automation import RuleWhen
+                cat.when = RuleWhen(**body.when)
+            if body.template:
+                cat.template = body.template
+            break
+    else:
+        raise HTTPException(status_code=404, detail="Category not found")
+    new_yaml = dump_categories(cfg)
+    write_instance_text("categories", new_yaml, DEFAULT_CATEGORIES_PATH)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "parsed": cfg.model_dump(),
+        "storage": "instance-config",
+    }
+
+
+@app.delete("/categories/{name}")
+async def delete_category_endpoint(name: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    categories_yaml, cfg = _current_categories()
+    initial_len = len(cfg.categories)
+    cfg.categories = [cat for cat in cfg.categories if cat.name != name]
+    if len(cfg.categories) == initial_len:
+        raise HTTPException(status_code=404, detail="Category not found")
+    new_yaml = dump_categories(cfg)
+    write_instance_text("categories", new_yaml, DEFAULT_CATEGORIES_PATH)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "parsed": cfg.model_dump(),
+        "storage": "instance-config",
+    }
+
+
+@app.post("/categories/{name}/duplicate")
+async def duplicate_category_endpoint(name: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    categories_yaml, cfg = _current_categories()
+    source = next((cat for cat in cfg.categories if cat.name == name), None)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    existing_names = {cat.name for cat in cfg.categories}
+    base_name = f"{source.name}_copy"
+    new_name = base_name
+    suffix = 2
+    while new_name in existing_names:
+        new_name = f"{base_name}_{suffix}"
+        suffix += 1
+
+    clone = source.model_copy(deep=True)
+    clone.name = new_name
+    clone.display_name = f"{source.display_name} (copy)"
+    cfg.categories.append(clone)
+
+    new_yaml = dump_categories(cfg)
+    write_instance_text("categories", new_yaml, DEFAULT_CATEGORIES_PATH)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "parsed": cfg.model_dump(),
+        "storage": "instance-config",
+        "new_name": new_name,
+    }
+
+
+class CategoryTestMatchInput(BaseModel):
+    author: str = ""
+    subject: str = ""
+    email_thread: str = ""
+
+
+@app.post("/categories/test-match")
+async def test_category_match(body: CategoryTestMatchInput, request: Request) -> dict:
+    """Preview which workflow (if any) a sample email would match, without sending anything."""
+    _require_instance_role(request, "owner")
+    _categories_yaml, cfg = _current_categories()
+    result = classify_category(
+        {"author": body.author, "subject": body.subject, "email_thread": body.email_thread},
+        cfg,
+    )
+    contact = result.get("contact")
+    return {
+        "matched": result.get("category") is not None,
+        "category": result.get("category"),
+        "category_display_name": result.get("category_display_name"),
+        "priority": result.get("priority"),
+        "policy": result.get("policy"),
+        "owner": result.get("owner"),
+        "approver": result.get("approver"),
+        "route_to": result.get("route_to") or [],
+        "instructions": result.get("instructions"),
+        "contact": contact.model_dump() if contact else None,
     }
 
 
@@ -1103,7 +1468,7 @@ async def delete_segment_entry(segment_id: str, request: Request) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Outbound broadcast campaigns (groups + rich templates + batch approval).
+# Outbound broadcast campaigns (segment-targeted + approval-gated).
 # ---------------------------------------------------------------------------
 
 
@@ -1181,6 +1546,8 @@ async def upsert_campaign_template(request: Request, body: CampaignTemplateInput
         subject=body.subject,
         body_markdown=body.body_markdown,
         variables=body.variables,
+        audience=body.audience,
+        category=body.category,
     )
     cfg.templates = [t for t in cfg.templates if t.name != template.name] + [template]
     save_campaigns(cfg)
@@ -1199,23 +1566,80 @@ async def delete_campaign_template(request: Request, name: str) -> dict:
     return {"deleted": name}
 
 
+def _campaign_target(cfg: CampaignsConfig, body: CampaignPrepareInput) -> tuple[str, str]:
+    if body.segment_id:
+        segment = get_segment(body.segment_id, agent_instance_id=current_agent_instance_id())
+        if segment is None:
+            raise HTTPException(status_code=404, detail="segment not found")
+        return segment.id, segment.name
+    if body.group_id:
+        group = find_group(cfg, body.group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="group not found")
+        segment = get_segment(group.segment_id or group.id, agent_instance_id=current_agent_instance_id())
+        if segment is None:
+            raise HTTPException(status_code=404, detail="segment not found")
+        return segment.id, segment.name
+    raise HTTPException(status_code=422, detail="segment_id is required")
+
+
+def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) -> dict:
+    segment_id, segment_name = _campaign_target(cfg, body)
+    template = find_template(cfg, body.template_name)
+    if template is None:
+        raise HTTPException(status_code=404, detail="template not found")
+
+    contacts = contacts_for_segment(segment_id, agent_instance_id=current_agent_instance_id())
+    if not contacts:
+        raise HTTPException(status_code=400, detail="Le segment sélectionné ne contient aucun destinataire actif.")
+
+    rendered_models = render_campaign_for_segment(segment_id, template, agent_instance_id=current_agent_instance_id())
+    warnings = missing_variable_warnings(rendered_models)
+    guard = audience_guard(template, contacts, segment_name=segment_name)
+    rendered = [item.model_dump() for item in rendered_models]
+    return {
+        "segment_id": segment_id,
+        "segment_name": segment_name,
+        "template_name": template.name,
+        "template_category": template.category,
+        "template_audience": list(template.audience),
+        "segment_audiences": guard.segment_audiences,
+        "recipient_count": len(rendered),
+        "preview": rendered[0] if rendered else None,
+        "recipients": [
+            {"email": item["email"], "name": item.get("name"), "subject": item["subject"], "unresolved": item.get("unresolved") or []}
+            for item in rendered
+        ],
+        "missing_variables": [warning.model_dump() for warning in warnings],
+        "audience_match": guard.allowed,
+        "guard_message": guard.reason,
+        "rendered": rendered,
+    }
+
+
 def _campaign_summary(campaign_id: str, record: dict) -> dict:
     rendered = record["rendered"]
     return {
         "campaign_id": campaign_id,
         "status": record["status"],
-        "group_id": record["group_id"],
-        "group_name": record["group_name"],
+        "group_id": record.get("group_id"),
+        "group_name": record.get("group_name"),
         "segment_id": record.get("segment_id"),
+        "segment_name": record.get("segment_name"),
         "template_name": record["template_name"],
+        "template_category": record.get("template_category"),
+        "template_audience": record.get("template_audience") or [],
+        "segment_audiences": record.get("segment_audiences") or [],
         "recipient_count": len(rendered),
         "created_at": record["created_at"],
-        # Preview = the first fully rendered email so the UI can show real formatting.
         "preview": rendered[0] if rendered else None,
         "recipients": [
-            {"email": r["email"], "name": r["name"], "subject": r["subject"], "unresolved": r["unresolved"]}
+            {"email": r["email"], "name": r.get("name"), "subject": r["subject"], "unresolved": r.get("unresolved") or []}
             for r in rendered
         ],
+        "missing_variables": record.get("missing_variables") or [],
+        "audience_match": record.get("audience_match", True),
+        "guard_message": record.get("guard_message"),
         "result": record.get("result"),
     }
 
@@ -1232,28 +1656,49 @@ async def list_campaigns() -> dict:
     return {"agent_instance_id": instance, "campaigns": items}
 
 
+@app.post("/campaigns/preview")
+async def preview_campaign(request: Request, body: CampaignPrepareInput) -> dict:
+    _require_instance_role(request, "owner")
+    cfg = load_campaigns()
+    preview = _campaign_preview_payload(cfg, body)
+    preview.pop("rendered", None)
+    return preview
+
+
 @app.post("/campaigns/prepare")
 async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict:
     _require_instance_role(request, "owner")
     cfg = load_campaigns()
-    group = find_group(cfg, body.group_id)
-    if group is None:
-        raise HTTPException(status_code=404, detail="group not found")
-    template = find_template(cfg, body.template_name)
-    if template is None:
-        raise HTTPException(status_code=404, detail="template not found")
+    preview = _campaign_preview_payload(cfg, body)
+    if not preview["audience_match"]:
+        raise HTTPException(status_code=422, detail=preview["guard_message"])
+    if preview["missing_variables"]:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Variables manquantes pour certains destinataires : "
+                + "; ".join(
+                    f"{item['email']} ({', '.join(item['unresolved'])})"
+                    for item in preview["missing_variables"]
+                )
+            ),
+        )
 
-    rendered = [r.model_dump() for r in render_campaign(group, template, agent_instance_id=current_agent_instance_id())]
-    if not rendered:
-        raise HTTPException(status_code=400, detail="group has no members")
     campaign_id = str(uuid.uuid4())
     record = {
         "status": "pending_approval",
-        "group_id": group.id,
-        "group_name": group.name,
-        "segment_id": group.segment_id or group.id,
-        "template_name": template.name,
-        "rendered": rendered,
+        "group_id": body.group_id,
+        "group_name": None,
+        "segment_id": preview["segment_id"],
+        "segment_name": preview["segment_name"],
+        "template_name": preview["template_name"],
+        "template_category": preview["template_category"],
+        "template_audience": preview["template_audience"],
+        "segment_audiences": preview["segment_audiences"],
+        "missing_variables": preview["missing_variables"],
+        "audience_match": preview["audience_match"],
+        "guard_message": preview["guard_message"],
+        "rendered": preview["rendered"],
         "created_at": _now_iso(),
         "user_id": current_user_id(),
         "agent_instance_id": current_agent_instance_id(),
@@ -1281,12 +1726,14 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
         raise HTTPException(status_code=404, detail="campaign not found")
     if record["status"] != "pending_approval":
         raise HTTPException(status_code=409, detail=f"campaign already {record['status']}")
+    if not record.get("audience_match", True):
+        raise HTTPException(status_code=422, detail=record.get("guard_message") or "Audience incompatible")
+    if record.get("missing_variables"):
+        raise HTTPException(status_code=422, detail="Variables manquantes détectées avant l'envoi")
 
     resource = None if settings.dry_run else gmail_resource()
     sent, denied, failed = [], [], []
     for index, email in enumerate(record["rendered"]):
-        # Per-recipient security authorization: recipient policy, content caps,
-        # and the per-campaign / per-day ceiling all apply here.
         if settings.security_enabled:
             verdict = authorize_action(
                 "send_campaign",
@@ -1306,7 +1753,7 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
                 resource=resource,
             )
             sent.append({"email": email["email"], "dry_run": bool(result.get("dry_run"))})
-        except Exception as exc:  # never let one bad recipient abort the batch
+        except Exception as exc:
             failed.append({"email": email["email"], "error": str(exc)})
 
     record["status"] = "sent"
@@ -1385,6 +1832,81 @@ def _read_suggestions() -> list[dict]:
     return valid
 
 
+def _write_suggestions(items: list[dict]) -> None:
+    _suggestions_path().write_text("".join(json.dumps(item, sort_keys=True) + "\n" for item in items))
+
+
+def _merge_rule_when(existing, learned_when: dict | None):
+    from src.automation import RuleWhen
+
+    base = existing.model_dump() if hasattr(existing, "model_dump") else RuleWhen().model_dump()
+    candidate = RuleWhen(**(learned_when or {})).model_dump()
+    merged: dict[str, list[str]] = {}
+    for field in ("sender_contains", "sender_domain", "subject_contains", "labels"):
+        values = []
+        seen: set[str] = set()
+        for raw in [*(base.get(field) or []), *(candidate.get(field) or [])]:
+            cleaned = str(raw).strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(cleaned)
+        merged[field] = values
+    return RuleWhen(**merged)
+
+
+def _promote_workflow_suggestion(item: dict) -> dict:
+    from src.automation import RuleWhen
+    from src.categories import Category, CategoryInstructions
+
+    payload = item.get("suggested_workflow") or {}
+    if not payload:
+        raise HTTPException(status_code=422, detail="Workflow suggestion is empty")
+
+    categories_yaml, cfg = _current_categories()
+    existing = next((cat for cat in cfg.categories if cat.name == payload.get("name")), None)
+    instructions_payload = payload.get("instructions") or {}
+    route_to = [str(value).strip() for value in (payload.get("route_to") or []) if str(value).strip()]
+
+    if existing is not None:
+        if payload.get("display_name"):
+            existing.display_name = payload["display_name"]
+        if payload.get("priority"):
+            existing.priority = payload["priority"]
+        if payload.get("policy"):
+            existing.policy = payload["policy"]
+        if payload.get("owner"):
+            existing.owner = payload["owner"]
+        if payload.get("approver"):
+            existing.approver = payload["approver"]
+        if route_to:
+            existing.route_to = route_to
+        if payload.get("when"):
+            existing.when = _merge_rule_when(existing.when, payload.get("when"))
+        if instructions_payload:
+            existing.instructions = CategoryInstructions(**instructions_payload)
+        promoted = existing
+    else:
+        promoted = Category(
+            name=str(payload.get("name") or "learned_workflow").strip(),
+            display_name=str(payload.get("display_name") or payload.get("name") or "Workflow appris").strip(),
+            priority=payload.get("priority") or "normal",
+            policy=payload.get("policy") or "notify",
+            owner=payload.get("owner"),
+            approver=payload.get("approver"),
+            route_to=route_to,
+            when=RuleWhen(**(payload.get("when") or {})),
+            instructions=CategoryInstructions(**instructions_payload) if instructions_payload else None,
+        )
+        cfg.categories.append(promoted)
+
+    write_instance_text("categories", dump_categories(cfg), DEFAULT_CATEGORIES_PATH)
+    return {"kind": "workflow", "promoted": promoted.model_dump(), "categories": cfg.model_dump()}
+
+
 def _persist_rules(config: RulesConfig) -> dict:
     # Structured dump (comments are not preserved — the YAML stays valid). The raw
     # editor is still available for hand-tuning with comments.
@@ -1422,6 +1944,57 @@ async def toggle_section(body: SectionToggleInput) -> dict:
     return _persist_rules(config)
 
 
+_CONFIGURABLE_SECTIONS = {"digest", "snooze", "follow_ups"}
+
+
+@app.post("/rules/rule")
+async def upsert_rule(body: RuleUpsertInput) -> dict:
+    """Add or update one automation rule from a structured form (no YAML)."""
+    from src.automation import AutomationRule
+
+    config = load_rules()
+    rule = AutomationRule(
+        name=body.name, enabled=body.enabled, when=body.when, then=body.then
+    )
+    match = body.original_name or body.name
+    if (body.original_name or body.name) != body.name and any(
+        r.name == body.name for r in config.rules if r.name != match
+    ):
+        raise HTTPException(status_code=409, detail=f"A rule named {body.name!r} already exists")
+    for index, existing in enumerate(config.rules):
+        if existing.name == match:
+            config.rules[index] = rule
+            break
+    else:
+        config.rules.append(rule)
+    return _persist_rules(config)
+
+
+@app.post("/rules/rule-delete")
+async def delete_rule(body: RuleDeleteInput) -> dict:
+    # Rule names are free-text (spaces/unicode), so we take the name in a JSON body
+    # rather than a URL path segment that the gateway firewall would reject encoded.
+    config = load_rules()
+    remaining = [r for r in config.rules if r.name != body.name]
+    if len(remaining) == len(config.rules):
+        raise HTTPException(status_code=404, detail=f"No rule named {body.name!r}")
+    config.rules = remaining
+    return _persist_rules(config)
+
+
+@app.put("/rules/section-config")
+async def update_section_config(body: SectionConfigInput) -> dict:
+    """Replace a rules subsystem's config (digest/snooze/follow_ups) from a form,
+    preserving its current enabled flag unless the form supplies one."""
+    if body.section not in _CONFIGURABLE_SECTIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown section {body.section!r}")
+    config = load_rules()
+    current = getattr(config, body.section)
+    payload = {**current.model_dump(), **body.config}
+    setattr(config, body.section, type(current)(**payload))
+    return _persist_rules(config)
+
+
 @app.get("/rules/suggestions")
 async def get_rule_suggestions() -> dict:
     """Learned rule suggestions appended from human corrections (ignore/edit/feedback)."""
@@ -1436,11 +2009,19 @@ async def get_rule_suggestions() -> dict:
 
 @app.post("/rules/suggestions/{index}/promote")
 async def promote_rule_suggestion(index: int) -> dict:
-    """Promote a learned suggestion into an active rule in rules.yaml."""
+    """Promote a learned suggestion into an active rule or workflow."""
     valid = _read_suggestions()
     if index < 0 or index >= len(valid):
         raise HTTPException(status_code=404, detail="Suggestion not found")
-    rule_dict = {**(valid[index].get("suggested_rule") or {}), "enabled": True}
+    item = valid[index]
+    remaining = [s for i, s in enumerate(valid) if i != index]
+
+    if item.get("suggested_workflow"):
+        result = _promote_workflow_suggestion(item)
+        _write_suggestions(remaining)
+        return result
+
+    rule_dict = {**(item.get("suggested_rule") or {}), "enabled": True}
     rule = AutomationRule(**rule_dict)  # validate before persisting
     data = load_rules().model_dump()
     data["rules"].append(rule.model_dump())
@@ -1448,11 +2029,18 @@ async def promote_rule_suggestion(index: int) -> dict:
     write_instance_text(
         "rules", yaml.safe_dump(data, sort_keys=False), DEFAULT_RULES_PATH
     )
+    _write_suggestions(remaining)
+    return {"kind": "rule", "promoted": rule.model_dump(), "parsed": load_rules().model_dump()}
+
+
+@app.delete("/rules/suggestions/{index}")
+async def dismiss_rule_suggestion(index: int) -> dict:
+    valid = _read_suggestions()
+    if index < 0 or index >= len(valid):
+        raise HTTPException(status_code=404, detail="Suggestion not found")
     remaining = [s for i, s in enumerate(valid) if i != index]
-    _suggestions_path().write_text(
-        "".join(json.dumps(s, sort_keys=True) + "\n" for s in remaining)
-    )
-    return {"promoted": rule.model_dump(), "parsed": load_rules().model_dump()}
+    _write_suggestions(remaining)
+    return {"dismissed": index, "remaining": len(remaining)}
 
 
 @app.get("/capabilities")
@@ -1475,8 +2063,14 @@ async def update_capabilities(body: CapabilitiesInput) -> dict:
 @app.get("/policy")
 async def get_policy() -> dict:
     # The policy lives in the (separate) security service — fetch it over HTTP rather
-    # than reaching for a file that isn't in this container.
-    return await fetch_policy()
+    # than reaching for a file that isn't in this container. Parse it here (we already
+    # have PyYAML) so the control panel can render a friendly table, not raw YAML.
+    data = await fetch_policy()
+    try:
+        data["parsed"] = yaml.safe_load(data.get("policy_yaml") or "") or {}
+    except yaml.YAMLError:
+        data["parsed"] = {}
+    return data
 
 
 @app.get("/config")
@@ -1609,6 +2203,22 @@ async def costs(limit: int = Query(default=100, ge=1, le=500)) -> dict:
     }
 
 
+@app.get("/analytics")
+async def analytics(request: Request, period: str = Query(default="week")) -> dict:
+    if period not in {"day", "week", "month"}:
+        raise HTTPException(status_code=422, detail="period must be one of: day, week, month")
+    instance_role = (request.headers.get("x-agora-instance-role") or "").lower()
+    dept_filter = None
+    if instance_role not in {"owner", "admin"}:
+        dept_filter = _request_user_dept(request)
+    return summarize_analytics(
+        period,
+        user_id=current_user_id(),
+        agent_instance_id=current_agent_instance_id(),
+        workflow_dept=dept_filter,
+    )
+
+
 @app.get("/runs")
 async def runs(
     request: Request,
@@ -1629,7 +2239,12 @@ async def runs(
     if user_dept:
         all_runs = [r for r in all_runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
     
-    page = all_runs[offset:offset + limit + 1]
+    categories_cfg = load_categories(agent_instance_id=current_agent_instance_id())
+    escalation_state = load_escalation_state()
+    page = [
+        _annotate_run_record(item, categories_cfg=categories_cfg, escalation_state=escalation_state)
+        for item in all_runs[offset:offset + limit + 1]
+    ]
     has_more = len(page) > limit
     return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
 
@@ -1884,11 +2499,13 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
     config = await _require_run(graph, run_id)
     state = await graph.aget_state(config)
     detail = _run_detail(state.values, run_id)
+    detail["trace"] = list_traces(run_id=run_id, agent_instance_id=current_agent_instance_id(), limit=500)
     record = get_run_record(
         run_id, user_id=None, agent_instance_id=current_agent_instance_id()
     )
     _require_dept_access(request, record)
     if record is not None:
+        record = _annotate_run_record(record)
         detail.update({
             "status": record.get("status"),
             "classification": record.get("classification"),
@@ -1899,6 +2516,12 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
             "workflow_owner": record.get("workflow_owner"),
             "workflow_approver": record.get("workflow_approver"),
             "workflow_route_to": record.get("workflow_route_to") or [],
+            "sla_label": record.get("sla_label"),
+            "due_at": record.get("due_at"),
+            "overdue": record.get("overdue"),
+            "overdue_by_seconds": record.get("overdue_by_seconds"),
+            "escalated_at": record.get("escalated_at"),
+            "escalation_target": record.get("escalation_target"),
         })
     return detail
 
@@ -1921,6 +2544,24 @@ async def run(request: Request, email: EmailInput) -> RunResponse:
     response = _format(result, run_id)
     _record_response(response, email_input)
     return response
+
+
+@app.post("/run/stream")
+async def run_stream(request: Request, email: EmailInput) -> StreamingResponse:
+    graph = request.app.state.graph
+    run_id = str(uuid.uuid4())
+    submitted = email.model_dump()
+    submitted.pop("email_id", None)
+    submitted.pop("gmail_thread_id", None)
+    submitted.pop("agent_instance_id", None)
+    email_input = {**submitted, "agent_instance_id": current_agent_instance_id()}
+    result = await _invoke_graph(
+        graph,
+        {"email_input": email_input}, _thread_config(run_id)
+    )
+    response = _format(result, run_id)
+    _record_response(response, email_input)
+    return StreamingResponse(_stream_run_response(response), media_type="text/event-stream")
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)
@@ -1995,3 +2636,24 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     response = _format(result, run_id)
     _record_response(response)
     return response
+
+
+@app.post("/run/{run_id}/respond/stream")
+async def respond_stream(request: Request, run_id: str, body: RespondInput) -> StreamingResponse:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    try:
+        result = await _invoke_graph(
+            graph,
+            Command(resume=[{"type": "response", "args": body.feedback}]), config, reload_runtime_config=False
+        )
+        response = _format(result, run_id)
+        _record_response(response)
+    except Exception as exc:
+        response = _pending_response_after_decision_error(run_id, exc, "regenerate draft")
+        if response is None:
+            raise
+    return StreamingResponse(_stream_run_response(response), media_type="text/event-stream")

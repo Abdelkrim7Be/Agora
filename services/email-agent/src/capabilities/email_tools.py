@@ -39,19 +39,30 @@ def write_email(to: str, subject: str, content: str) -> str:
 
 
 @tool
-def forward_email(to: str, note: str = "") -> str:
-    """Forward the current email to a recipient."""
+def forward_email(to: str | list[str], note: str = "") -> str:
+    """Forward the current email to a recipient or list of recipients."""
     message_id = _message_id()
+    recipients = [to] if isinstance(to, str) else to
+    recipients = [r for r in recipients if r]
+
+    if not recipients:
+        return "No recipients provided to forward to."
+
     if settings.dry_run:
-        return f"Forwarded current email to {to} [dry run]"
+        return f"Forwarded current email to {', '.join(recipients)} [dry run]"
     _require_approval("forward_email")
 
     from src.gmail_client import forward_message
 
-    result = forward_message(message_id, to=to, note=note)
-    sent_id = result.get("id") if isinstance(result, dict) else None
-    return f"Forwarded current email to {to}" + (
-        f" (message id: {sent_id})" if sent_id else ""
+    sent_ids = []
+    for recipient in recipients:
+        result = forward_message(message_id, to=recipient, note=note)
+        sent_id = result.get("id") if isinstance(result, dict) else None
+        if sent_id:
+            sent_ids.append(sent_id)
+
+    return f"Forwarded current email to {', '.join(recipients)}" + (
+        f" (message ids: {', '.join(sent_ids)})" if sent_ids else ""
     )
 
 
@@ -86,7 +97,7 @@ class Done(BaseModel):
 TOOLS = [write_email, forward_email, reply_all, Done]
 TOOLS_PROMPT = """
 1. write_email(to, subject, content) - Send emails to specified recipients
-2. forward_email(to, note) - Forward the current email to a recipient
+2. forward_email(to, note) - Forward the current email to a recipient or list of recipients
 3. reply_all(content) - Reply to all participants on the current email thread
 4. Done - E-mail has been sent
 """

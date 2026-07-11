@@ -15,6 +15,8 @@ def test_alembic_scaffold_and_scripts_exist() -> None:
     assert (SERVICE_ROOT / "migrations" / "versions" / "0002_roles_directory.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0003_contacts.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0004_segments.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0007_trace_retention.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0008_dlq.py").is_file()
     assert (SERVICE_ROOT / "scripts" / "backup.sh").is_file()
     assert (SERVICE_ROOT / "scripts" / "restore.sh").is_file()
     assert (SERVICE_ROOT / "docs" / "backup-restore.md").is_file()
@@ -45,6 +47,20 @@ def test_roles_migration_covers_directory_table() -> None:
         'email_agent_roles_pkey',
         'email_agent_roles_instance_dept_idx',
         "'[]'::jsonb",
+    ):
+        assert marker in text
+
+
+
+
+def test_trace_migration_covers_langfuse_style_rows() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0007_trace_retention.py").read_text(encoding="utf-8")
+    for marker in (
+        '"llm_traces"',
+        '"started_at"',
+        '"finished_at"',
+        'llm_traces_event_id_key',
+        'llm_traces_run_timestamp_idx',
     ):
         assert marker in text
 
@@ -142,3 +158,15 @@ def test_entrypoints_apply_migrations_before_setup() -> None:
     for src in (api_src, poller_src):
         assert "upgrade_to_head()" in src
         assert src.index("upgrade_to_head()") < src.index("setup_run_registry()")
+
+
+
+def test_dlq_migration_covers_dead_letter_table() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0008_dlq.py").read_text(encoding="utf-8")
+    for marker in (
+        '"email_agent_dlq"',
+        '"requeue_token"',
+        '"payload"',
+        'email_agent_dlq_instance_status_timestamp_idx',
+    ):
+        assert marker in text
