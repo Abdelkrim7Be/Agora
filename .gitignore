@@ -74,3 +74,19 @@ services/saas-hardening.md
 # Local planning docs
 RAPPORT_AVANCEMENT.md
 security-phase3-plan.md
+
+# Local MCP config
+.mcp.json
+
+# Node / playwright test tooling (local, reinstallable)
+node_modules/
+package.json
+package-lock.json
+.playwright-mcp/
+.tmp_playwright_ui_check.js
+test-artifacts/
+
+# Design tool exports / UI screenshots (local)
+stitch-export/
+*-desktop.png
+agora-control-panel*.png
