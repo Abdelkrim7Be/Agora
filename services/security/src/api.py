@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 
 from src.authorize import authorize
 from src.config import settings
+from src.metrics import render_metrics
 from src.models import AuthorizeRequest, AuthorizeResponse, SanitizeRequest, SanitizeResponse
 from src.policy import SERVICE_ROOT
 from src.sanitize import sanitize
@@ -16,6 +18,11 @@ app = FastAPI(title="agora-security")
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics() -> PlainTextResponse:
+    return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/policy")
