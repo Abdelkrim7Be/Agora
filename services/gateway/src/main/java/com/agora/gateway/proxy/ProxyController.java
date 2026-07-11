@@ -6,9 +6,10 @@ import com.agora.gateway.audit.AuditService;
 import com.agora.gateway.config.GatewayProperties;
 import com.agora.gateway.user.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -17,10 +18,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestClient;
 
-import org.springframework.security.authentication.AnonymousAuthenticationToken;
-
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -75,7 +75,7 @@ public class ProxyController {
     }
 
     @RequestMapping("/api/agent/**")
-    public ResponseEntity<byte[]> proxy(HttpServletRequest request) throws IOException {
+    public void proxy(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String downstreamPath = request.getRequestURI();
         String upstreamPath = downstreamPath.startsWith(PREFIX)
                 ? downstreamPath.substring(PREFIX.length())
@@ -98,43 +98,39 @@ public class ProxyController {
                 .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
                 .findFirst().orElse(null) : null;
 
-        // Strip any client-supplied instance header; select and authorize the instance.
         String requestedAgentInstance = request.getHeader(AGENT_INSTANCE_HEADER);
         String agentInstance = selectAgentInstance(requestedAgentInstance, username, jwtRole);
         if (agentInstance == null) {
             auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
                     downstreamPath, null, "denied");
-            return forbidden();
+            writeForbidden(response);
+            return;
         }
 
-        // Resolve effective instance role for this caller on this instance.
-        // Unauthenticated requests (permitAll paths: webhook, oauth callback) skip instance-role
-        // enforcement — the gateway's SecurityConfig already controls who reaches the proxy.
         String effectiveRole;
         if (username == null) {
-            effectiveRole = "viewer"; // unauthenticated pass-through for permitAll paths
+            effectiveRole = "viewer";
         } else {
             Optional<String> effectiveRoleOpt = grantService.effectiveRole(agentInstance, username, jwtRole);
             if (effectiveRoleOpt.isEmpty()) {
                 auditService.record(username, jwtRole, "agent_instance_access", request.getMethod(),
                         downstreamPath, null, "denied");
-                return forbidden();
+                writeForbidden(response);
+                return;
             }
             effectiveRole = effectiveRoleOpt.get();
         }
 
-        // Enforce instance-level authorization tier for the requested path.
-        // Skip for unauthenticated requests (SecurityConfig already guards them).
         if (username != null) {
             String tier = deriveTier(downstreamPath, request.getMethod());
             if (!grantService.isAuthorized(effectiveRole, tier)) {
                 auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
                         downstreamPath, null, "denied");
-                return forbidden();
+                writeForbidden(response);
+                return;
             }
         }
 
-        // Forward safe headers (skip hop-by-hop and internally owned identity headers).
         var headerNames = request.getHeaderNames();
         while (headerNames.hasMoreElements()) {
             String name = headerNames.nextElement();
@@ -156,25 +152,34 @@ public class ProxyController {
             spec = spec.contentType(MediaType.parseMediaType(contentType)).body(body);
         }
 
-        return spec.exchange((req, resp) -> {
-            byte[] responseBody = resp.getBody().readAllBytes();
+        spec.exchange((req, resp) -> {
             int status = resp.getStatusCode().value();
 
             auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
                     downstreamPath, status, "forwarded");
 
-            return ResponseEntity
-                    .status(resp.getStatusCode())
-                    .contentType(resp.getHeaders().getContentType() != null
-                            ? resp.getHeaders().getContentType()
-                            : MediaType.APPLICATION_OCTET_STREAM)
-                    .body(responseBody);
+            response.setStatus(status);
+            MediaType upstreamContentType = resp.getHeaders().getContentType();
+            response.setContentType((upstreamContentType != null
+                    ? upstreamContentType
+                    : MediaType.APPLICATION_OCTET_STREAM).toString());
+            resp.getHeaders().forEach((name, values) -> {
+                if (HOP_BY_HOP.contains(name.toLowerCase())) {
+                    return;
+                }
+                for (String value : values) {
+                    response.addHeader(name, value);
+                }
+            });
+            StreamUtils.copy(resp.getBody(), response.getOutputStream());
+            response.flushBuffer();
+            return null;
         });
     }
 
     @RequestMapping("/health")
-    public ResponseEntity<Object> health() {
-        return ResponseEntity.ok(java.util.Map.of("status", "ok"));
+    public java.util.Map<String, String> health() {
+        return java.util.Map.of("status", "ok");
     }
 
     private String selectAgentInstance(String requested, String username, String role) {
@@ -189,13 +194,13 @@ public class ProxyController {
 
     private String deriveTier(String path, String method) {
         if ("GET".equals(method)) return "read";
+        if ("POST".equals(method) && ("/api/agent/run".equals(path) || "/api/agent/run/stream".equals(path))) return "write";
         for (String prefix : WRITE_PATH_PREFIXES) {
             if (path.startsWith(prefix)) return "write";
         }
         for (String prefix : APPROVE_PATH_PREFIXES) {
             if (path.startsWith(prefix)) return "approve";
         }
-        // Configuration-style paths not enumerated default to write tier for mutations.
         return "write";
     }
 
@@ -205,7 +210,7 @@ public class ProxyController {
         if ("GET".equals(method) && path.startsWith("/api/agent/run")) {
             return "read";
         }
-        if ("POST".equals(method) && "/api/agent/run".equals(path)) {
+        if ("POST".equals(method) && ("/api/agent/run".equals(path) || "/api/agent/run/stream".equals(path))) {
             return "run";
         }
         Matcher m = VERB_PATTERN.matcher(path);
@@ -215,9 +220,10 @@ public class ProxyController {
         return method + " " + path;
     }
 
-    private ResponseEntity<byte[]> forbidden() {
-        return ResponseEntity.status(403)
-                .contentType(MediaType.APPLICATION_JSON)
-                .body("{\"error\":\"forbidden\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    private void writeForbidden(HttpServletResponse response) throws IOException {
+        response.setStatus(403);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.getOutputStream().write("{\"error\":\"forbidden\"}".getBytes(StandardCharsets.UTF_8));
+        response.flushBuffer();
     }
 }
