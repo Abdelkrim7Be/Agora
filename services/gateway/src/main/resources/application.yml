@@ -1,6 +1,8 @@
 spring:
   application:
     name: gateway
+  config:
+    import: optional:configtree:${GATEWAY_SECRET_DIR:/run/secrets/agora-gateway/}
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:agora}
     username: ${POSTGRES_USER:agora}

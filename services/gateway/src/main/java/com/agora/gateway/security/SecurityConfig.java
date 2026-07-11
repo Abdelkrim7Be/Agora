@@ -66,7 +66,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasRole("OWNER")
+                .requestMatchers("/api/agent/campaigns/**").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/stream").hasAnyRole("OWNER", "VIEWER")
                 // approve/reject/respond: VIEWER stays in the gate so a user whose global JWT
                 // role is viewer but holds a per-instance approver grant can still reach
                 // ProxyController, which enforces the real (instance-level) authorization.
@@ -75,6 +77,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasAnyRole("OWNER", "VIEWER", "APPROVER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER", "APPROVER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasAnyRole("OWNER", "VIEWER", "APPROVER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond/stream").hasAnyRole("OWNER", "VIEWER", "APPROVER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/sync/status").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync/pause").hasRole("OWNER")
@@ -101,12 +104,19 @@ public class SecurityConfig {
                 // used by the Docker healthcheck unauthenticated). This is the proxied
                 // email-agent System Health aggregate for the browser control panel.
                 .requestMatchers(HttpMethod.GET, "/api/agent/health").hasAnyRole("OWNER", "VIEWER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/metrics").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/dlq").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/dlq/*/requeue").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/roles").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/roles").hasRole("OWNER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/roles/*").hasRole("OWNER")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/roles/*").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/categories").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/categories").hasRole("OWNER")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/categories/*").hasRole("OWNER")
+                .requestMatchers(HttpMethod.DELETE, "/api/agent/categories/*").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/categories/test-match").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/categories/*/duplicate").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/templates").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/contacts").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/contacts").hasRole("OWNER")
@@ -124,6 +134,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/suggestions/*/promote").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/rule-toggle").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/section-toggle").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/rules/rule").hasRole("OWNER")
+                .requestMatchers(HttpMethod.POST, "/api/agent/rules/rule-delete").hasRole("OWNER")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/rules/section-config").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER")
                 .requestMatchers(HttpMethod.GET, "/audit").hasRole("OWNER")
                 // Default-deny: anything not explicitly allowed above is rejected, so a future

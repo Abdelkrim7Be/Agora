@@ -148,6 +148,18 @@ class RbacTest {
     }
 
     @Test
+    void viewer_cannot_prepare_campaign_403() throws Exception {
+        mockMvc.perform(post("/api/agent/campaigns/prepare")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"segment_id\":\"team\",\"template_name\":\"announce\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/campaigns/prepare")));
+    }
+
+    @Test
     void viewer_cannot_sync_403() throws Exception {
         mockMvc.perform(post("/api/agent/sync?limit=7")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
@@ -285,6 +297,183 @@ class RbacTest {
                 .andExpect(jsonPath("$.error").value("forbidden"));
 
         wireMock.verify(0, putRequestedFor(urlEqualTo("/categories")));
+    }
+
+    @Test
+    void viewer_cannot_edit_category_403() throws Exception {
+        mockMvc.perform(put("/api/agent/categories/support")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"display_name\":\"Support\",\"priority\":\"normal\",\"policy\":\"notify\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/categories/support")));
+    }
+
+    @Test
+    void owner_can_edit_category() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/categories/support"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"parsed\":{}}")));
+
+        mockMvc.perform(put("/api/agent/categories/support")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"display_name\":\"Support\",\"priority\":\"normal\",\"policy\":\"notify\"}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/categories/support")));
+    }
+
+    @Test
+    void viewer_cannot_add_rule_403() throws Exception {
+        mockMvc.perform(post("/api/agent/rules/rule")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"archive promos\",\"then\":{\"archive\":true}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/rules/rule")));
+    }
+
+    @Test
+    void owner_can_add_rule() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/rules/rule"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"parsed\":{}}")));
+
+        mockMvc.perform(post("/api/agent/rules/rule")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"archive promos\",\"then\":{\"archive\":true}}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/rules/rule")));
+    }
+
+    @Test
+    void owner_can_update_section_config() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/rules/section-config"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"parsed\":{}}")));
+
+        mockMvc.perform(put("/api/agent/rules/section-config")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"section\":\"digest\",\"config\":{\"hour\":9}}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/rules/section-config")));
+    }
+
+    @Test
+    void viewer_cannot_delete_rule_403() throws Exception {
+        mockMvc.perform(post("/api/agent/rules/rule-delete")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"archive promotions\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/rules/rule-delete")));
+    }
+
+    @Test
+    void viewer_cannot_delete_category_403() throws Exception {
+        mockMvc.perform(delete("/api/agent/categories/support")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, deleteRequestedFor(urlPathEqualTo("/categories/support")));
+    }
+
+    @Test
+    void owner_can_delete_category() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.delete(urlPathEqualTo("/categories/support"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"parsed\":{}}")));
+
+        mockMvc.perform(delete("/api/agent/categories/support")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, deleteRequestedFor(urlPathEqualTo("/categories/support")));
+    }
+
+    @Test
+    void viewer_cannot_duplicate_category_403() throws Exception {
+        mockMvc.perform(post("/api/agent/categories/support/duplicate")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/categories/support/duplicate")));
+    }
+
+    @Test
+    void owner_can_duplicate_category() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/categories/support/duplicate"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"parsed\":{},\"new_name\":\"support_copy\"}")));
+
+        mockMvc.perform(post("/api/agent/categories/support/duplicate")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/categories/support/duplicate")));
+    }
+
+    @Test
+    void viewer_cannot_test_match_category_403() throws Exception {
+        mockMvc.perform(post("/api/agent/categories/test-match")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"author\":\"a@b.com\",\"subject\":\"hi\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/categories/test-match")));
+    }
+
+    @Test
+    void owner_can_test_match_category() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/categories/test-match"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"matched\":false}")));
+
+        mockMvc.perform(post("/api/agent/categories/test-match")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"author\":\"a@b.com\",\"subject\":\"hi\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.matched").value(false));
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/categories/test-match")));
+    }
+
+    @Test
+    void anonymous_cannot_test_match_category_401() throws Exception {
+        mockMvc.perform(post("/api/agent/categories/test-match")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"author\":\"a@b.com\",\"subject\":\"hi\"}"))
+                .andExpect(status().isUnauthorized());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/categories/test-match")));
     }
 
     @Test
