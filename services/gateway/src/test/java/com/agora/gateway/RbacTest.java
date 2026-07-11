@@ -748,4 +748,65 @@ class RbacTest {
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/unknownverb")));
     }
+
+    @Test
+    void viewer_can_read_analytics() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/analytics"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"handled\":0}")));
+
+        mockMvc.perform(get("/api/agent/analytics?period=week")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/analytics")));
+    }
+
+    @Test
+    void owner_can_update_alerts_settings() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/alerts/settings"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ok\":true}")));
+
+        mockMvc.perform(put("/api/agent/alerts/settings")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/alerts/settings")));
+    }
+
+    @Test
+    void viewer_cannot_run_retention_403() throws Exception {
+        mockMvc.perform(post("/api/agent/retention/run")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/retention/run")));
+    }
+
+    @Test
+    void owner_can_claim_approval() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/inbox/abc/claim"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ok\":true}")));
+
+        mockMvc.perform(post("/api/agent/inbox/abc/claim")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/inbox/abc/claim")));
+    }
 }
