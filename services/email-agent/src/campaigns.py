@@ -1,4 +1,4 @@
-"""Outbound broadcast campaigns: group directory + rich templates + rendering.
+"""Outbound broadcast campaigns: audience guard + segment-backed rendering.
 
 Campaigns are owner-initiated, approval-gated broadcasts. Unlike inbound
 categories, they never touch the triage graph — they render one personalized
@@ -18,7 +18,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from src.config import SERVICE_ROOT
-from src.contacts import Contact, get_segment, resolve_segment
+from src.contacts import AUDIENCE_VALUES, Audience, Contact, get_segment, resolve_segment
 
 DEFAULT_CAMPAIGNS_PATH = SERVICE_ROOT / "campaigns.yaml"
 
@@ -60,6 +60,46 @@ class CampaignTemplate(BaseModel):
     subject: str = Field(min_length=1)
     body_markdown: str = Field(min_length=1)
     variables: list[str] = Field(default_factory=list)
+    audience: list[Audience] = Field(default_factory=list)
+    category: str | None = None
+
+    @field_validator("variables")
+    @classmethod
+    def _clean_variables(cls, value: list[str]) -> list[str]:
+        variables: list[str] = []
+        seen: set[str] = set()
+        for item in value or []:
+            cleaned = str(item).strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            variables.append(cleaned)
+        return variables
+
+    @field_validator("audience")
+    @classmethod
+    def _clean_audience(cls, value: list[str]) -> list[str]:
+        audiences: list[str] = []
+        seen: set[str] = set()
+        for item in value or []:
+            cleaned = str(item).strip().lower()
+            if not cleaned or cleaned in seen:
+                continue
+            if cleaned not in AUDIENCE_VALUES:
+                raise ValueError(f"audience must be one of: {', '.join(AUDIENCE_VALUES)}")
+            seen.add(cleaned)
+            audiences.append(cleaned)
+        if not audiences:
+            raise ValueError("audience must contain at least one allowed audience")
+        return audiences
+
+    @field_validator("category")
+    @classmethod
+    def _clean_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        return cleaned or None
 
 
 class CampaignsConfig(BaseModel):
@@ -164,17 +204,34 @@ class RenderedEmail(BaseModel):
     unresolved: list[str] = Field(default_factory=list)
 
 
+class MissingVariableWarning(BaseModel):
+    email: str
+    name: str | None = None
+    unresolved: list[str] = Field(default_factory=list)
+
+
+class AudienceGuardResult(BaseModel):
+    allowed: bool
+    segment_audiences: list[Audience] = Field(default_factory=list)
+    template_audience: list[Audience] = Field(default_factory=list)
+    reason: str | None = None
+
+
 def _member_from_contact(contact: Contact) -> GroupMember:
     return GroupMember(email=contact.email, name=contact.name, fields=contact.fields)
+
+
+def contacts_for_segment(segment_id: str, agent_instance_id: str | None = None) -> list[Contact]:
+    segment = get_segment(segment_id, agent_instance_id=agent_instance_id)
+    if segment is None:
+        return []
+    return resolve_segment(segment, agent_instance_id=agent_instance_id)
 
 
 def members_for_group(group: Group, agent_instance_id: str | None = None) -> list[GroupMember]:
     if group.members:
         return group.members
-    segment = get_segment(group.segment_id or group.id, agent_instance_id=agent_instance_id)
-    if segment is None:
-        return []
-    contacts = resolve_segment(segment, agent_instance_id=agent_instance_id)
+    contacts = contacts_for_segment(group.segment_id or group.id, agent_instance_id=agent_instance_id)
     return [_member_from_contact(contact) for contact in contacts]
 
 
@@ -196,3 +253,40 @@ def render_for_member(template: CampaignTemplate, member: GroupMember) -> Render
 
 def render_campaign(group: Group, template: CampaignTemplate, agent_instance_id: str | None = None) -> list[RenderedEmail]:
     return [render_for_member(template, member) for member in members_for_group(group, agent_instance_id=agent_instance_id)]
+
+
+def render_campaign_for_segment(segment_id: str, template: CampaignTemplate, agent_instance_id: str | None = None) -> list[RenderedEmail]:
+    contacts = contacts_for_segment(segment_id, agent_instance_id=agent_instance_id)
+    return [render_for_member(template, _member_from_contact(contact)) for contact in contacts]
+
+
+def audience_guard(template: CampaignTemplate, contacts: list[Contact], segment_name: str | None = None) -> AudienceGuardResult:
+    template_audience = sorted(set(template.audience))
+    segment_audiences = sorted({contact.audience for contact in contacts})
+    if not template_audience or not segment_audiences or not set(template_audience).isdisjoint(segment_audiences):
+        return AudienceGuardResult(
+            allowed=True,
+            segment_audiences=segment_audiences,
+            template_audience=template_audience,
+        )
+
+    expected = ", ".join(template_audience)
+    actual = ", ".join(segment_audiences)
+    target = f"le segment « {segment_name} »" if segment_name else "ce segment"
+    return AudienceGuardResult(
+        allowed=False,
+        segment_audiences=segment_audiences,
+        template_audience=template_audience,
+        reason=(
+            f"Audience incompatible : le modèle « {template.name} » cible {expected} "
+            f"alors que {target} contient {actual}."
+        ),
+    )
+
+
+def missing_variable_warnings(rendered: list[RenderedEmail]) -> list[MissingVariableWarning]:
+    return [
+        MissingVariableWarning(email=item.email, name=item.name, unresolved=item.unresolved)
+        for item in rendered
+        if item.unresolved
+    ]

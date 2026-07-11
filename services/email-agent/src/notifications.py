@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 
 from src.config import settings
@@ -43,6 +44,67 @@ def _action_label(action_name: str | None, workflow_owner: str | None) -> str:
     return label
 
 
+def _resolve_escalation_target(workflow_approver: str | None, workflow_owner: str | None) -> str | None:
+    for candidate in (workflow_approver, workflow_owner):
+        if not candidate:
+            continue
+        cleaned = candidate.strip()
+        if not cleaned:
+            continue
+        if "@" in cleaned:
+            return cleaned.lower()
+        resolved = resolve_role(cleaned)
+        if resolved and resolved.primary_email:
+            return resolved.primary_email
+    return None
+
+
+
+
+def _resolve_admin_recipient(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if "@" in cleaned:
+        return cleaned.lower()
+    resolved = resolve_role(cleaned)
+    if resolved and resolved.primary_email:
+        return resolved.primary_email
+    return None
+
+
+def _send_system_notification(recipient: str | None, subject: str, body: str) -> bool:
+    if not settings.notify_enabled or not recipient:
+        return False
+    try:
+        send_message(to=recipient, subject=subject, body=body)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("notifications: failed to send system mail to %s: %s", recipient, exc)
+        return False
+
+
+def _run_reference(run_id: str) -> str:
+    return (
+        f"{settings.notify_app_base_url.rstrip('/')}/#run/{run_id}"
+        if settings.notify_app_base_url
+        else run_id
+    )
+
+
+def _format_overdue_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    if hours and minutes:
+        return f"{hours} h {minutes} min"
+    if hours:
+        return f"{hours} h"
+    return f"{minutes or 1} min"
+
+
 def _pending_action_name(result: dict) -> str | None:
     interrupts = result.get("__interrupt__") or []
     if not interrupts:
@@ -70,17 +132,46 @@ def notify_pending_approval(run_id: str, email_input: dict, result: dict) -> Non
             return
         label = _action_label(_pending_action_name(result), result.get("workflow_owner"))
         subject = f"Action requise : {label}"
-        reference = (
-            f"{settings.notify_app_base_url.rstrip('/')}/#run/{run_id}"
-            if settings.notify_app_base_url
-            else run_id
-        )
+        reference = _run_reference(run_id)
         body = (
             f"Une action est en attente de validation : {label} pour l'email "
             f"« {email_input.get('subject') or '(sans objet)'} » de "
             f"{email_input.get('author') or 'expéditeur inconnu'}.\n\n"
             f"Ouvrez le tableau de bord pour valider : {reference}"
         )
-        send_message(to=recipient, subject=subject, body=body)
+        _send_system_notification(recipient, subject, body)
     except Exception as exc:  # pragma: no cover - defensive, see docstring
         logger.warning("notifications: failed to notify for run %s: %s", run_id, exc)
+
+
+def notify_overdue_approval(run_id: str, run: dict, overdue_by_seconds: int, due_at: str | None) -> str | None:
+    """Notify the escalation target once a pending approval is overdue."""
+    if not settings.notify_enabled:
+        return None
+    recipient = _resolve_escalation_target(run.get("workflow_approver"), run.get("workflow_owner"))
+    if not recipient:
+        return None
+    try:
+        subject = "Escalade SLA : validation en retard"
+        overdue_for = _format_overdue_duration(overdue_by_seconds)
+        due_line = f"Échéance : {due_at}.\n" if due_at else ""
+        body = (
+            f"La validation du run {run_id} est en retard pour l'email "
+            f"« {run.get('subject') or '(sans objet)'} » de "
+            f"{run.get('author') or 'expéditeur inconnu'}.\n"
+            f"Retard cumulé : {overdue_for}.\n"
+            f"{due_line}Veuillez traiter cette validation dans le tableau de bord : {_run_reference(run_id)}"
+        )
+        if _send_system_notification(recipient, subject, body):
+            return recipient
+        return None
+    except Exception as exc:  # pragma: no cover - defensive, see docstring
+        logger.warning("notifications: failed to escalate run %s: %s", run_id, exc)
+        return None
+
+
+
+def notify_admin_alert(recipient_hint: str | None, subject: str, body: str) -> bool:
+    """Send a French, body-safe admin alert through the shared notification channel."""
+    recipient = _resolve_admin_recipient(recipient_hint)
+    return _send_system_notification(recipient, subject, body)

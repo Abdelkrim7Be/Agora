@@ -9,6 +9,9 @@ groups:
   segment_id: clients_demo
 templates:
 - name: internal_announcement
+  audience:
+  - employee
+  category: communication_interne
   subject: 'Information interne : {{name}}'
   body_markdown: |
     ## Bonjour {{name}},
@@ -28,6 +31,10 @@ templates:
   - name
   - dept
 - name: client_update
+  audience:
+  - client
+  - partner
+  category: relation_client
   subject: 'Nouveautés pour {{company}}'
   body_markdown: |
     ## Bonjour {{name}},

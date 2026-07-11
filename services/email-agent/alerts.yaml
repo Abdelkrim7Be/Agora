@@ -1,0 +1,6 @@
+enabled: false
+admin_recipient: ""
+component_alerts: true
+token_cap_enabled: false
+daily_token_cap: 0
+token_cap_threshold: 0.8

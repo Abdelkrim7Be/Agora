@@ -18,7 +18,13 @@ target_metadata = None
 
 
 def _database_url() -> str:
-    return os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    # The app connects with psycopg (v3) directly everywhere else. SQLAlchemy's
+    # engine_from_config defaults a bare "postgresql://" URL to the psycopg2
+    # dialect, which isn't installed here — force the psycopg3 dialect instead.
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
 
 
 def run_migrations_offline() -> None:

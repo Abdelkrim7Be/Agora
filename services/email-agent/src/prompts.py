@@ -70,7 +70,39 @@ When handling emails, follow these steps:
 Write in this person's established voice:
 {writing_style}
 </ Writing Style >
-"""
+{workflow_instructions_section}"""
+
+
+def format_workflow_instructions(instructions: dict | None) -> str:
+    """Render a workflow's structured instructions into a prompt-ready block.
+
+    Returns "" when there are no instructions, so the section disappears
+    cleanly for workflows/categories that don't define any (back-compat).
+    """
+    if not instructions:
+        return ""
+    lines = []
+    if instructions.get("sla"):
+        lines.append(f"- SLA: {instructions['sla']}")
+    required_data = instructions.get("required_data") or []
+    if required_data:
+        lines.append(f"- Required data before answering: {', '.join(required_data)}")
+    if instructions.get("escalation"):
+        lines.append(f"- Escalation rule: {instructions['escalation']}")
+    blocked_cases = instructions.get("blocked_cases") or []
+    if blocked_cases:
+        lines.append(f"- Blocked cases (do not draft a final answer, escalate/notify instead): {', '.join(blocked_cases)}")
+    ask_for_missing = instructions.get("ask_for_missing")
+    if ask_for_missing:
+        prompt = (
+            ask_for_missing
+            if isinstance(ask_for_missing, str)
+            else "Ask the sender for the missing required data before drafting a final answer."
+        )
+        lines.append(f"- If required data is missing: {prompt}")
+    if not lines:
+        return ""
+    return "\n< Workflow Instructions >\n" + "\n".join(lines) + "\n</ Workflow Instructions >\n"
 
 # Tool descriptions now come from each capability module's TOOLS_PROMPT,
 # assembled at startup by src.capabilities.load_capabilities.
