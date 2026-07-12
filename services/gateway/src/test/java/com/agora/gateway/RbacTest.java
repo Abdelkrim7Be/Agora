@@ -809,4 +809,26 @@ class RbacTest {
 
         wireMock.verify(1, postRequestedFor(urlPathEqualTo("/inbox/abc/claim")));
     }
+
+    @Test
+    void admin_can_list_agent_instances() throws Exception {
+        mockMvc.perform(get("/agent-instances")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void admin_can_read_inbox() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[]")));
+
+        mockMvc.perform(get("/api/agent/inbox?limit=25")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox")));
+    }
 }
