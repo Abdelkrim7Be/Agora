@@ -66,7 +66,7 @@ public class AgentRegistryService {
     }
 
     public boolean canView(AgentInstance instance, String username, String role) {
-        if ("owner".equals(role)) return true;
+        if ("owner".equals(role) || "admin".equals(role)) return true;
         if (username != null && username.equals(instance.getCreatedBy())) return true;
         return Arrays.stream(instance.getAllowedRoles().split(","))
                 .map(String::trim)
