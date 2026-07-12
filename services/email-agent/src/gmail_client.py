@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html as _html
 from email.message import EmailMessage
 from email.utils import getaddresses
 
@@ -216,15 +217,38 @@ def _encode_message(message: EmailMessage) -> str:
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
 
-def _send_email_message(
+def render_rich_email_html(body: str) -> str:
+    """Render agent-authored email text/markdown into Gmail-safe HTML.
+
+    The plain-text body is still sent as the canonical fallback. The HTML
+    alternative preserves paragraphs, line breaks, lists, and lightweight
+    markdown so Gmail does not display the draft as one dense paragraph.
+    """
+    try:
+        import markdown as _md
+
+        rendered = _md.markdown(body, extensions=["extra", "sane_lists", "nl2br"])
+    except Exception:  # pragma: no cover - defensive fallback if markdown is absent
+        paragraphs = [part.strip() for part in body.split("\n\n") if part.strip()]
+        rendered = "".join(
+            "<p>" + _html.escape(part).replace("\n", "<br>") + "</p>"
+            for part in paragraphs
+        )
+    return (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+        'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0 auto;">'
+        f"{rendered}"
+        "</div>"
+    )
+
+
+def _build_email_message(
     to: str | list[str],
     subject: str,
     body: str,
-    thread_id: str | None = None,
     extra_headers: dict[str, str] | None = None,
-    resource=None,
-) -> dict:
-    resource = resource or gmail_resource()
+    rich: bool = True,
+) -> EmailMessage:
     recipients = to if isinstance(to, list) else [to]
     message = EmailMessage()
     message["To"] = ", ".join(recipients)
@@ -233,6 +257,22 @@ def _send_email_message(
         if value:
             message[name] = value
     message.set_content(body)
+    if rich:
+        message.add_alternative(render_rich_email_html(body), subtype="html")
+    return message
+
+
+def _send_email_message(
+    to: str | list[str],
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    resource=None,
+    rich: bool = True,
+) -> dict:
+    resource = resource or gmail_resource()
+    message = _build_email_message(to, subject, body, extra_headers=extra_headers, rich=rich)
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
         gmail_message["threadId"] = thread_id
@@ -242,6 +282,13 @@ def _send_email_message(
         .send(userId="me", body=gmail_message)
         .execute()
     )
+
+
+def send_message(to: str, subject: str, body: str, resource=None) -> dict:
+    """Send an agent-authored email with plain-text and HTML alternatives."""
+    if settings.dry_run:
+        return _dry_run_result("send_message", to=to, subject=subject)
+    return _send_email_message(to=to, subject=subject, body=body, resource=resource, rich=True)
 
 
 def send_html_message(
@@ -421,10 +468,7 @@ def create_draft(
             thread_id=thread_id,
         )
     resource = resource or gmail_resource()
-    message = EmailMessage()
-    message["To"] = to
-    message["Subject"] = subject
-    message.set_content(body)
+    message = _build_email_message(to, subject, body, rich=True)
     draft_message = {"raw": _encode_message(message)}
     if thread_id:
         draft_message["threadId"] = thread_id

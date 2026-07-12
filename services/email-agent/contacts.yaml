@@ -1,0 +1,31 @@
+contacts:
+- email: abdelkrimbellagnech99@gmail.com
+  name: Abdelkrim Bellagnech
+  audience: employee
+  fields:
+    dept: HR
+  tags:
+  - hr
+  - approver
+  active: true
+- email: redacted@example.com
+  name: Test User
+  audience: employee
+  fields:
+    dept: Finance
+  tags:
+  - finance
+  - approver
+  active: true
+segments:
+- id: team_internal
+  name: Équipe interne
+  members:
+  - abdelkrimbellagnech99@gmail.com
+  - redacted@example.com
+  match: {}
+- id: clients_demo
+  name: Clients (démo)
+  members:
+  - abdelkrimbellagnech99@gmail.com
+  match: {}

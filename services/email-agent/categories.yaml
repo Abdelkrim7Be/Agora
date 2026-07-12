@@ -53,8 +53,8 @@ categories:
     - internship
     - cv
     labels: []
-  template: null
-  policy: notify
+  template: candidate_ack_reply
+  policy: auto_draft
   labels: []
 - name: finance_requests
   display_name: Finance Requests
@@ -72,8 +72,8 @@ categories:
     - payment
     - paiement
     labels: []
-  template: null
-  policy: notify
+  template: finance_request_reply
+  policy: auto_draft
   labels: []
 - name: conge
   display_name: Demande de congé
@@ -136,8 +136,8 @@ categories:
     - pricing
     - proposition
     labels: []
-  template: null
-  policy: notify
+  template: quote_request_reply
+  policy: auto_draft
   labels: []
 - name: newsletter
   display_name: Newsletter
@@ -195,6 +195,56 @@ templates:
 
     Pourriez-vous m'indiquer vos disponibilités ainsi que le format souhaité
     (présentiel ou visioconférence) ?
+
+    Bien cordialement,
+  variables:
+  - name
+- name: candidate_ack_reply
+  subject: null
+  body: |
+    Bonjour {{name}},
+
+    Merci pour votre candidature et l'intérêt porté à notre équipe. Votre dossier
+    a bien été reçu et sera étudié avec attention.
+
+    Pour faciliter le traitement, pouvez-vous confirmer le poste ou le type de stage
+    visé, vos dates de disponibilité, et joindre votre CV à jour si ce n'est pas
+    déjà fait ?
+
+    Nous revenons vers vous dès qu'une prochaine étape est définie.
+
+    Bien cordialement,
+  variables:
+  - name
+- name: finance_request_reply
+  subject: null
+  body: |
+    Bonjour {{name}},
+
+    Merci pour votre message. Votre demande liée à la facturation ou au paiement a
+    bien été transmise au suivi financier.
+
+    Pour éviter tout aller-retour, pouvez-vous confirmer le numéro de facture, le
+    montant concerné, la société de facturation et la date d'échéance ou de paiement
+    attendue ?
+
+    Nous vous répondons dès vérification des éléments.
+
+    Bien cordialement,
+  variables:
+  - name
+- name: quote_request_reply
+  subject: null
+  body: |
+    Bonjour {{name}},
+
+    Merci pour votre demande de devis. Nous avons bien reçu votre besoin et préparons
+    une réponse adaptée.
+
+    Pouvez-vous nous préciser le périmètre attendu, le volume estimé, l'échéance
+    souhaitée et toute contrainte particulière à prendre en compte ?
+
+    Nous revenons vers vous avec une proposition structurée dans les meilleurs délais.
 
     Bien cordialement,
   variables:

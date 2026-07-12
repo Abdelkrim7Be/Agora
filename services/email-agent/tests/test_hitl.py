@@ -206,7 +206,15 @@ def test_reject_can_record_rule_suggestion(fake_llms, respond_email, monkeypatch
 
     assert calls == [{
         "rules": rules_marker,
-        "email_input": respond_email,
+        "email_input": {
+            **respond_email,
+            "category": None,
+            "category_display_name": None,
+            "priority": "normal",
+            "workflow_owner": None,
+            "workflow_approver": None,
+            "workflow_instructions": None,
+        },
         "correction_type": "ignored_draft",
         "details": {"tool": "write_email"},
     }]

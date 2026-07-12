@@ -13,7 +13,7 @@ from typing import Any
 
 from src.config import SERVICE_ROOT, settings
 from src.gmail_client import GMAIL_SCOPES
-from src.token_store import delete_token, prepared_token_file
+from src.token_store import active_master_key_secret, delete_token, prepared_token_file
 from src.tenant import normalize_agent_instance_id, normalize_user_id
 
 try:  # pragma: no cover - exercised through monkeypatched fakes in unit tests.
@@ -37,9 +37,9 @@ def _unb64url(data: str) -> bytes:
 
 
 def _state_secret() -> str:
-    secret = settings.gmail_oauth_state_secret or settings.token_encryption_key
+    secret = settings.gmail_oauth_state_secret or active_master_key_secret() or settings.token_encryption_key
     if not secret:
-        raise RuntimeError("GMAIL_OAUTH_STATE_SECRET or AGENT_TOKEN_ENCRYPTION_KEY is required")
+        raise RuntimeError("GMAIL_OAUTH_STATE_SECRET or a token encryption key is required")
     return secret
 
 

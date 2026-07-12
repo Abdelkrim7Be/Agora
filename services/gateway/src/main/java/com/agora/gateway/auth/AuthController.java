@@ -37,7 +37,9 @@ public class AuthController {
     @PostMapping("/auth/login")
     public ResponseEntity<?> login(@Valid @RequestBody LoginRequest req) {
         Optional<AppUser> user = users.findByUsername(req.username());
-        if (user.isEmpty() || !passwordEncoder.matches(req.password(), user.get().getPasswordHash())) {
+        boolean passwordOk = user.isPresent()
+                && passwordEncoder.matches(req.password(), user.get().getPasswordHash());
+        if (!passwordOk || !user.get().isEnabled()) {
             auditService.record(req.username(), null, "login", "POST", "/auth/login", null, "failure");
             return ResponseEntity.status(401).body(Map.of("error", "invalid credentials"));
         }

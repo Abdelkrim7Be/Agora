@@ -25,20 +25,7 @@ def setup_instance_config() -> None:
     with _schema_lock:
         if _schema_ready:
             return
-        with _connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS email_agent_instance_config (
-                        agent_instance_id TEXT NOT NULL,
-                        config_kind TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        revision BIGINT NOT NULL DEFAULT 1,
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        PRIMARY KEY (agent_instance_id, config_kind)
-                    )
-                    """
-                )
+        # Postgres schema is owned by Alembic migrations. Local file mode stays unchanged.
         _schema_ready = True
 
 

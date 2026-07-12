@@ -33,6 +33,12 @@ services:
       network: host
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
+      SECURITY_SECRET_MANAGER_BACKEND: ${SECURITY_SECRET_MANAGER_BACKEND:-disabled}
+      SECURITY_SECRET_MANAGER_REQUIRED: ${SECURITY_SECRET_MANAGER_REQUIRED:-false}
+      SECURITY_SECRET_BUNDLE_PATH: ${SECURITY_SECRET_BUNDLE_PATH:-}
+      SECURITY_SECRET_MANAGER_URL: ${SECURITY_SECRET_MANAGER_URL:-}
+      SECURITY_SECRET_MANAGER_PATH: ${SECURITY_SECRET_MANAGER_PATH:-}
+      SECURITY_SECRET_MANAGER_TOKEN_FILE: ${SECURITY_SECRET_MANAGER_TOKEN_FILE:-}
       SECURITY_API_HOST: 0.0.0.0
       SECURITY_API_PORT: 8001
       SECURITY_POLICY_PATH: policy.yaml
@@ -51,6 +57,17 @@ services:
     networks:
       - agora
 
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - ./litellm.config.yaml:/app/config.yaml:ro
+    networks:
+      - agora
+
   email-agent:
     build:
       context: ../services/email-agent
@@ -59,6 +76,13 @@ services:
       - ../services/email-agent/.env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_SECRET_MANAGER_BACKEND: ${AGENT_SECRET_MANAGER_BACKEND:-disabled}
+      AGENT_SECRET_MANAGER_REQUIRED: ${AGENT_SECRET_MANAGER_REQUIRED:-false}
+      AGENT_SECRET_BUNDLE_PATH: ${AGENT_SECRET_BUNDLE_PATH:-}
+      AGENT_SECRET_MANAGER_URL: ${AGENT_SECRET_MANAGER_URL:-}
+      AGENT_SECRET_MANAGER_PATH: ${AGENT_SECRET_MANAGER_PATH:-}
+      AGENT_SECRET_MANAGER_TOKEN_FILE: ${AGENT_SECRET_MANAGER_TOKEN_FILE:-}
+      AGENT_LLM_PROFILE: ${AGENT_LLM_PROFILE:-dev}
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
       TENANT_MODE: ${TENANT_MODE:-single}
@@ -94,6 +118,8 @@ services:
         condition: service_healthy
       security:
         condition: service_healthy
+      litellm:
+        condition: service_started
     networks:
       - agora
 
@@ -105,11 +131,14 @@ services:
     ports:
       - "8080:8080"
     environment:
+      GATEWAY_SECRET_DIR: ${GATEWAY_SECRET_DIR:-/run/secrets/agora-gateway/}
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
       GATEWAY_OWNER_USERNAME: ${GATEWAY_OWNER_USERNAME}
       GATEWAY_OWNER_PASSWORD: ${GATEWAY_OWNER_PASSWORD}
       GATEWAY_VIEWER_USERNAME: ${GATEWAY_VIEWER_USERNAME}
       GATEWAY_VIEWER_PASSWORD: ${GATEWAY_VIEWER_PASSWORD}
+      GATEWAY_ADMIN_USERNAME: ${GATEWAY_ADMIN_USERNAME}
+      GATEWAY_ADMIN_PASSWORD: ${GATEWAY_ADMIN_PASSWORD}
       GATEWAY_UPSTREAM_EMAIL_AGENT_URL: http://email-agent:8000
       # Allow the browser control panel (served by the web service) to call the gateway.
       GATEWAY_CORS_ALLOWED_ORIGINS: ${GATEWAY_CORS_ALLOWED_ORIGINS:-http://localhost:3000}

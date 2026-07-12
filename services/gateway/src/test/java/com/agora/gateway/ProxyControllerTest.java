@@ -23,6 +23,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -173,6 +174,52 @@ class ProxyControllerTest {
                 .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 
+
+    @Test
+    void proxy_run_stream_preserves_sse_content_type_and_body() throws Exception {
+        String responseBody = "event: draft\ndata: {\"content\":\"Bonjour\"}\n\nevent: result\ndata: {\"status\":\"pending_approval\"}\n\n";
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/run/stream"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "text/event-stream")
+                        .withBody(responseBody)));
+
+        mockMvc.perform(post("/api/agent/run/stream")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"author\":\"a@b.com\",\"to\":\"me@b.com\",\"subject\":\"Hi\",\"email_thread\":\"Hello\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(content().string(containsString("event: draft")))
+                .andExpect(content().string(containsString("event: result")));
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/run/stream"))
+                .withHeader("X-Agora-User", equalTo("owner"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+    }
+
+    @Test
+    void proxy_campaign_preview_forwards_to_upstream() throws Exception {
+        String responseBody = "{\"segment_id\":\"team\",\"recipient_count\":2,\"audience_match\":true}";
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/campaigns/preview"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(responseBody)));
+
+        mockMvc.perform(post("/api/agent/campaigns/preview")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"segment_id\":\"team\",\"template_name\":\"announce\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().json(responseBody));
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/campaigns/preview"))
+                .withHeader("X-Agora-User", equalTo("owner"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+    }
 
     @Test
     void proxy_gmail_oauth_start_requires_owner_and_forwards() throws Exception {

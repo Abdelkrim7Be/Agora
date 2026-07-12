@@ -35,7 +35,10 @@ public class InstanceGrantService {
      * Resolve the effective instance role for a caller. Returns empty if no access.
      */
     public Optional<String> effectiveRole(String agentInstanceId, String userId, String jwtRole) {
-        if ("owner".equals(jwtRole)) return Optional.of("owner");
+        // owner and admin (the IT superuser tier, above owner) are owner-equivalent on
+        // every instance. The gateway SecurityConfig still gates which verbs admin can
+        // reach, so this only broadens proxied reads, not approvals/mutations.
+        if ("owner".equals(jwtRole) || "admin".equals(jwtRole)) return Optional.of("owner");
 
         Optional<AgentInstanceGrant> grant = grants.findByAgentInstanceIdAndUserId(agentInstanceId, userId);
         if (grant.isPresent()) return Optional.of(grant.get().getRole());

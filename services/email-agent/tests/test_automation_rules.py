@@ -17,12 +17,16 @@ from src.automation import (
     build_rule_plan,
     due_snooze_labels,
     follow_up_query,
+    load_escalation_state,
     load_rules,
+    mark_run_escalated,
     maybe_emit_daily_digest,
     record_digest_item,
     snooze_label,
     suggest_rule_from_correction,
+    workflow_sla_snapshot,
 )
+from src.categories import CategoriesConfig, Category, CategoryInstructions
 
 
 def _write_yaml(tmp_path, body: str):
@@ -334,3 +338,59 @@ def test_rule_suggestion_appends_disabled_candidate(tmp_path):
         "subject_contains": ["project", "status", "question"],
     }
     assert row["suggested_rule"]["then"] == {"notify": True}
+
+
+def test_forward_edit_suggestion_appends_workflow_candidate(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+    cfg = RulesConfig(learning=LearningConfig(enabled=True, suggestions_path=str(path)))
+
+    assert suggest_rule_from_correction(
+        cfg,
+        {
+            "author": "Alice <alice@example.com>",
+            "subject": "Payroll question",
+            "category": "payroll",
+            "category_display_name": "Payroll",
+            "priority": "urgent",
+            "workflow_owner": "HR",
+            "workflow_approver": "hr",
+            "workflow_instructions": {"sla": "12h", "escalation": "owner"},
+        },
+        "edited_draft",
+        {"tool": "forward_email", "edited": {"to": ["hr@example.com", "finance"]}},
+        now=datetime(2026, 6, 16, 12, 45),
+    ) is True
+
+    row = json.loads(path.read_text().splitlines()[0])
+    assert row["suggested_workflow"]["name"] == "payroll"
+    assert row["suggested_workflow"]["route_to"] == ["hr@example.com", "finance"]
+    assert row["suggested_workflow"]["instructions"]["sla"] == "12h"
+    assert row["source"]["category"] == "payroll"
+
+
+def test_workflow_sla_snapshot_marks_overdue_and_uses_escalation_state(tmp_path):
+    categories = CategoriesConfig(
+        enabled=True,
+        categories=[
+            Category(
+                name="payroll",
+                display_name="Payroll",
+                instructions=CategoryInstructions(sla="2h", escalation="owner"),
+            )
+        ],
+    )
+    state_path = tmp_path / "sla_state.json"
+    mark_run_escalated("run-1", "owner@example.com", path=state_path, now=datetime(2026, 6, 16, 10, 30))
+
+    snapshot = workflow_sla_snapshot(
+        {"run_id": "run-1", "category": "payroll", "created_at": "2026-06-16T08:00:00+00:00"},
+        categories,
+        escalation_state=load_escalation_state(state_path),
+        now=datetime(2026, 6, 16, 12, 30),
+    )
+
+    assert snapshot["sla_label"] == "2h"
+    assert snapshot["overdue"] is True
+    assert snapshot["overdue_by_seconds"] == 9000
+    assert snapshot["escalated_at"] == "2026-06-16T10:30:00+00:00"
+    assert snapshot["escalation_target"] == "owner@example.com"

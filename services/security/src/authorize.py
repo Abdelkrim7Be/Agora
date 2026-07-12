@@ -4,6 +4,7 @@ import re
 
 from src import ratelimit
 from src.config import settings
+from src.metrics import inc_counter
 from src.models import AuthorizeRequest, AuthorizeResponse
 from src.policy import PolicyConfig, load_policy
 
@@ -55,6 +56,7 @@ def authorize(
 
     tool = policy.tools.get(req.action)
     if tool is None:
+        inc_counter("agora_security_authorize_total", decision=policy.default, action=req.action)
         return AuthorizeResponse(
             decision=policy.default,
             reason=f"no policy rule for action '{req.action}'",
@@ -64,6 +66,7 @@ def authorize(
     if tool.recipients is not None:
         deny = _check_recipients(req.args.get("to", ""), tool.recipients)
         if deny:
+            inc_counter("agora_security_authorize_total", decision="deny", action=req.action)
             return AuthorizeResponse(decision="deny", reason=deny)
 
     if tool.limits is not None:
@@ -76,6 +79,7 @@ def authorize(
                 or ""
             )
             if len(content) > tool.limits.max_content_chars:
+                inc_counter("agora_security_authorize_total", decision="deny", action=req.action)
                 return AuthorizeResponse(
                     decision="deny",
                     reason=(
@@ -97,6 +101,7 @@ def authorize(
                 user_id,
             )
             if deny:
+                inc_counter("agora_security_authorize_total", decision="deny", action=req.action)
                 return AuthorizeResponse(decision="deny", reason=deny)
 
     # All checks passed — consume a rate-limit slot if applicable, then grant.
@@ -109,6 +114,7 @@ def authorize(
             req.context.get("user_id", ""),
         )
 
+    inc_counter("agora_security_authorize_total", decision=tool.decision, action=req.action)
     return AuthorizeResponse(
         decision=tool.decision,
         reason=f"allowed by policy for '{req.action}'",

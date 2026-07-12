@@ -1,0 +1,41 @@
+roles:
+  accounting:
+    display_name: Accounting
+    dept: Finance
+    emails:
+      - redacted@example.com
+  finance:
+    display_name: Finance
+    dept: Finance
+    emails:
+      - redacted@example.com
+  hr:
+    display_name: HR
+    dept: HR
+    emails:
+      - abdelkrimbellagnech99@gmail.com
+  human resources:
+    display_name: Human Resources
+    dept: HR
+    emails:
+      - abdelkrimbellagnech99@gmail.com
+  management:
+    display_name: Management
+    dept: Operations
+    emails:
+      - redacted@example.com
+  operations:
+    display_name: Operations
+    dept: Operations
+    emails:
+      - redacted@example.com
+  ops:
+    display_name: Ops
+    dept: Operations
+    emails:
+      - redacted@example.com
+  rh:
+    display_name: RH
+    dept: HR
+    emails:
+      - abdelkrimbellagnech99@gmail.com
