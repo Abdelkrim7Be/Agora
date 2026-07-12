@@ -1,0 +1,7 @@
+endpoint: null
+temperature: 0.0
+roles:
+  triage: "groq:llama-3.3-70b-versatile"
+  draft: "groq:llama-3.3-70b-versatile"
+  reason: "groq:llama-3.3-70b-versatile"
+  memory_style: "groq:llama-3.3-70b-versatile"

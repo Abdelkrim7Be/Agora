@@ -1,9 +1,10 @@
-"""Outbound broadcast campaigns: group directory + rich templates + rendering.
+"""Outbound broadcast campaigns: audience guard + segment-backed rendering.
 
 Campaigns are owner-initiated, approval-gated broadcasts. Unlike inbound
 categories, they never touch the triage graph — they render one personalized
-email per group member and surface a single batch approval. Storage mirrors the
-categories.yaml pattern: a flat, Postgres-ready YAML at the service root.
+email per audience member and surface a single batch approval. The contact
+store is the source of truth for people; campaign groups are thin references to
+segments so older UI paths keep working while contacts/segments become primary.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from src.config import SERVICE_ROOT
+from src.contacts import AUDIENCE_VALUES, Audience, Contact, get_segment, resolve_segment
 
 DEFAULT_CAMPAIGNS_PATH = SERVICE_ROOT / "campaigns.yaml"
 
@@ -31,7 +33,7 @@ class GroupMember(BaseModel):
     @field_validator("email")
     @classmethod
     def _clean_email(cls, value: str) -> str:
-        cleaned = value.strip()
+        cleaned = value.strip().lower()
         if "@" not in cleaned:
             raise ValueError("member email must contain @")
         return cleaned
@@ -41,6 +43,7 @@ class Group(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     type: Literal["employees", "clients"] = "clients"
+    segment_id: str | None = None
     members: list[GroupMember] = Field(default_factory=list)
 
     @field_validator("id")
@@ -57,6 +60,46 @@ class CampaignTemplate(BaseModel):
     subject: str = Field(min_length=1)
     body_markdown: str = Field(min_length=1)
     variables: list[str] = Field(default_factory=list)
+    audience: list[Audience] = Field(default_factory=list)
+    category: str | None = None
+
+    @field_validator("variables")
+    @classmethod
+    def _clean_variables(cls, value: list[str]) -> list[str]:
+        variables: list[str] = []
+        seen: set[str] = set()
+        for item in value or []:
+            cleaned = str(item).strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            variables.append(cleaned)
+        return variables
+
+    @field_validator("audience")
+    @classmethod
+    def _clean_audience(cls, value: list[str]) -> list[str]:
+        audiences: list[str] = []
+        seen: set[str] = set()
+        for item in value or []:
+            cleaned = str(item).strip().lower()
+            if not cleaned or cleaned in seen:
+                continue
+            if cleaned not in AUDIENCE_VALUES:
+                raise ValueError(f"audience must be one of: {', '.join(AUDIENCE_VALUES)}")
+            seen.add(cleaned)
+            audiences.append(cleaned)
+        if not audiences:
+            raise ValueError("audience must contain at least one allowed audience")
+        return audiences
+
+    @field_validator("category")
+    @classmethod
+    def _clean_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        return cleaned or None
 
 
 class CampaignsConfig(BaseModel):
@@ -64,18 +107,37 @@ class CampaignsConfig(BaseModel):
     templates: list[CampaignTemplate] = Field(default_factory=list)
 
 
+def _normalized_group(raw: dict) -> Group:
+    payload = dict(raw or {})
+    payload.setdefault("members", [])
+    payload.setdefault("segment_id", payload.get("id"))
+    return Group(**payload)
+
+
 def load_campaigns(path: str | Path | None = None) -> CampaignsConfig:
     campaigns_path = Path(path) if path else DEFAULT_CAMPAIGNS_PATH
     if not campaigns_path.is_file():
         return CampaignsConfig()
     data = yaml.safe_load(campaigns_path.read_text()) or {}
-    data.setdefault("groups", [])
-    data.setdefault("templates", [])
-    return CampaignsConfig(**data)
+    groups = [_normalized_group(item) for item in data.get("groups", [])]
+    templates = [CampaignTemplate(**item) for item in data.get("templates", [])]
+    return CampaignsConfig(groups=groups, templates=templates)
 
 
 def dump_campaigns(config: CampaignsConfig) -> str:
-    return yaml.safe_dump(config.model_dump(), sort_keys=False, allow_unicode=True)
+    payload = {
+        "groups": [
+            {
+                "id": group.id,
+                "name": group.name,
+                "type": group.type,
+                "segment_id": group.segment_id or group.id,
+            }
+            for group in config.groups
+        ],
+        "templates": [template.model_dump() for template in config.templates],
+    }
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
 
 
 def save_campaigns(config: CampaignsConfig, path: str | Path | None = None) -> None:
@@ -96,13 +158,10 @@ def unresolved_vars(text: str) -> list[str]:
 
 
 def _member_values(member: GroupMember) -> dict[str, str]:
-    """Placeholder values available to a template for one recipient."""
     values: dict[str, str] = {"email": member.email}
     if member.name and member.name.strip():
         values["name"] = member.name.strip()
         values["prenom"] = member.name.strip().split()[0]
-    # Per-member custom fields (amount, dept, company, ...) win over defaults but
-    # never override the reserved keys above by accident — explicit fields do.
     for key, value in (member.fields or {}).items():
         values[str(key)] = str(value)
     return values
@@ -117,23 +176,17 @@ def render_text(text: str, values: dict[str, str]) -> str:
 
 
 def _markdown_to_html(md_text: str) -> str:
-    """Render a markdown body to a self-contained HTML fragment.
-
-    Uses the `markdown` lib when available; falls back to a minimal converter so
-    a missing dependency never breaks a render (defensive — the dep is declared).
-    """
     try:
-        import markdown as _md  # local import: optional at import time
+        import markdown as _md
 
         return _md.markdown(md_text, extensions=["extra", "sane_lists", "nl2br"])
-    except Exception:  # pragma: no cover - fallback path
+    except Exception:  # pragma: no cover
         paragraphs = [p.strip() for p in md_text.split("\n\n") if p.strip()]
         return "".join(
             "<p>" + _html.escape(p).replace("\n", "<br>") + "</p>" for p in paragraphs
         )
 
 
-# A neutral, email-client-safe wrapper. Inline styles only (Gmail strips <style>).
 _HTML_SHELL = (
     '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
     'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0 auto;">'
@@ -149,6 +202,37 @@ class RenderedEmail(BaseModel):
     html: str
     text: str
     unresolved: list[str] = Field(default_factory=list)
+
+
+class MissingVariableWarning(BaseModel):
+    email: str
+    name: str | None = None
+    unresolved: list[str] = Field(default_factory=list)
+
+
+class AudienceGuardResult(BaseModel):
+    allowed: bool
+    segment_audiences: list[Audience] = Field(default_factory=list)
+    template_audience: list[Audience] = Field(default_factory=list)
+    reason: str | None = None
+
+
+def _member_from_contact(contact: Contact) -> GroupMember:
+    return GroupMember(email=contact.email, name=contact.name, fields=contact.fields)
+
+
+def contacts_for_segment(segment_id: str, agent_instance_id: str | None = None) -> list[Contact]:
+    segment = get_segment(segment_id, agent_instance_id=agent_instance_id)
+    if segment is None:
+        return []
+    return resolve_segment(segment, agent_instance_id=agent_instance_id)
+
+
+def members_for_group(group: Group, agent_instance_id: str | None = None) -> list[GroupMember]:
+    if group.members:
+        return group.members
+    contacts = contacts_for_segment(group.segment_id or group.id, agent_instance_id=agent_instance_id)
+    return [_member_from_contact(contact) for contact in contacts]
 
 
 def render_for_member(template: CampaignTemplate, member: GroupMember) -> RenderedEmail:
@@ -167,5 +251,42 @@ def render_for_member(template: CampaignTemplate, member: GroupMember) -> Render
     )
 
 
-def render_campaign(group: Group, template: CampaignTemplate) -> list[RenderedEmail]:
-    return [render_for_member(template, m) for m in group.members]
+def render_campaign(group: Group, template: CampaignTemplate, agent_instance_id: str | None = None) -> list[RenderedEmail]:
+    return [render_for_member(template, member) for member in members_for_group(group, agent_instance_id=agent_instance_id)]
+
+
+def render_campaign_for_segment(segment_id: str, template: CampaignTemplate, agent_instance_id: str | None = None) -> list[RenderedEmail]:
+    contacts = contacts_for_segment(segment_id, agent_instance_id=agent_instance_id)
+    return [render_for_member(template, _member_from_contact(contact)) for contact in contacts]
+
+
+def audience_guard(template: CampaignTemplate, contacts: list[Contact], segment_name: str | None = None) -> AudienceGuardResult:
+    template_audience = sorted(set(template.audience))
+    segment_audiences = sorted({contact.audience for contact in contacts})
+    if not template_audience or not segment_audiences or not set(template_audience).isdisjoint(segment_audiences):
+        return AudienceGuardResult(
+            allowed=True,
+            segment_audiences=segment_audiences,
+            template_audience=template_audience,
+        )
+
+    expected = ", ".join(template_audience)
+    actual = ", ".join(segment_audiences)
+    target = f"le segment « {segment_name} »" if segment_name else "ce segment"
+    return AudienceGuardResult(
+        allowed=False,
+        segment_audiences=segment_audiences,
+        template_audience=template_audience,
+        reason=(
+            f"Audience incompatible : le modèle « {template.name} » cible {expected} "
+            f"alors que {target} contient {actual}."
+        ),
+    )
+
+
+def missing_variable_warnings(rendered: list[RenderedEmail]) -> list[MissingVariableWarning]:
+    return [
+        MissingVariableWarning(email=item.email, name=item.name, unresolved=item.unresolved)
+        for item in rendered
+        if item.unresolved
+    ]

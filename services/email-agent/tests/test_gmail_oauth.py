@@ -71,6 +71,20 @@ def test_gmail_connect_start_builds_signed_offline_consent_url(monkeypatch):
     assert _FakeFlow.last.kwargs["autogenerate_code_verifier"] is False
 
 
+def test_build_state_uses_token_key_file_when_state_secret_missing(monkeypatch, tmp_path):
+    key_file = tmp_path / "token-keys.json"
+    key_file.write_text('{"active_key_id":"k1","keys":{"k1":"unit-file-secret"}}', encoding="utf-8")
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "")
+    monkeypatch.setattr(settings, "token_encryption_key_file", str(key_file))
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+
+    state = build_state("owner@example.com", "ceo-email-agent")
+
+    payload = validate_state(state)
+    assert payload["agent_instance_id"] == "ceo-email-agent"
+
+
 def test_gmail_connect_callback_rejects_bad_state(monkeypatch):
     monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
 
@@ -111,7 +125,9 @@ def test_exchange_code_rejects_mailbox_mismatch(monkeypatch, tmp_path):
     import src.gmail_oauth as oauth
 
     monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
     monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(oauth, "Flow", _FakeFlow)
 
     fake_service = MagicMock()
@@ -132,7 +148,9 @@ def test_exchange_code_skips_mailbox_check_when_no_identity(monkeypatch, tmp_pat
     import src.gmail_oauth as oauth
 
     monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
     monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
     monkeypatch.setattr(oauth, "Flow", _FakeFlow)
@@ -151,7 +169,9 @@ def test_revoke_gmail_token_calls_google_revoke_endpoint(monkeypatch, tmp_path):
     import src.gmail_oauth as oauth
     from src.gmail_oauth import revoke_gmail_token
 
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
     monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
 
@@ -184,7 +204,9 @@ def test_revoke_gmail_token_calls_google_revoke_endpoint(monkeypatch, tmp_path):
 
 def test_revoke_gmail_token_returns_false_when_no_token(monkeypatch, tmp_path):
     """revoke_gmail_token returns False silently when no token file exists."""
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
     monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "nonexistent.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
 
@@ -197,7 +219,9 @@ def test_revoke_gmail_token_deletes_locally_even_if_google_fails(monkeypatch, tm
     import src.gmail_oauth as oauth
     from src.gmail_oauth import revoke_gmail_token
 
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
     monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
 

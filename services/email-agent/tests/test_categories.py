@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
+
+from langchain_core.messages import AIMessage
+from langgraph.store.memory import InMemoryStore
 
 from src.categories import classify_category, load_categories
 from src.run_registry import list_runs, upsert_run
@@ -42,6 +46,51 @@ contacts:
     category: internal
     priority: urgent
 """
+
+
+def test_default_template_catalog_has_operational_auto_drafts():
+    from src.categories import auto_draft_tool_call
+
+    cfg = load_categories(Path(__file__).resolve().parents[1] / "categories.yaml")
+    by_name = {category.name: category for category in cfg.categories}
+    template_names = {template.name for template in cfg.templates}
+
+    assert by_name["hr_requests"].template == "candidate_ack_reply"
+    assert by_name["finance_requests"].template == "finance_request_reply"
+    assert by_name["devis"].template == "quote_request_reply"
+    assert {"candidate_ack_reply", "finance_request_reply", "quote_request_reply"}.issubset(template_names)
+
+    call = auto_draft_tool_call(
+        {"author": "Candidate <candidate@example.com>", "subject": "Stage data", "email_thread": "CV attached"},
+        cfg,
+        "hr_requests",
+    )
+
+    assert call["name"] == "write_email"
+    assert call["args"]["to"] == "candidate@example.com"
+    assert "candidature" in call["args"]["content"]
+
+
+def test_ceo_instance_template_catalog_parses_when_present():
+    from src.categories import auto_draft_tool_call
+
+    path = Path(__file__).resolve().parents[1] / "logs" / "instances" / "ceo-email-agent" / "categories.yaml"
+    if not path.is_file():
+        return
+
+    cfg = load_categories(path)
+    names = {category.name for category in cfg.categories}
+    assert {"executive_meeting", "partnership_opportunity", "investor_update", "sensitive_escalation"}.issubset(names)
+
+    call = auto_draft_tool_call(
+        {"author": "Partner <partner@example.com>", "subject": "Partnership proposal", "email_thread": "Can we collaborate?"},
+        cfg,
+        "partnership_opportunity",
+    )
+
+    assert call["name"] == "write_email"
+    assert call["args"]["to"] == "partner@example.com"
+    assert "partenariat" in call["args"]["content"].lower()
 
 
 def test_load_categories_parses_templates_contacts_and_categories(tmp_path):
@@ -94,6 +143,7 @@ def test_classify_category_matches_rule_when(tmp_path):
         "owner": "Support team",
         "approver": "support.manager@company.example",
         "route_to": ["support@company.example", "quality@company.example"],
+        "instructions": None,
         "contact": None,
     }
 
@@ -355,10 +405,131 @@ def test_shipped_categories_classify_new_workflows():
 
     devis = classify_category({"author": "buyer@corp.com", "subject": "Demande de devis produit"}, cfg)
     assert devis["category"] == "devis"
-    assert devis["policy"] == "notify"
+    assert devis["policy"] == "auto_draft"
+    assert devis["template"] == "quote_request_reply"
     assert devis["route_to"] == ["zinebbellagnech@gmail.com"]
 
     # New templates resolve and carry a body.
     templates = {t.name: t for t in cfg.templates}
     assert "conge_reply" in templates and templates["conge_reply"].body.strip()
     assert "rdv_reply" in templates and templates["rdv_reply"].body.strip()
+
+
+CATEGORIES_WITH_INSTRUCTIONS = """
+enabled: true
+categories:
+  - name: refund_request
+    display_name: Refund request
+    priority: urgent
+    policy: auto_draft
+    template: refund_reply
+    owner: Finance
+    route_to: [finance]
+    when:
+      subject_contains: [refund]
+    instructions:
+      sla: Respond within 24h
+      required_data: [order number, purchase date]
+      escalation: Notify the finance manager for refunds over 1000 EUR
+      blocked_cases: [refunds requested after 30 days]
+      ask_for_missing: true
+templates:
+  - name: refund_reply
+    subject: "Re: {{subject}}"
+    body: "We are looking into your refund."
+    variables: []
+"""
+
+
+def test_category_instructions_round_trip_through_dump(tmp_path):
+    """Structured instructions survive load -> dump -> load (YAML round-trip)."""
+    from src.categories import dump_categories
+
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_WITH_INSTRUCTIONS)
+    cfg = load_categories(path)
+
+    instructions = cfg.categories[0].instructions
+    assert instructions is not None
+    assert instructions.sla == "Respond within 24h"
+    assert instructions.required_data == ["order number", "purchase date"]
+    assert instructions.escalation == "Notify the finance manager for refunds over 1000 EUR"
+    assert instructions.blocked_cases == ["refunds requested after 30 days"]
+    assert instructions.ask_for_missing is True
+
+    reloaded_path = tmp_path / "categories_reloaded.yaml"
+    reloaded_path.write_text(dump_categories(cfg))
+    reloaded = load_categories(reloaded_path)
+    assert reloaded.categories[0].instructions.sla == "Respond within 24h"
+
+
+def test_classify_category_surfaces_instructions(tmp_path):
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_WITH_INSTRUCTIONS)
+    cfg = load_categories(path)
+
+    result = classify_category(
+        {"author": "client@example.com", "subject": "refund request"},
+        cfg,
+    )
+    assert result["category"] == "refund_request"
+    assert result["instructions"]["sla"] == "Respond within 24h"
+    assert result["instructions"]["required_data"] == ["order number", "purchase date"]
+
+
+class _SpySystemPromptLLM:
+    """Captures the assembled system prompt instead of calling a real LLM."""
+
+    def __init__(self):
+        self.last_system_content: str | None = None
+
+    def invoke(self, messages, config=None):
+        self.last_system_content = messages[0]["content"]
+        return AIMessage(
+            content="", tool_calls=[{"name": "Done", "args": {}, "id": "c1", "type": "tool_call"}]
+        )
+
+
+def _llm_call_state(workflow_instructions: dict | None) -> dict:
+    return {
+        "email_input": {
+            "author": "client@example.com",
+            "to": "me@example.com",
+            "subject": "Refund",
+            "email_thread": "Please refund my order.",
+        },
+        "messages": [],
+        "workflow_instructions": workflow_instructions,
+    }
+
+
+def test_workflow_instructions_appear_only_for_owning_workflow(monkeypatch):
+    """Per-workflow instructions are injected into the draft prompt; absent when unset."""
+    import src.graph as g
+
+    spy = _SpySystemPromptLLM()
+    monkeypatch.setattr(g, "llm_with_tools", spy)
+
+    instructions = {
+        "sla": "Respond within 24h",
+        "required_data": ["order number"],
+        "escalation": "Notify the finance manager",
+        "blocked_cases": ["refunds over 1000"],
+        "ask_for_missing": True,
+    }
+    g.llm_call(
+        _llm_call_state(instructions),
+        InMemoryStore(),
+        config={"configurable": {"thread_id": str(uuid.uuid4())}},
+    )
+    assert "Workflow Instructions" in spy.last_system_content
+    assert "Respond within 24h" in spy.last_system_content
+    assert "order number" in spy.last_system_content
+
+    # A run with no workflow instructions gets no section at all.
+    g.llm_call(
+        _llm_call_state(None),
+        InMemoryStore(),
+        config={"configurable": {"thread_id": str(uuid.uuid4())}},
+    )
+    assert "Workflow Instructions" not in spy.last_system_content

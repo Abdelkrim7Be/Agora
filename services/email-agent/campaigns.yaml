@@ -2,25 +2,16 @@ groups:
 - id: team_internal
   name: Équipe interne
   type: employees
-  members:
-  - email: abdelkrimbellagnech99@gmail.com
-    name: Abdelkrim Bellagnech
-    fields:
-      dept: HR
-  - email: zinebbellagnech@gmail.com
-    name: Zineb Bellagnech
-    fields:
-      dept: Finance
+  segment_id: team_internal
 - id: clients_demo
   name: Clients (démo)
   type: clients
-  members:
-  - email: abdelkrimbellagnech99@gmail.com
-    name: Abdelkrim Bellagnech
-    fields:
-      company: Agora
+  segment_id: clients_demo
 templates:
 - name: internal_announcement
+  audience:
+  - employee
+  category: communication_interne
   subject: 'Information interne : {{name}}'
   body_markdown: |
     ## Bonjour {{name}},
@@ -40,6 +31,10 @@ templates:
   - name
   - dept
 - name: client_update
+  audience:
+  - client
+  - partner
+  category: relation_client
   subject: 'Nouveautés pour {{company}}'
   body_markdown: |
     ## Bonjour {{name}},

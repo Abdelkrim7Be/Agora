@@ -19,6 +19,8 @@ from src.gmail_client import (
     mark_as_unread,
     modify_labels,
     reply_all_message,
+    render_rich_email_html,
+    send_message,
     trash_message,
     watch_mailbox,
 )
@@ -30,6 +32,20 @@ def _b64(text: str) -> str:
 
 def _message(headers: list[dict], payload: dict, msg_id="m1", thread_id="t1") -> dict:
     return {"id": msg_id, "threadId": thread_id, "payload": {**payload, "headers": headers}}
+
+
+def _decoded(raw: str):
+    return message_from_bytes(base64.urlsafe_b64decode(raw), policy=policy.default)
+
+
+def _plain_body(message) -> str:
+    part = message.get_body(preferencelist=("plain",)) if message.is_multipart() else message
+    return part.get_content().strip()
+
+
+def _html_body(message) -> str:
+    part = message.get_body(preferencelist=("html",))
+    return part.get_content() if part else ""
 
 
 class _Execute:
@@ -454,13 +470,13 @@ def test_create_draft_calls_gmail_api_with_encoded_message(monkeypatch):
 
     assert result["id"] == "draft-1"
     draft_message = resource.users().drafts().calls[0][1]["body"]["message"]
-    decoded = message_from_bytes(
-        base64.urlsafe_b64decode(draft_message["raw"]), policy=policy.default
-    )
+    decoded = _decoded(draft_message["raw"])
     assert draft_message["threadId"] == "thread-1"
     assert decoded["To"] == "a@example.com"
     assert decoded["Subject"] == "Subject"
-    assert decoded.get_content().strip() == "Body text"
+    assert decoded.is_multipart()
+    assert _plain_body(decoded) == "Body text"
+    assert "<p>Body text</p>" in _html_body(decoded)
 
 
 def test_forward_message_respects_dry_run(monkeypatch):
@@ -494,13 +510,14 @@ def test_forward_message_fetches_original_and_sends_encoded_forward(monkeypatch)
     assert calls[0] == ("get", {"userId": "me", "id": "msg-1"})
     assert calls[1][0] == "send"
     sent = calls[1][1]["body"]
-    decoded = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
+    decoded = _decoded(sent["raw"])
     assert decoded["To"] == "bob@example.com"
     assert decoded["Subject"] == "Fwd: Quick question"
-    content = decoded.get_content()
+    content = _plain_body(decoded)
     assert "Please see below" in content
     assert "Forwarded message" in content
     assert "Original body" in content
+    assert "<br" in _html_body(decoded) or "<p>" in _html_body(decoded)
 
 
 def test_reply_all_message_respects_dry_run(monkeypatch):
@@ -537,13 +554,46 @@ def test_reply_all_message_fetches_original_and_sends_thread_reply(monkeypatch):
     assert calls[1][0] == "send"
     sent = calls[1][1]["body"]
     assert sent["threadId"] == "thread-1"
-    decoded = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
+    decoded = _decoded(sent["raw"])
     # me@example.com (the account itself) is excluded from reply-all recipients.
     assert decoded["To"] == "alice@example.com, carol@example.com"
     assert decoded["Subject"] == "Re: Quick question"
     assert decoded["In-Reply-To"] == "<msg-1@example.com>"
     assert decoded["References"] == "<msg-1@example.com>"
-    assert decoded.get_content().strip() == "Reply body"
+    assert decoded.is_multipart()
+    assert _plain_body(decoded) == "Reply body"
+    assert "<p>Reply body</p>" in _html_body(decoded)
+
+
+def test_render_rich_email_html_preserves_markdown_structure():
+    html = render_rich_email_html("Bonjour,\n\n- Point A\n- Point B\n\n**Merci**")
+
+    assert "<li>Point A</li>" in html
+    assert "<li>Point B</li>" in html
+    assert "<strong>Merci</strong>" in html
+    assert "font-family" in html
+
+
+def test_send_message_sends_multipart_rich_email(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource()
+
+    result = send_message(
+        "client@example.com",
+        "Follow-up",
+        "Bonjour,\n\nVoici les points :\n\n- A\n- B",
+        resource=resource,
+    )
+
+    assert result["id"] == "sent-1"
+    sent = resource.users().messages().calls[0][1]["body"]
+    decoded = _decoded(sent["raw"])
+    assert decoded["To"] == "client@example.com"
+    assert decoded["Subject"] == "Follow-up"
+    assert decoded.is_multipart()
+    assert "Voici les points" in _plain_body(decoded)
+    assert "<li>A</li>" in _html_body(decoded)
+    assert "<li>B</li>" in _html_body(decoded)
 
 
 # --- _extract_message_part ---

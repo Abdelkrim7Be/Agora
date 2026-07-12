@@ -21,6 +21,14 @@ class Template(BaseModel):
     variables: list[str] = Field(default_factory=list)
 
 
+class CategoryInstructions(BaseModel):
+    sla: str | None = None
+    required_data: list[str] = Field(default_factory=list)
+    escalation: str | None = None
+    blocked_cases: list[str] = Field(default_factory=list)
+    ask_for_missing: str | bool | None = None
+
+
 class Category(BaseModel):
     name: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
@@ -32,6 +40,7 @@ class Category(BaseModel):
     owner: str | None = None
     approver: str | None = None
     route_to: list[str] = Field(default_factory=list)
+    instructions: CategoryInstructions | None = None
 
     @field_validator("name")
     @classmethod
@@ -154,6 +163,7 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "owner": category.owner,
                 "approver": category.approver,
                 "route_to": category.route_to,
+                "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
                 "contact": contact,
             }
 
@@ -168,6 +178,7 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "owner": category.owner,
                 "approver": category.approver,
                 "route_to": category.route_to,
+                "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
                 "contact": None,
             }
     return {"category": None, "priority": "normal", "template": None, "policy": None, "contact": None}

@@ -59,6 +59,8 @@ class State(MessagesState):
     workflow_owner: NotRequired[str]
     workflow_approver: NotRequired[str]
     workflow_route_to: NotRequired[list[str]]
+    workflow_instructions: NotRequired[dict]
+    contact_lang: NotRequired[str]
     # Set once an email has actually been sent — the run's terminal action.
     email_sent: bool
     # Set when an approved send action fails after the human decision.

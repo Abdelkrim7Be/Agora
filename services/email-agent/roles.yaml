@@ -1,0 +1,41 @@
+roles:
+  accounting:
+    display_name: Accounting
+    dept: Finance
+    emails:
+      - zinebbellagnech@gmail.com
+  finance:
+    display_name: Finance
+    dept: Finance
+    emails:
+      - zinebbellagnech@gmail.com
+  hr:
+    display_name: HR
+    dept: HR
+    emails:
+      - abdelkrimbellagnech99@gmail.com
+  human resources:
+    display_name: Human Resources
+    dept: HR
+    emails:
+      - abdelkrimbellagnech99@gmail.com
+  management:
+    display_name: Management
+    dept: Operations
+    emails:
+      - zinebbellagnech@gmail.com
+  operations:
+    display_name: Operations
+    dept: Operations
+    emails:
+      - zinebbellagnech@gmail.com
+  ops:
+    display_name: Ops
+    dept: Operations
+    emails:
+      - zinebbellagnech@gmail.com
+  rh:
+    display_name: RH
+    dept: HR
+    emails:
+      - abdelkrimbellagnech99@gmail.com

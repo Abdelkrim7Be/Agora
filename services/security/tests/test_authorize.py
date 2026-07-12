@@ -502,3 +502,10 @@ def test_forward_email_per_run_cap_is_enforced():
     denied = authorize(second, policy=policy)
     assert denied.decision == "deny"
     assert "per-run" in denied.reason
+
+
+
+def test_metrics_endpoint_available():
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert "agora_security_health" in r.text

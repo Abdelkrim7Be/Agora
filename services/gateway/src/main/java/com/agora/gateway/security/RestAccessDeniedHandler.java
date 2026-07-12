@@ -51,7 +51,7 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         if ("GET".equals(method) && path.startsWith("/api/agent/run")) {
             return "read";
         }
-        if ("POST".equals(method) && "/api/agent/run".equals(path)) {
+        if ("POST".equals(method) && ("/api/agent/run".equals(path) || "/api/agent/run/stream".equals(path))) {
             return "run";
         }
         Matcher m = VERB_PATTERN.matcher(path);
