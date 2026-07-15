@@ -186,6 +186,22 @@ class RbacTest {
     }
 
     @Test
+    void admin_can_read_cost_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"period\":\"session\"}")));
+
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.period").value("session"));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+    @Test
     void viewer_cannot_read_cost_summary_403() throws Exception {
         mockMvc.perform(get("/api/agent/costs/summary?period=session")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
@@ -254,6 +270,24 @@ class RbacTest {
 
 
 
+
+    @Test
+    void admin_can_update_signature() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlEqualTo("/signature"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"enabled\":true}")));
+
+        mockMvc.perform(put("/api/agent/signature")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true,\"text\":\"Karim\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(true));
+
+        wireMock.verify(1, putRequestedFor(urlEqualTo("/signature")));
+    }
 
     @Test
     void viewer_can_read_roles() throws Exception {
