@@ -37,6 +37,7 @@ from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.roles import resolve_role
 from src.security_client import authorize_action
+from src.signature import apply_signature_to_args
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
@@ -685,7 +686,7 @@ def tool_node(state: State, store: BaseStore, config=None):
 
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
-        args = tool_call["args"]
+        args = apply_signature_to_args(name, tool_call["args"])
         authorization_decision = "hitl" if name in approval_set else "allow"
 
         if settings.security_enabled:
@@ -799,7 +800,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                         "edited_draft",
                         {"tool": name, "original": args, "edited": edited_args},
                     )
-                args = edited_args
+                args = apply_signature_to_args(name, edited_args)
 
             # accept and edit fall through to tool execution below
 
@@ -940,9 +941,10 @@ def triage_router(
     # Build optional category section for B4 LLM fallback tagging.
     categories_config = load_categories()
     pre_classified_category = state.get("category")
-    if categories_config.enabled and categories_config.categories and not pre_classified_category:
+    active_categories = [c for c in categories_config.categories if c.enabled]
+    if categories_config.enabled and active_categories and not pre_classified_category:
         cat_lines = "\n".join(
-            f"- {c.name}: {c.display_name}" for c in categories_config.categories
+            f"- {c.name}: {c.display_name}" for c in active_categories
         )
         category_section = (
             "\n< Email Categories >\n"
@@ -980,7 +982,7 @@ def triage_router(
     # Merge LLM-suggested category (B4) only when category_router found no match.
     category_update: dict = {}
     if not pre_classified_category and result.category:
-        category_by_name = {c.name: c for c in categories_config.categories}
+        category_by_name = {c.name: c for c in active_categories}
         if result.category in category_by_name:
             c = category_by_name[result.category]
             category_update = {

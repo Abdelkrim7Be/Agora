@@ -95,6 +95,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/trash").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/read").hasRole("OWNER")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/unread").hasRole("OWNER")
+                .requestMatchers(HttpMethod.GET, "/api/agent/signature").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/signature").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/memory").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/memory").hasRole("OWNER")
                 .requestMatchers(HttpMethod.GET, "/api/agent/config").hasAnyRole("OWNER", "VIEWER", "ADMIN")

@@ -222,6 +222,34 @@ class RbacTest {
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/style/learn")));
     }
+    @Test
+    void viewer_can_read_signature() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/signature"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"enabled\":false}")));
+
+        mockMvc.perform(get("/api/agent/signature")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/signature")));
+    }
+
+    @Test
+    void viewer_cannot_update_signature_403() throws Exception {
+        mockMvc.perform(put("/api/agent/signature")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true,\"text\":\"Karim\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlEqualTo("/signature")));
+    }
+
 
 
 
