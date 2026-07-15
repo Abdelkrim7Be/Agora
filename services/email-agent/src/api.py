@@ -139,6 +139,7 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
+from src.signature import SignatureConfig, load_signature, save_signature
 
 
 async def _watch_renewal_loop() -> None:
@@ -1153,6 +1154,7 @@ async def update_categories(body: CategoriesInput) -> dict:
 
 class CategoryUpdateInput(BaseModel):
     display_name: str
+    enabled: bool = True
     priority: str = "normal"
     policy: str = "notify"
     owner: str | None = None
@@ -1171,6 +1173,7 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
     for cat in cfg.categories:
         if cat.name == name:
             cat.display_name = body.display_name
+            cat.enabled = body.enabled
             cat.priority = body.priority
             cat.policy = body.policy
             cat.owner = body.owner
@@ -2086,6 +2089,18 @@ async def update_agent_config(body: dict) -> dict:
     )
     reload_config()  # persona/triage edits take effect without a restart (this process)
     return cfg.model_dump()
+
+
+@app.get("/signature")
+async def get_signature() -> dict:
+    signature = load_signature()
+    return {"agent_instance_id": current_agent_instance_id(), **signature.model_dump()}
+
+
+@app.put("/signature")
+async def update_signature(body: SignatureConfig) -> dict:
+    save_signature(body)
+    return {"agent_instance_id": current_agent_instance_id(), **body.model_dump()}
 
 
 @app.get("/memory")

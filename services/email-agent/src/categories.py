@@ -32,6 +32,7 @@ class CategoryInstructions(BaseModel):
 class Category(BaseModel):
     name: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
+    enabled: bool = True
     priority: Literal["urgent", "normal", "low"] = "normal"
     when: RuleWhen = Field(default_factory=RuleWhen)
     template: str | None = None
@@ -144,7 +145,8 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
 
     sender_address = _email_address(email_input.get("author", ""))
     sender_domain = _sender_domain(email_input.get("author", ""))
-    category_by_name = {category.name: category for category in config.categories}
+    active_categories = [category for category in config.categories if category.enabled]
+    category_by_name = {category.name: category for category in active_categories}
 
     for contact in config.contacts:
         matched = False
@@ -167,7 +169,7 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "contact": contact,
             }
 
-    for category in config.categories:
+    for category in active_categories:
         if matches_when(category.when, email_input):
             return {
                 "category": category.name,
