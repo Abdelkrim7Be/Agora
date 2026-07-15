@@ -56,6 +56,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/agent-instances/*").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances/*/activate").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances/*/deactivate").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agent-instances/*/grants").hasAnyRole("OWNER", "ADMIN")

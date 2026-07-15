@@ -194,7 +194,7 @@ class InstanceGrantTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isCreated());
-        mockMvc.perform(delete("/agent-instances/temp-deactivated")
+        mockMvc.perform(post("/agent-instances/temp-deactivated/deactivate")
                         .header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isOk());
 
