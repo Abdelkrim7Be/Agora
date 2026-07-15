@@ -24,6 +24,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -157,6 +158,67 @@ class AgentRegistryTest {
     }
 
     @Test
+    void owner_can_rename_agent_instance() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"drafts\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
+
+        String token = login("owner", "ownerpass");
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "rename-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Old Name"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(put("/agent-instances/rename-email-agent")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"display_name\":\"New Name\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.display_name").value("New Name"));
+
+        mockMvc.perform(get("/agent-instances")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == \"rename-email-agent\")].display_name").value(hasItem("New Name")));
+    }
+
+    @Test
+    void owner_can_delete_agent_instance() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"drafts\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
+
+        String token = login("owner", "ownerpass");
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "remove-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Remove Me"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(delete("/agent-instances/remove-email-agent")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/agent-instances")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == \"remove-email-agent\")]").isEmpty());
+    }
+
+    @Test
     void deactivated_agent_instance_stays_visible_to_owner_for_reactivation() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
@@ -178,7 +240,7 @@ class AgentRegistryTest {
                         .content(body))
                 .andExpect(status().isCreated());
 
-        mockMvc.perform(delete("/agent-instances/delete-me-email-agent")
+        mockMvc.perform(post("/agent-instances/delete-me-email-agent/deactivate")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("inactive"));

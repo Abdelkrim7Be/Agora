@@ -23,13 +23,16 @@ public class AgentRegistryService {
 
     private final GatewayProperties props;
     private final AgentInstanceRepository instances;
+    private final AgentInstanceGrantRepository grants;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
 
     public AgentRegistryService(GatewayProperties props, AgentInstanceRepository instances,
-                                RestClient.Builder builder, ObjectMapper objectMapper) {
+                                AgentInstanceGrantRepository grants, RestClient.Builder builder,
+                                ObjectMapper objectMapper) {
         this.props = props;
         this.instances = instances;
+        this.grants = grants;
         this.restClient = builder.build();
         this.objectMapper = objectMapper;
     }
@@ -192,6 +195,20 @@ public class AgentRegistryService {
         return instances.save(instance);
     }
 
+    public AgentInstance update(String instanceId, UpdateAgentInstanceRequest request) {
+        AgentInstance instance = instances.findById(instanceId)
+                .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
+        instance.setDisplayName(request.displayName());
+        return instances.save(instance);
+    }
+
+    public void delete(String instanceId) {
+        AgentInstance instance = instances.findById(instanceId)
+                .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
+        grants.findByAgentInstanceId(instanceId).forEach(grant -> grants.deleteById(grant.getId()));
+        instances.delete(instance);
+    }
+
     public record CreateAgentInstanceRequest(
             @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
             @jakarta.validation.constraints.NotBlank @com.fasterxml.jackson.annotation.JsonProperty("agent_type") String agentType,
@@ -202,6 +219,10 @@ public class AgentRegistryService {
             @com.fasterxml.jackson.annotation.JsonProperty("allowed_roles") String allowedRoles,
             @com.fasterxml.jackson.annotation.JsonProperty("color") String color,
             @com.fasterxml.jackson.annotation.JsonProperty("icon") String icon
+    ) {}
+
+    public record UpdateAgentInstanceRequest(
+            @jakarta.validation.constraints.NotBlank @com.fasterxml.jackson.annotation.JsonProperty("display_name") String displayName
     ) {}
 
     public static class UnknownAgentTypeException extends RuntimeException {

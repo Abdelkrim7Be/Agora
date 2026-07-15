@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -59,6 +60,16 @@ public class AgentRegistryController {
                 .body(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
     }
 
+    @PutMapping("/agent-instances/{instanceId}")
+    public ResponseEntity<AgentInstanceResponse> update(Authentication auth,
+            @PathVariable String instanceId,
+            @Valid @RequestBody AgentRegistryService.UpdateAgentInstanceRequest request) {
+        AgentInstance instance = service.update(instanceId, request);
+        auditService.record(auth.getName(), role(auth), "update_instance", "PUT",
+                "/agent-instances/" + instanceId, null, "updated");
+        return ResponseEntity.ok(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
+    }
+
     @PostMapping("/agent-instances/{instanceId}/activate")
     public ResponseEntity<AgentInstanceResponse> activate(Authentication auth,
             @PathVariable String instanceId) {
@@ -78,12 +89,12 @@ public class AgentRegistryController {
     }
 
     @DeleteMapping("/agent-instances/{instanceId}")
-    public ResponseEntity<AgentInstanceResponse> deactivate(Authentication auth,
+    public ResponseEntity<Void> delete(Authentication auth,
             @PathVariable String instanceId) {
-        AgentInstance instance = service.deactivate(instanceId);
-        auditService.record(auth.getName(), role(auth), "deactivate_instance", "DELETE",
-                "/agent-instances/" + instanceId, null, "deactivated");
-        return ResponseEntity.ok(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
+        service.delete(instanceId);
+        auditService.record(auth.getName(), role(auth), "delete_instance", "DELETE",
+                "/agent-instances/" + instanceId, null, "deleted");
+        return ResponseEntity.noContent().build();
     }
 
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)
