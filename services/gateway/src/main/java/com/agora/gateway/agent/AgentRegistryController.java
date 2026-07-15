@@ -59,13 +59,31 @@ public class AgentRegistryController {
                 .body(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
     }
 
+    @PostMapping("/agent-instances/{instanceId}/activate")
+    public ResponseEntity<AgentInstanceResponse> activate(Authentication auth,
+            @PathVariable String instanceId) {
+        AgentInstance instance = service.activate(instanceId);
+        auditService.record(auth.getName(), role(auth), "activate_instance", "POST",
+                "/agent-instances/" + instanceId + "/activate", null, "activated");
+        return ResponseEntity.ok(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
+    }
+
+    @PostMapping("/agent-instances/{instanceId}/deactivate")
+    public ResponseEntity<AgentInstanceResponse> deactivateViaPost(Authentication auth,
+            @PathVariable String instanceId) {
+        AgentInstance instance = service.deactivate(instanceId);
+        auditService.record(auth.getName(), role(auth), "deactivate_instance", "POST",
+                "/agent-instances/" + instanceId + "/deactivate", null, "deactivated");
+        return ResponseEntity.ok(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
+    }
+
     @DeleteMapping("/agent-instances/{instanceId}")
     public ResponseEntity<AgentInstanceResponse> deactivate(Authentication auth,
             @PathVariable String instanceId) {
         AgentInstance instance = service.deactivate(instanceId);
         auditService.record(auth.getName(), role(auth), "deactivate_instance", "DELETE",
                 "/agent-instances/" + instanceId, null, "deactivated");
-        return ResponseEntity.ok(AgentInstanceResponse.from(instance, Map.of(), "owner"));
+        return ResponseEntity.ok(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
     }
 
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)

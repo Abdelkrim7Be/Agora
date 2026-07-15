@@ -49,6 +49,8 @@ public class AgentRegistryService {
                     .retrieve()
                     .toBodilessEntity();
             return response.getStatusCode().is2xxSuccessful() ? "healthy" : "unhealthy";
+        } catch (UnknownAgentTypeException ex) {
+            return "unconfigured";
         } catch (RestClientException ex) {
             return "unreachable";
         }
@@ -60,8 +62,10 @@ public class AgentRegistryService {
 
     public List<AgentInstance> visibleInstances(String username, String role) {
         return instances.findAll().stream()
-                .filter(instance -> !"inactive".equalsIgnoreCase(instance.getStatus()))
                 .filter(instance -> canView(instance, username, role))
+                .filter(instance -> !"inactive".equalsIgnoreCase(instance.getStatus())
+                        || "owner".equals(role)
+                        || "admin".equals(role))
                 .toList();
     }
 
@@ -100,7 +104,11 @@ public class AgentRegistryService {
 
     public Map<String, Object> summary(AgentInstance instance, String username) {
         Map<String, Object> summary = new LinkedHashMap<>();
-        findType(instance.getAgentType()).ifPresent(type -> summary.put("service_health", serviceHealth(type)));
+        if ("inactive".equalsIgnoreCase(instance.getStatus())) {
+            summary.put("service_health", "inactive");
+        } else {
+            findType(instance.getAgentType()).ifPresent(type -> summary.put("service_health", serviceHealth(type)));
+        }
         if (!"email-agent".equals(instance.getAgentType())) {
             return summary;
         }
@@ -108,6 +116,11 @@ public class AgentRegistryService {
         summary.put("mailbox_connection", instance.getMailboxIdentity() == null || instance.getMailboxIdentity().isBlank()
                 ? "unknown" : "configured");
         summary.put("sync_status", "unknown");
+        if ("inactive".equalsIgnoreCase(instance.getStatus())) {
+            summary.put("pending_drafts", 0);
+            summary.put("today_cost_eur", 0.0);
+            return summary;
+        }
         summary.put("pending_drafts", safePendingDrafts(instance, username));
         summary.put("today_cost_eur", safeTodayCost(instance, username));
         return summary;
@@ -169,6 +182,13 @@ public class AgentRegistryService {
         AgentInstance instance = instances.findById(instanceId)
                 .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
         instance.setStatus("inactive");
+        return instances.save(instance);
+    }
+
+    public AgentInstance activate(String instanceId) {
+        AgentInstance instance = instances.findById(instanceId)
+                .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
+        instance.setStatus("active");
         return instances.save(instance);
     }
 

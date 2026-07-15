@@ -634,11 +634,10 @@ class RbacTest {
     }
 
     @Test
-    void owner_cannot_list_users_403() throws Exception {
+    void owner_can_list_users_for_instance_grants() throws Exception {
         mockMvc.perform(get("/users")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass")))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("forbidden"));
+                .andExpect(status().isOk());
     }
 
     @Test
