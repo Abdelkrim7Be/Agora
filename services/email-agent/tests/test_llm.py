@@ -46,6 +46,18 @@ def test_loads_prod_profile_mapping(monkeypatch):
     assert get_llm_model_name("draft") == "openai:agora-draft"
 
 
+def test_loads_local_ollama_profile_mapping(monkeypatch):
+    monkeypatch.setenv("AGENT_LLM_PROFILE", "local")
+
+    profile = load_llm_profile()
+
+    assert profile.endpoint == "http://localhost:11434/v1"
+    assert profile.roles["triage"] == "openai:qwen2.5:3b"
+    assert set(profile.roles) == {"triage", "draft", "reason", "memory_style"}
+    assert profile.fallbacks == {}
+    assert get_llm_model_name("draft") == "openai:qwen2.5:3b"
+
+
 def test_prod_fallback_uses_backup_model(monkeypatch, tmp_path):
     path = tmp_path / "llm.test.yaml"
     path.write_text(
