@@ -46,6 +46,7 @@ def test_respond_stream_emits_redraft_progress(fake_llms, respond_email, monkeyp
             body = "".join(response.iter_text())
 
     assert response.status_code == 200
+    assert "event: status" in body
     assert "event: draft" in body
     assert "Draft two, shorter and clearer." in body
     assert "event: end" in body

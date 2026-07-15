@@ -2653,6 +2653,28 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     return response
 
 
+async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str):
+    yield _sse_event("status", {
+        "run_id": run_id,
+        "message": "L’agent rédige une nouvelle version du brouillon...",
+    })
+    try:
+        result = await _invoke_graph(
+            graph,
+            Command(resume=[{"type": "response", "args": feedback}]), config, reload_runtime_config=False
+        )
+        response = _format(result, run_id)
+        _record_response(response)
+    except Exception as exc:
+        response = _pending_response_after_decision_error(run_id, exc, "regenerate draft")
+        if response is None:
+            yield _sse_event("error", {"run_id": run_id, "message": str(exc)})
+            yield _sse_event("end", {"run_id": run_id, "status": "failed"})
+            return
+    async for chunk in _stream_run_response(response):
+        yield chunk
+
+
 @app.post("/run/{run_id}/respond/stream")
 async def respond_stream(request: Request, run_id: str, body: RespondInput) -> StreamingResponse:
     _require_instance_role(request, "approver")
@@ -2660,15 +2682,4 @@ async def respond_stream(request: Request, run_id: str, body: RespondInput) -> S
     _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
-    try:
-        result = await _invoke_graph(
-            graph,
-            Command(resume=[{"type": "response", "args": body.feedback}]), config, reload_runtime_config=False
-        )
-        response = _format(result, run_id)
-        _record_response(response)
-    except Exception as exc:
-        response = _pending_response_after_decision_error(run_id, exc, "regenerate draft")
-        if response is None:
-            raise
-    return StreamingResponse(_stream_run_response(response), media_type="text/event-stream")
+    return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback), media_type="text/event-stream")
