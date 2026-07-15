@@ -1,0 +1,8 @@
+endpoint: "http://ollama:11434/v1"
+temperature: 0.0
+roles:
+  triage: "openai:qwen2.5:3b"
+  draft: "openai:qwen2.5:3b"
+  reason: "openai:qwen2.5:3b"
+  memory_style: "openai:qwen2.5:3b"
+fallbacks: {}
