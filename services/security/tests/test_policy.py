@@ -13,7 +13,7 @@ def test_default_policy_loads():
     assert "write_email" in policy.tools
     assert policy.tools["write_email"].decision == "hitl"
     assert policy.tools["write_email"].limits is not None
-    assert policy.tools["write_email"].limits.max_per_run == 1
+    assert policy.tools["write_email"].limits.max_per_run == 5
     assert policy.tools["write_email"].limits.max_per_day == 100
     assert policy.tools["write_email"].limits.max_content_chars == 20000
     for action in (
