@@ -11,7 +11,11 @@ tools:
       deny_domains: []
     limits:
       max_content_chars: 20000
-      max_per_run: 1          # one send per email run
+      # The reservation is taken when a draft is PROPOSED (each HITL feedback
+      # round proposes a new draft with a new action id), not when it is sent —
+      # the approval gate still guarantees at most one actual send. Keep room
+      # for a few redraft rounds per run.
+      max_per_run: 5
       max_per_day: 100
 
   # Reversible inbox organization actions.
