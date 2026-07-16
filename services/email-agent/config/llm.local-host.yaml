@@ -1,8 +1,12 @@
 endpoint: "http://host.docker.internal:11434/v1"
 temperature: 0.0
+# Small local model rambles to the context limit without a cap; keep replies
+# bounded so a draft takes seconds, not minutes.
+max_tokens: 700
+timeout: 120
 roles:
-  triage: "openai:qwen2.5:3b"
-  draft: "openai:qwen2.5:3b"
-  reason: "openai:qwen2.5:3b"
-  memory_style: "openai:qwen2.5:3b"
+  triage: "openai:qwen2.5:3b-8k"
+  draft: "openai:qwen2.5:3b-8k"
+  reason: "openai:qwen2.5:3b-8k"
+  memory_style: "openai:qwen2.5:3b-8k"
 fallbacks: {}

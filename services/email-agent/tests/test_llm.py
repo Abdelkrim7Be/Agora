@@ -52,10 +52,10 @@ def test_loads_local_ollama_profile_mapping(monkeypatch):
     profile = load_llm_profile()
 
     assert profile.endpoint == "http://localhost:11434/v1"
-    assert profile.roles["triage"] == "openai:qwen2.5:3b"
+    assert profile.roles["triage"] == "openai:qwen2.5:3b-8k"
     assert set(profile.roles) == {"triage", "draft", "reason", "memory_style"}
     assert profile.fallbacks == {}
-    assert get_llm_model_name("draft") == "openai:qwen2.5:3b"
+    assert get_llm_model_name("draft") == "openai:qwen2.5:3b-8k"
 
 
 def test_prod_fallback_uses_backup_model(monkeypatch, tmp_path):
