@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from langgraph.graph import START, END, StateGraph
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command, interrupt
+from pydantic import BaseModel as PydanticBaseModel
 
 import re as _re
 
@@ -393,6 +395,119 @@ def category_router(
     return Command(goto="triage_router", update=category_update)
 
 
+class _CoercedDraft(PydanticBaseModel):
+    """Structured extraction of an email draft from a plain-text model reply."""
+
+    is_email_draft: bool = False
+    to: str = ""
+    subject: str = ""
+    content: str = ""
+
+
+def _normalize_recipient_args(args: dict) -> dict:
+    """Strip stray wrapping quotes from recipient addresses.
+
+    A draft edited or extracted with a quoted address ('"user@x.com"') makes
+    Gmail reject the send and derails the model into error narration.
+    """
+    to = args.get("to") if isinstance(args, dict) else None
+    if isinstance(to, str):
+        cleaned = to.strip().strip('"').strip("'").strip()
+        if cleaned != to:
+            return {**args, "to": cleaned}
+    return args
+
+
+def _last_write_email_args(messages) -> dict:
+    for message in reversed(messages):
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            if tool_call.get("name") == "write_email":
+                return dict(tool_call.get("args") or {})
+    return {}
+
+
+def _coerce_text_draft_to_tool_call(response, messages, run_id: str):
+    """Turn a narrated redraft into a write_email tool call.
+
+    Small local models sometimes answer a redraft request with the revised
+    email as plain text even when tool_choice is required. Extracting the
+    fields keeps the feedback loop on the normal HITL path instead of nudging
+    the model until the run gives up.
+    """
+    text = response.content if isinstance(response.content, str) else ""
+    if not text.strip():
+        return None
+    previous = _last_write_email_args(messages)
+    try:
+        extractor = llm.with_structured_output(_CoercedDraft)
+        extracted = extractor.invoke(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "The assistant message below may contain a revised email draft, "
+                        "possibly surrounded by narration. If it contains an actual email "
+                        "body addressed to the correspondent, set is_email_draft=true and "
+                        "extract the final email only: recipient (to), subject, and the "
+                        "full body (content). If the message is NOT an email draft — an "
+                        "error explanation, a question to the operator, a refusal, or "
+                        "meta-commentary about the task — set is_email_draft=false and "
+                        "leave the other fields empty."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            config=llm_invoke_config(run_id, "llm_call"),
+        )
+    except Exception as exc:
+        print(f"draft coercion failed: {exc}")
+        return None
+    content = (extracted.content or "").strip()
+    if not extracted.is_email_draft or not content:
+        print("✏️ Redraft narration is not an email draft; not coercing")
+        return None
+    args = _normalize_recipient_args({
+        "to": (extracted.to or "").strip() or previous.get("to", ""),
+        "subject": (extracted.subject or "").strip() or previous.get("subject", ""),
+        "content": content,
+    })
+    print("✏️ Redraft returned as text; coerced into a write_email tool call")
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_email",
+                "args": args,
+                "id": f"llm_coerced_{uuid.uuid4().hex}",
+                "type": "tool_call",
+            }
+        ],
+    )
+
+
+# Long feedback conversations accumulate one AI+tool pair per round; on small
+# local models the resulting prompt overflows the context window, which degrades
+# drafts and slows every call. Recent turns plus the original email are enough.
+_HISTORY_MAX_MESSAGES = 12
+
+
+def _trim_history(messages: list) -> list:
+    if len(messages) <= _HISTORY_MAX_MESSAGES:
+        return messages
+    head = messages[:1]
+    tail = list(messages[-_HISTORY_MAX_MESSAGES:])
+    # Never start the tail on a tool result whose AI tool_call was trimmed away:
+    # OpenAI-compatible APIs reject orphaned tool messages.
+    def _is_orphan_tool(message) -> bool:
+        if isinstance(message, dict):
+            return message.get("role") == "tool"
+        return getattr(message, "type", None) == "tool"
+
+    while tail and _is_orphan_tool(tail[0]):
+        tail.pop(0)
+    return head + tail
+
+
 def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
     try:
         return llm_obj.invoke(messages, config=invoke_config)
@@ -440,7 +555,7 @@ def llm_call(state: State, store: BaseStore, config=None):
                 workflow_instructions_section=workflow_instructions_section,
             ),
         }
-    ] + state["messages"]
+    ] + _trim_history(list(state["messages"]))
     run_id = _run_id_from_config(config)
     try:
         response = _invoke_llm(llm_with_tools, messages, llm_invoke_config(run_id, "llm_call"))
@@ -448,6 +563,10 @@ def llm_call(state: State, store: BaseStore, config=None):
         response = _recover_tool_call_from_failed_generation(exc)
         if response is None:
             raise
+    if state.get("redraft_requested") and not getattr(response, "tool_calls", None):
+        coerced = _coerce_text_draft_to_tool_call(response, state["messages"], run_id)
+        if coerced is not None:
+            response = coerced
     return {"messages": [response]}
 
 
@@ -656,6 +775,22 @@ def _authorize_tool_action(
     return _authorization_cache[key]
 
 
+def update_memory_background(store, ns, messages, llm, invoke_config) -> None:
+    """Run the preference-learning LLM call off the request path.
+
+    The memory synthesis call adds a full LLM round-trip; running it in a
+    daemon thread keeps redrafts and edits responsive while learning still
+    lands in the store shortly after.
+    """
+    def _run():
+        try:
+            update_memory(store, ns, messages, llm, invoke_config)
+        except Exception as exc:
+            print(f"memory: background preference update failed: {exc}")
+
+    threading.Thread(target=_run, name="memory-update", daemon=True).start()
+
+
 def tool_node(state: State, store: BaseStore, config=None):
     """Execute tool calls, pausing for approval on gated tools and learning from decisions."""
     result = []
@@ -686,7 +821,7 @@ def tool_node(state: State, store: BaseStore, config=None):
 
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
-        args = apply_signature_to_args(name, tool_call["args"])
+        args = _normalize_recipient_args(apply_signature_to_args(name, tool_call["args"]))
         authorization_decision = "hitl" if name in approval_set else "allow"
 
         if settings.security_enabled:
@@ -722,7 +857,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                     "content": f"User ignored the '{name}' draft. Ignore this email and call Done.",
                     "tool_call_id": tool_call["id"],
                 })
-                update_memory(
+                update_memory_background(
                     store,
                     namespace("triage_preferences"),
                     list(state["messages"])
@@ -753,7 +888,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                     ),
                     "tool_call_id": tool_call["id"],
                 })
-                update_memory(
+                update_memory_background(
                     store,
                     namespace("response_preferences"),
                     list(state["messages"])
@@ -781,7 +916,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                         tc for tc in ai_message.tool_calls if tc["id"] != tool_call["id"]
                     ] + [{"type": "tool_call", "name": name, "args": edited_args, "id": tool_call["id"]}]
                     result.append(ai_message.model_copy(update={"tool_calls": updated_tool_calls}))
-                    update_memory(
+                    update_memory_background(
                         store,
                         namespace("response_preferences"),
                         [{
@@ -901,16 +1036,59 @@ def after_tools(state: State) -> Literal["llm_call", "__end__"]:
     return "llm_call"
 
 
+_REDRAFT_NUDGE_SNIPPETS = (
+    "Call write_email with the updated draft for approval",
+    "Call write_email with a revised draft for approval",
+)
+# Marks the start of a feedback round (appended by tool_node on a respond
+# decision); nudge attempts reset at each new round.
+_FEEDBACK_MARKER = "The user requested changes to this draft:"
+_REDRAFT_MAX_ATTEMPTS = 3
+
+
+class RedraftGiveUpError(RuntimeError):
+    """Raised when the model repeatedly fails to produce a revised draft.
+
+    Aborting the graph (instead of routing to END) lets the API keep the run
+    pending with its previous draft rather than silently completing it.
+    """
+
+
+def _redraft_attempts(messages) -> int:
+    count = 0
+    for message in messages:
+        if isinstance(message, dict):
+            content = message.get("content")
+        else:
+            content = getattr(message, "content", None)
+        if not isinstance(content, str):
+            continue
+        if _FEEDBACK_MARKER in content:
+            count = 0
+        if any(s in content for s in _REDRAFT_NUDGE_SNIPPETS):
+            count += 1
+    return count
+
+
+def _force_redraft_or_give_up(state: State) -> Literal["force_redraft"]:
+    if _redraft_attempts(state["messages"]) >= _REDRAFT_MAX_ATTEMPTS:
+        raise RedraftGiveUpError(
+            f"No revised draft after {_REDRAFT_MAX_ATTEMPTS} attempts; "
+            "the previous draft is kept pending."
+        )
+    return "force_redraft"
+
+
 def should_continue(state: State) -> Literal["environment", "force_redraft", "__end__"]:
     """Route to tools, or keep feedback runs alive until a revised draft exists."""
     last_message = state["messages"][-1]
     if last_message.tool_calls:
         for tool_call in last_message.tool_calls:
             if tool_call["name"] == "Done":
-                return "force_redraft" if state.get("redraft_requested") else END
+                return _force_redraft_or_give_up(state) if state.get("redraft_requested") else END
             return "environment"
     if state.get("redraft_requested"):
-        return "force_redraft"
+        return _force_redraft_or_give_up(state)
     return END
 
 
