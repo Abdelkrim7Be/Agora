@@ -9,6 +9,26 @@ import uuid
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_BACKOFF_SECONDS = 30.0
 
+# When Gmail reports rateLimitExceeded, pause ALL polling for a while instead of
+# retrying every cycle — hammering an exhausted quota keeps the window busy and
+# starves interactive actions (approve/send) that share the same per-user budget.
+RATE_LIMIT_PAUSE_SECONDS = 120.0
+_gmail_rate_limited_until = 0.0
+
+
+def _note_gmail_rate_limit(exc: Exception) -> bool:
+    """Record a global polling pause when the error is a Gmail rate limit."""
+    global _gmail_rate_limited_until
+    text = str(exc)
+    if "rateLimitExceeded" not in text and "Too Many Requests" not in text:
+        return False
+    _gmail_rate_limited_until = time.time() + RATE_LIMIT_PAUSE_SECONDS
+    print(
+        f"poller: Gmail rate limit hit; pausing all polling for "
+        f"{int(RATE_LIMIT_PAUSE_SECONDS)}s"
+    )
+    return True
+
 
 from src.automation import (
     RulesConfig,
@@ -284,16 +304,14 @@ async def process_message(
     resource,
     rules_config: RulesConfig,
 ) -> tuple:
-    message = get_message(msg_id, resource=resource)
-    labels = message.get("labelIds")
-    if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
-        return (msg_id, "skipped", "")
-
     # An email left UNREAD because it already has a run must not be reprocessed:
     # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
     # an approved reply the API sent but couldn't mark read) just needs housekeeping.
+    # Checked BEFORE fetching the message: with a short poll interval, re-fetching
+    # every known unread email each cycle burns the Gmail per-user quota (429s on
+    # sends share the same budget).
     existing = find_run_by_email(
-        message.get("id"),
+        msg_id,
         # Runs belong to the mailbox instance, not to the actor who triggered sync.
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
@@ -303,6 +321,11 @@ async def process_message(
             return (msg_id, existing["status"], existing["run_id"])
         mark_as_read(msg_id, resource=resource)
         return (msg_id, "skipped", existing["run_id"])
+
+    message = get_message(msg_id, resource=resource)
+    labels = message.get("labelIds")
+    if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
+        return (msg_id, "skipped", "")
 
     thread = fetch_thread(message["threadId"], resource=resource)
     email_input = {
@@ -474,6 +497,10 @@ async def poll_active_instances_once(
     instance_ids: list[str] | None = None,
 ) -> dict[str, list[tuple]]:
     """Poll every active, connected instance without cross-instance failure spread."""
+    if time.time() < _gmail_rate_limited_until:
+        remaining = int(_gmail_rate_limited_until - time.time())
+        print(f"poller: Gmail rate-limit pause active ({remaining}s left); skipping cycle")
+        return {}
     instances = instance_ids or active_email_agent_instance_ids()
     results: dict[str, list[tuple]] = {}
     for raw_instance_id in instances:
@@ -496,6 +523,8 @@ async def poll_active_instances_once(
                     print(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))
                     results[instance_id] = []
+                    if _note_gmail_rate_limit(exc):
+                        break
                     continue
 
                 results[instance_id] = outcomes
