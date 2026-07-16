@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import re as _re
 import time
 import uuid
 
@@ -9,23 +10,49 @@ import uuid
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_BACKOFF_SECONDS = 30.0
 
-# When Gmail reports rateLimitExceeded, pause ALL polling for a while instead of
-# retrying every cycle — hammering an exhausted quota keeps the window busy and
-# starves interactive actions (approve/send) that share the same per-user budget.
-RATE_LIMIT_PAUSE_SECONDS = 120.0
+# When Gmail reports rateLimitExceeded, pause ALL polling instead of retrying
+# every cycle — hammering an exhausted quota keeps the window busy and starves
+# interactive actions (approve/send) that share the same per-user budget.
+# Google's "Retry after" slides forward when probed too early, so the pause
+# honors the server timestamp with a margin and doubles on consecutive hits.
+RATE_LIMIT_PAUSE_MIN_SECONDS = 300.0
+RATE_LIMIT_PAUSE_MAX_SECONDS = 1800.0
+RATE_LIMIT_RETRY_MARGIN_SECONDS = 90.0
 _gmail_rate_limited_until = 0.0
+_gmail_rate_limit_pause = RATE_LIMIT_PAUSE_MIN_SECONDS
+
+
+def _retry_after_epoch(exc_text: str) -> float | None:
+    match = _re.search(r"Retry after (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)Z", exc_text)
+    if not match:
+        return None
+    try:
+        parsed = datetime.fromisoformat(match.group(1)).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return parsed.timestamp()
 
 
 def _note_gmail_rate_limit(exc: Exception) -> bool:
     """Record a global polling pause when the error is a Gmail rate limit."""
-    global _gmail_rate_limited_until
+    global _gmail_rate_limited_until, _gmail_rate_limit_pause
     text = str(exc)
     if "rateLimitExceeded" not in text and "Too Many Requests" not in text:
         return False
-    _gmail_rate_limited_until = time.time() + RATE_LIMIT_PAUSE_SECONDS
+    now = time.time()
+    consecutive = _gmail_rate_limited_until > 0 and now < _gmail_rate_limited_until + 600
+    if consecutive:
+        _gmail_rate_limit_pause = min(_gmail_rate_limit_pause * 2, RATE_LIMIT_PAUSE_MAX_SECONDS)
+    else:
+        _gmail_rate_limit_pause = RATE_LIMIT_PAUSE_MIN_SECONDS
+    until = now + _gmail_rate_limit_pause
+    retry_after = _retry_after_epoch(text)
+    if retry_after:
+        until = max(until, retry_after + RATE_LIMIT_RETRY_MARGIN_SECONDS)
+    _gmail_rate_limited_until = until
     print(
         f"poller: Gmail rate limit hit; pausing all polling for "
-        f"{int(RATE_LIMIT_PAUSE_SECONDS)}s"
+        f"{int(until - now)}s"
     )
     return True
 
