@@ -155,8 +155,10 @@ public class ProxyController {
         spec.exchange((req, resp) -> {
             int status = resp.getStatusCode().value();
 
-            auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                    downstreamPath, status, "forwarded");
+            if (shouldRecordForwardedAudit(request, downstreamPath)) {
+                auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
+                        downstreamPath, status, "forwarded");
+            }
 
             response.setStatus(status);
             MediaType upstreamContentType = resp.getHeaders().getContentType();
@@ -202,6 +204,10 @@ public class ProxyController {
             if (path.startsWith(prefix)) return "approve";
         }
         return "write";
+    }
+
+    private boolean shouldRecordForwardedAudit(HttpServletRequest request, String downstreamPath) {
+        return !("GET".equals(request.getMethod()) && "/api/agent/runs".equals(downstreamPath));
     }
 
     private String deriveAction(HttpServletRequest request) {
