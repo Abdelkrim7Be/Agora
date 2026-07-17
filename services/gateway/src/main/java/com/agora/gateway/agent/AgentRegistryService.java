@@ -21,11 +21,17 @@ import java.util.UUID;
 @Service
 public class AgentRegistryService {
 
+    private static final long HEALTH_CACHE_TTL_SECONDS = 5;
+
     private final GatewayProperties props;
     private final AgentInstanceRepository instances;
     private final AgentInstanceGrantRepository grants;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final java.util.concurrent.ConcurrentHashMap<String, HealthCacheEntry> healthCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record HealthCacheEntry(String health, Instant expiresAt) {}
 
     public AgentRegistryService(GatewayProperties props, AgentInstanceRepository instances,
                                 AgentInstanceGrantRepository grants, RestClient.Builder builder,
@@ -45,7 +51,24 @@ public class AgentRegistryService {
         return props.getAgentTypes().stream().filter(t -> t.getId().equals(id)).findFirst();
     }
 
+    /** Fresh probe on every call — /agents keeps its live health semantics. */
     public String serviceHealth(GatewayProperties.AgentType type) {
+        String health = probeServiceHealth(type);
+        healthCache.put(type.getId(), new HealthCacheEntry(health, Instant.now().plusSeconds(HEALTH_CACHE_TTL_SECONDS)));
+        return health;
+    }
+
+    /** Instance listings probe the same upstream once per instance; a short TTL
+     *  collapses those duplicate probes without hiding a real outage for long. */
+    public String cachedServiceHealth(GatewayProperties.AgentType type) {
+        HealthCacheEntry cached = healthCache.get(type.getId());
+        if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
+            return cached.health();
+        }
+        return serviceHealth(type);
+    }
+
+    private String probeServiceHealth(GatewayProperties.AgentType type) {
         try {
             var response = restClient.get()
                     .uri(URI.create(upstreamBase(type) + type.getHealthPath()))
@@ -110,7 +133,7 @@ public class AgentRegistryService {
         if ("inactive".equalsIgnoreCase(instance.getStatus())) {
             summary.put("service_health", "inactive");
         } else {
-            findType(instance.getAgentType()).ifPresent(type -> summary.put("service_health", serviceHealth(type)));
+            findType(instance.getAgentType()).ifPresent(type -> summary.put("service_health", cachedServiceHealth(type)));
         }
         if (!"email-agent".equals(instance.getAgentType())) {
             return summary;

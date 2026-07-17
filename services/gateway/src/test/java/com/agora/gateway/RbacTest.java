@@ -29,6 +29,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -746,6 +747,19 @@ class RbacTest {
                         .content("{\"username\":\"tempstaff\",\"password\":\"pw123456\"}"))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void admin_cannot_disable_current_user() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        var admin = userRepository.findByUsername("admin").orElseThrow();
+
+        mockMvc.perform(post("/users/" + admin.getId() + "/disable")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest());
+
+        assertTrue(userRepository.findByUsername("admin").orElseThrow().isEnabled());
+    }
+
 
     @Test
     void approver_role_passes_approve_route_gate() throws Exception {
