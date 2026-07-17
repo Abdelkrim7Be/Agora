@@ -11,6 +11,7 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from src.config import SERVICE_ROOT, settings
+from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
 
@@ -362,7 +363,7 @@ def _send_email_message(
 
 def send_message(to: str, subject: str, body: str, resource=None) -> dict:
     """Send an agent-authored email with plain-text and HTML alternatives."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("send_message", to=to, subject=subject)
     return _send_email_message(to=to, subject=subject, body=body, resource=resource, rich=True)
 
@@ -381,7 +382,7 @@ def send_html_message(
     Gmail rather than a raw markdown block. Honors AGENT_DRY_RUN like the other
     send helpers so approval-gated broadcasts stay safe in dev.
     """
-    if respect_dry_run and settings.dry_run:
+    if respect_dry_run and effective_dry_run():
         return _dry_run_result("send_html", to=to, subject=subject)
     resource = resource or gmail_resource()
     message = EmailMessage()
@@ -450,7 +451,7 @@ def modify_labels(
     """
     add_label_ids = add_label_ids or []
     remove_label_ids = remove_label_ids or []
-    if respect_dry_run and settings.dry_run:
+    if respect_dry_run and effective_dry_run():
         return _dry_run_result(
             "modify_labels",
             message_id=message_id,
@@ -491,7 +492,7 @@ def archive_message(msg_id: str, resource=None) -> dict:
 
 def trash_message(msg_id: str, resource=None) -> dict:
     """Move a message to Gmail trash."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("trash_message", message_id=msg_id)
     resource = resource or gmail_resource()
     return resource.users().messages().trash(userId="me", id=msg_id).execute()
@@ -506,7 +507,7 @@ def list_labels(resource=None) -> list[dict]:
 
 def ensure_label(name: str, resource=None) -> str:
     """Return a Gmail label id, creating the label when missing."""
-    if settings.dry_run:
+    if effective_dry_run():
         return f"dry-run-label:{name}"
     resource = resource or gmail_resource()
     for label in list_labels(resource=resource):
@@ -536,7 +537,7 @@ def create_draft(
     resource=None,
 ) -> dict:
     """Create a Gmail draft without sending it."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result(
             "create_draft",
             to=to,
@@ -558,7 +559,7 @@ def create_draft(
 
 def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
     """Forward a Gmail message to a recipient, optionally with a note."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("forward_message", message_id=message_id, to=to)
     resource = resource or gmail_resource()
     original = get_message(message_id, resource=resource)
@@ -578,7 +579,7 @@ def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
 
 def reply_all_message(message_id: str, body: str, resource=None) -> dict:
     """Reply to all participants on a Gmail message's thread."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("reply_all_message", message_id=message_id)
     resource = resource or gmail_resource()
     original = get_message(message_id, resource=resource)

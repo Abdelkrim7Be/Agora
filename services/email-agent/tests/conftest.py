@@ -73,6 +73,19 @@ class _FakeRedraftLLM:
         )
 
 
+@pytest.fixture(autouse=True)
+def _send_mode_follows_dry_run(monkeypatch):
+    """Legacy tests toggle settings.dry_run directly to reach the live-send paths.
+
+    Map the per-instance send mode to 'live' so effective_dry_run() keeps
+    following the global flag in those tests; send-mode-specific tests
+    monkeypatch src.send_mode.get_send_mode themselves.
+    """
+    import src.send_mode as sm
+
+    monkeypatch.setattr(sm, "get_send_mode", lambda agent_instance_id=None: "live")
+
+
 @pytest.fixture
 def fake_llms(monkeypatch):
     """Patch the graph's router, tool LLM, and memory LLM for offline deterministic tests."""
