@@ -3,7 +3,8 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from src.capabilities import current_email_id
-from src.config import settings
+from src.config import settings  # noqa: F401 — tests patch dry_run through this module
+from src.send_mode import effective_dry_run
 from src.gmail_client import (
     archive_message,
     ensure_label,
@@ -21,7 +22,7 @@ def _message_id() -> str:
 
 
 def _label_id(label: str) -> str:
-    if settings.dry_run:
+    if effective_dry_run():
         return f"dry-run-label:{label}"
     for existing in list_labels():
         if label in (existing.get("id"), existing.get("name")):

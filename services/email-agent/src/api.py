@@ -142,6 +142,7 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
+from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
 from src.signature import SignatureConfig, load_signature, save_signature
 
 
@@ -273,6 +274,10 @@ class ApprovalInput(BaseModel):
 
 class RespondInput(BaseModel):
     feedback: str
+
+
+class SendModeInput(BaseModel):
+    send_mode: str
 
 
 class GroupInput(BaseModel):
@@ -1726,7 +1731,8 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
     if record.get("missing_variables"):
         raise HTTPException(status_code=422, detail="Variables manquantes détectées avant l'envoi")
 
-    resource = None if settings.dry_run else gmail_resource()
+    campaign_dry_run = effective_dry_run()
+    resource = None if campaign_dry_run else gmail_resource()
     sent, denied, failed = [], [], []
     for index, email in enumerate(record["rendered"]):
         if settings.security_enabled:
@@ -1752,7 +1758,7 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
             failed.append({"email": email["email"], "error": str(exc)})
 
     record["status"] = "sent"
-    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": settings.dry_run}
+    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": campaign_dry_run}
     summary = _campaign_summary(campaign_id, record)
     _pending_campaigns.pop(campaign_id, None)
     return summary
@@ -2081,6 +2087,31 @@ async def update_agent_config(body: dict) -> dict:
     )
     reload_config()  # persona/triage edits take effect without a restart (this process)
     return cfg.model_dump()
+
+
+@app.get("/send-mode")
+async def get_send_mode_endpoint() -> dict:
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "send_mode": get_send_mode(),
+        "dry_run_lock": settings.dry_run,
+        "effective_dry_run": effective_dry_run(),
+    }
+
+
+@app.put("/send-mode")
+async def update_send_mode(request: Request, body: SendModeInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        mode = set_send_mode(body.send_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "send_mode": mode,
+        "dry_run_lock": settings.dry_run,
+        "effective_dry_run": effective_dry_run(),
+    }
 
 
 @app.get("/signature")
