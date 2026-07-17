@@ -1,7 +1,8 @@
 # Demo-only overrides (auto-merged by `docker compose`). Not committed-critical:
 #   - mounts the real Gmail OAuth files into the agent so it can send
 #   - enables REAL sends (AGENT_DRY_RUN=false) so an approved reply actually arrives
-#   - ~6-second poll so a live-sent email is picked up fast
+#   - 1-minute poll so a live-sent email is picked up fast without tripping
+#     Google's per-user abuse limiter (6s polling earned sliding 30-min bans)
 # Remove this file (or set AGENT_DRY_RUN=true) to go back to safe dry-run mode.
 services:
   # Use the host Ollama systemd service for local GPU inference.
@@ -11,6 +12,14 @@ services:
 
   ollama-init:
     profiles: ["docker-ollama"]
+
+  # This machine runs Ollama as a host service (no docker-ollama profile), so the
+  # security quarantine classifier reaches it through the docker host gateway.
+  security:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SECURITY_SANITIZE_ENDPOINT: http://host.docker.internal:11434/v1
 
   # Host port 8080 is taken by another project (edun7), so expose the gateway on
   # 8090 instead. `!override` replaces the base port list (otherwise it'd merge).
@@ -27,11 +36,12 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      AGENT_DRY_RUN: "false"
+      # dry-run while seeding the demo; flip back to "false" for the live-send proof
+      AGENT_DRY_RUN: "true"
       AGENT_LLM_PROFILE: local
       AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
-      AGENT_POLL_INTERVAL_MIN: "0.1"
+      AGENT_POLL_INTERVAL_MIN: "1"
       GMAIL_TOKEN_PATH: /app/data/token.json
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
     volumes:
@@ -70,11 +80,21 @@ services:
       AGENT_LLM_PROFILE: local
       AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
-      AGENT_DRY_RUN: "false"
-      AGENT_POLL_INTERVAL_MIN: "0.1"
+      # dry-run while seeding the demo; flip back to "false" for the live-send proof
+      AGENT_DRY_RUN: "true"
+      # 1-minute cadence: 6-second polling ran for days and tripped Google's
+      # per-user abuse limiter (sliding 30-min "Retry after" bans on the whole
+      # mailbox). One minute is still fast enough for a live demo.
+      AGENT_POLL_INTERVAL_MIN: "1"
       GMAIL_TOKEN_PATH: /app/data/token.json
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
       GMAIL_POLLING_FALLBACK_ENABLED: "true"
+      # Push mode (see services/email-agent/docs/gmail-push-setup.md). When enabled,
+      # polling drops to the slow safety-net cadence automatically.
+      GMAIL_WEBHOOK_ENABLED: ${GMAIL_WEBHOOK_ENABLED:-false}
+      GMAIL_WEBHOOK_TOPIC: ${GMAIL_WEBHOOK_TOPIC:-}
+      GMAIL_WEBHOOK_SECRET: ${GMAIL_WEBHOOK_SECRET:-}
+      AGENT_WEBHOOK_FALLBACK_POLL_MIN: ${AGENT_WEBHOOK_FALLBACK_POLL_MIN:-10}
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
     volumes:

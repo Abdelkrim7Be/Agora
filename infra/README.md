@@ -11,13 +11,12 @@ cp .env.example .env
 ```
 
 Required values:
-- `GROQ_API_KEY` — used by the security service quarantined classifier
 - `GATEWAY_JWT_SECRET` — at least 32 characters, random string
 - `GATEWAY_OWNER_USERNAME` / `GATEWAY_OWNER_PASSWORD` — admin credentials
 - `GATEWAY_VIEWER_USERNAME` / `GATEWAY_VIEWER_PASSWORD` — read-only credentials (optional; leave blank to skip seeding)
 - `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` — database config
 
-The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). At minimum it needs `GROQ_API_KEY` for its agent LLM calls. Compose enables `AGENT_SECURITY_ENABLED=true`, points the agent at `http://security:8001`, stores agent graph/run state in Postgres, and stores security rate limits in Redis.
+The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). LLM calls are local-first: agents and the security quarantine classifier run on Ollama (`qwen2.5:3b-8k` via the OpenAI-compatible endpoint); no cloud LLM key is required. Cloud providers remain available through the optional `cloud` compose profile (LiteLLM) and the explicit `dev`/`prod` LLM profiles. Compose enables `AGENT_SECURITY_ENABLED=true`, points the agent at `http://security:8001`, stores agent graph/run state in Postgres, and stores security rate limits in Redis.
 
 2. Start the stack:
 
