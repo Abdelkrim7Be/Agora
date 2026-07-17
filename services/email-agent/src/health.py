@@ -8,6 +8,7 @@ import httpx
 from src.config import settings
 from src.run_registry import ACTIVE_RUN_STATUSES, list_runs
 from src.sync_status import get_status as get_sync_status
+from src.sync_status import latest_success_at
 from src.tenant import current_agent_instance_id
 
 PROBE_TIMEOUT_SECONDS = 2.0
@@ -21,9 +22,16 @@ def _poller_component() -> dict:
     last_failure = status.get("last_failure_at")
     paused = bool(status.get("paused", False))
     up = not paused and (last_failure is None or (last_success and last_success > last_failure))
+    # Global page has no instance context: surface the freshest poll across
+    # every instance so an active mailbox isn't reported with a stale timestamp.
+    try:
+        global_success = latest_success_at()
+    except Exception:
+        global_success = None
+    display_last = max(filter(None, [last_success, global_success]), default=None)
     return {
         "status": "paused" if paused else ("up" if up else "down"),
-        "last_poll_at": last_success,
+        "last_poll_at": display_last,
         "last_error": status.get("last_error") if not up and not paused else None,
     }
 

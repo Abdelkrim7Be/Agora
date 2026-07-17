@@ -34,6 +34,9 @@ class EmailInput(TypedDict):
     gmail_thread_id: NotRequired[str]
     attachments: NotRequired[list]
     labels: NotRequired[list[str]]
+    # Bulk-mail header signals extracted by the poller for the deterministic junk gate.
+    list_unsubscribe: NotRequired[bool]
+    precedence_bulk: NotRequired[bool]
     automation: NotRequired[dict]
     # Verdict from the security service /sanitize, attached by the poller when
     # AGENT_SECURITY_ENABLED=true. Absent on the manual /run path. triage_router reads it.

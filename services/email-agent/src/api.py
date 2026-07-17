@@ -6,6 +6,7 @@ import contextlib
 import html
 import json
 import uuid
+from datetime import datetime, timezone
 
 import yaml
 from contextlib import asynccontextmanager
@@ -41,7 +42,7 @@ from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
-from src.poller import poll_history, poll_once
+from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once
 from src.memory import namespace, preferences_text, wrap_preferences
 from src.roles import (
     RoleConflictError,
@@ -106,6 +107,7 @@ from src.gmail_client import (
     archive_message,
     fetch_sent,
     gmail_resource,
+    is_stale_history_error,
     list_inbox,
     mark_as_read,
     mark_as_unread,
@@ -149,13 +151,13 @@ async def _watch_renewal_loop() -> None:
     inside that window for push delivery to keep working. Runs only when webhooks
     are enabled; ensure_watch also seeds the per-user historyId baseline.
     """
-    from src.poller import ensure_watch
+    from src.poller import ensure_watches
 
     setup_gmail_sync()
     interval = settings.gmail_watch_renew_hours * 3600
     while True:
         try:
-            await asyncio.to_thread(ensure_watch)
+            await asyncio.to_thread(ensure_watches)
         except Exception as exc:  # network/credential issues must not kill the API
             print(f"api: gmail watch registration failed: {exc}")
             record_sync_failure(str(exc))
@@ -851,28 +853,7 @@ def _decode_pubsub_data(message: dict) -> dict:
     return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
 
 
-def _http_status_code(exc: Exception) -> int | None:
-    response = getattr(exc, "resp", None)
-    status = getattr(response, "status", None)
-    if status is None:
-        status = getattr(exc, "status_code", None)
-    try:
-        return int(status) if status is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _is_stale_history_error(exc: Exception) -> bool:
-    status = _http_status_code(exc)
-    if status in {404, 410}:
-        return True
-    message = str(exc).lower()
-    return "starthistoryid" in message and any(marker in message for marker in (
-        "too old",
-        "not found",
-        "expired",
-        "invalid",
-    ))
+_is_stale_history_error = is_stale_history_error
 
 
 def _require_webhook_secret(request: Request) -> None:
@@ -1021,6 +1002,9 @@ async def retention_dry_run(request: Request) -> dict:
 @app.post("/retention/run")
 async def retention_execute(request: Request) -> dict:
     _require_instance_role(request, "owner")
+    retention_config = await asyncio.to_thread(load_retention_settings)
+    if retention_config.retention_days <= 0:
+        raise HTTPException(status_code=400, detail="retention disabled; set retention_days > 0 before executing")
     return await asyncio.to_thread(run_retention)
 
 
@@ -2268,6 +2252,33 @@ async def runs(
 async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=100)) -> dict:
     """Process unread Gmail messages now so validation reflects fresh mail."""
     user_id = current_user_id()
+    # Manual sync must respect the Gmail rate-limit cooldown: calling Gmail
+    # during a served ban only extends it. Two signals: the in-process pause
+    # (API-triggered 429s) and the shared sync_status written by the poller
+    # container (its last failure being a fresh unresolved rate-limit error).
+    pause_remaining = gmail_rate_limit_pause_remaining()
+    if pause_remaining <= 0:
+        status_snapshot = get_sync_status()
+        err = (status_snapshot.get("last_error") or "").lower()
+        if "ratelimitexceeded" in err or "rate limit" in err or "too many requests" in err:
+            last_failure = status_snapshot.get("last_failure_at") or ""
+            last_success = status_snapshot.get("last_success_at") or ""
+            if last_failure and last_failure > last_success:
+                try:
+                    failed_at = datetime.fromisoformat(last_failure.replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - failed_at).total_seconds()
+                except ValueError:
+                    age = 0.0
+                if age < 600:
+                    pause_remaining = 600 - age
+    if pause_remaining > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Limite Gmail atteinte côté Google. La synchronisation est en pause et "
+                f"reprendra automatiquement dans environ {int(pause_remaining // 60) + 1} min."
+            ),
+        )
     try:
         resource = await asyncio.to_thread(gmail_resource)
     except Exception as exc:

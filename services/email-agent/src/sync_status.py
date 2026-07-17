@@ -181,6 +181,34 @@ def get_status(
     }
 
 
+def latest_success_at() -> str | None:
+    """Most recent successful sync across ALL users/instances.
+
+    The global health page has no instance context; without this it would show
+    the default instance's timestamp, which can be stale while another instance
+    is actively syncing."""
+    if selected_run_registry_backend() == "postgres":
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT MAX(last_success_at) FROM email_agent_sync")
+                row = cur.fetchone()
+                value = row[0] if row else None
+                if value is None:
+                    return None
+                # The column may be timestamptz (datetime) or text depending on
+                # migration age; always hand back an ISO string like get_status.
+                return value if isinstance(value, str) else value.isoformat()
+    statuses = _json_read().get("statuses", {})
+    values = [
+        entry.get("last_success_at")
+        for per_user in statuses.values()
+        if isinstance(per_user, dict)
+        for entry in per_user.values()
+        if isinstance(entry, dict) and entry.get("last_success_at")
+    ]
+    return max(values) if values else None
+
+
 def record_success(
     mode: str,
     user_id: str | None = None,
@@ -217,6 +245,10 @@ def record_success(
 def public_error_message(error: str) -> str:
     raw = str(error or "")
     lowered = raw.lower()
+    # Gmail's own 429 also says "rate limit", so check for it before blaming
+    # the AI provider.
+    if "gmail.googleapis.com" in lowered or "user-rate limit" in lowered or "ratelimitexceeded" in lowered:
+        return "Gmail rate limit reached. Sync is paused; it resumes automatically once Google lifts the limit."
     if "rate_limit" in lowered or "rate limit" in lowered or "429" in lowered:
         return "AI provider rate limit reached. Wait a few minutes and try again."
     if "invalid_grant" in lowered or "expired or revoked" in lowered or "token has been expired" in lowered:

@@ -27,6 +27,10 @@ DEFAULT_COSTS_PATH = SERVICE_ROOT / "logs" / "llm_costs.jsonl"
 PRICES: dict[str, dict[str, float]] = {
     "groq:llama-3.3-70b-versatile": {"in": 0.54, "out": 0.79},
     "llama-3.3-70b-versatile": {"in": 0.54, "out": 0.79},
+    # Local Ollama models: estimated compute cost (electricity/amortization),
+    # not a provider invoice — keeps the cost dashboard meaningful locally.
+    "qwen2.5:3b-8k": {"in": 0.02, "out": 0.06},
+    "qwen2.5:3b": {"in": 0.02, "out": 0.06},
 }
 
 DEFAULT_UNKNOWN_MODEL_PRICE = {"in": 0.0, "out": 0.0}
@@ -65,7 +69,13 @@ def _profile_price_aliases() -> dict[str, dict[str, float]]:
         return {}
 
     aliases: dict[str, dict[str, float]] = {}
-    for model_name in set(profile.roles.values()):
+    role_models: set[str] = set()
+    for entry in profile.roles.values():
+        # Entries are model strings or per-role config objects with a .model.
+        model = entry if isinstance(entry, str) else getattr(entry, "model", "")
+        if model:
+            role_models.add(model)
+    for model_name in role_models:
         if model_name in PRICES:
             aliases[model_name] = dict(PRICES[model_name])
             continue

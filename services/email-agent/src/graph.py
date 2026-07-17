@@ -48,7 +48,7 @@ from src.prompts import (
     triage_user_prompt,
 )
 from src.state import RouterSchema, State, StateInput
-from src.utils import format_draft_markdown, format_email_markdown, parse_email
+from src.utils import ensure_email_paragraphs, format_draft_markdown, format_email_markdown, parse_email
 from src.trace import record_trace
 
 load_dotenv()
@@ -821,7 +821,12 @@ def tool_node(state: State, store: BaseStore, config=None):
 
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
-        args = _normalize_recipient_args(apply_signature_to_args(name, tool_call["args"]))
+        raw_args = tool_call["args"]
+        # Structure safety net for agent-generated bodies (never touches
+        # human-edited args, which resume through a different path below).
+        if name in {"write_email", "reply_all", "create_draft"} and isinstance(raw_args.get("content"), str):
+            raw_args = {**raw_args, "content": ensure_email_paragraphs(raw_args["content"])}
+        args = _normalize_recipient_args(apply_signature_to_args(name, raw_args))
         authorization_decision = "hitl" if name in approval_set else "allow"
 
         if settings.security_enabled:
@@ -884,6 +889,8 @@ def tool_node(state: State, store: BaseStore, config=None):
                     "content": (
                         f"The user requested changes to this draft: {feedback}. "
                         "Revise the draft by calling write_email again for approval. "
+                        "Apply ONLY the requested change; keep everything else in the draft "
+                        "(recipients, subject, wording, paragraph structure) exactly as it was. "
                         "Do not call Done until a revised draft has been approved and sent."
                     ),
                     "tool_call_id": tool_call["id"],

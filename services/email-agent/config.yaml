@@ -6,23 +6,25 @@ agent:
     I'm a software engineer who wants help triaging and responding to email.
 
   triage_instructions: |
-    Default toward responding. This mailbox is a point of contact, so when an
-    email is written by a real person and plausibly expects any reply, classify it
-    as RESPOND. Only fall back to ignore/notify when it clearly fits below.
+    Classify RESPOND only when a real person asks something actionable of this
+    mailbox. Automated, transactional, or bulk mail is never RESPOND, even when
+    it contains links or calls to action.
 
     Emails that are not worth responding to (ignore):
-    - Marketing newsletters and promotional/bulk emails
+    - Marketing newsletters, promotional or bulk emails, social-network mail
     - Spam or suspicious emails
-    - Pure automated/no-reply system mail with no question
+    - Any automated/no-reply system mail, even when it asks to click or confirm
 
     Emails worth knowing about but needing no reply (notify):
     - Build system notifications, deployments, GitHub notifications
-    - Subscription / renewal reminders with no question
+    - Delivery/transaction confirmations, receipts, subscription or renewal
+      reminders
     - FYI announcements that ask nothing of the reader
+    - When unsure between notify and respond, choose notify.
 
     Emails that are worth responding to (respond):
-    - ANY direct question, request, or inquiry ("renseignement") addressed to this
-      mailbox, from anyone (colleagues, clients, candidates, interns, the public)
+    - A direct question, request, or inquiry ("renseignement") written by a real
+      person (colleagues, clients, candidates, interns, the public)
     - Requests for information, documents, attestations, or a status update
     - Prospective or current interns/candidates asking about positions, the company,
       or next steps
@@ -30,7 +32,6 @@ agent:
     - Bug reports or technical questions about documentation, code, or APIs
     - Requests from management or clients requiring acknowledgment
     - Personal messages from an individual that expect a reply
-    - When unsure between notify and respond, choose respond.
 
   response_preferences: |
     Use professional and concise language. If the email mentions a deadline,

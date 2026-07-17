@@ -1,8 +1,12 @@
-endpoint: null
+# Degraded-mode profile: same local Ollama backend as `local`, but with a
+# tighter output cap so a struggling machine still answers quickly. No cloud.
+endpoint: "http://localhost:11434/v1"
 temperature: 0.0
+max_tokens: 400
+timeout: 120
 roles:
-  triage: "groq:llama-3.3-70b-versatile"
-  draft: "groq:llama-3.3-70b-versatile"
-  reason: "groq:llama-3.3-70b-versatile"
-  memory_style: "groq:llama-3.3-70b-versatile"
+  triage: "openai:qwen2.5:3b-8k"
+  draft: "openai:qwen2.5:3b-8k"
+  reason: "openai:qwen2.5:3b-8k"
+  memory_style: "openai:qwen2.5:3b-8k"
 fallbacks: {}
