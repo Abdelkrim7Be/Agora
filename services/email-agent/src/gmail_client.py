@@ -219,6 +219,37 @@ def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
     )
 
 
+def current_history_id(resource=None) -> str:
+    """Return the mailbox's latest historyId (cheap getProfile call)."""
+    resource = resource or gmail_resource()
+    profile = resource.users().getProfile(userId="me").execute()
+    return str(profile.get("historyId") or "")
+
+
+def _http_status_code(exc: Exception) -> int | None:
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def is_stale_history_error(exc: Exception) -> bool:
+    """True when Gmail reports the startHistoryId window is gone (~1 week purge)."""
+    status = _http_status_code(exc)
+    if status in {404, 410}:
+        return True
+    message = str(exc).lower()
+    return "starthistoryid" in message and any(marker in message for marker in (
+        "too old",
+        "not found",
+        "expired",
+        "invalid",
+    ))
+
+
 def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dict]:
     """Return unique message refs mentioned by Gmail history since start_history_id."""
     resource = resource or gmail_resource()
@@ -719,4 +750,6 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "gmail_thread_id": message["threadId"],
         "attachments": extract_attachments(message["payload"]),
         "labels": message.get("labelIds", []),
+        "list_unsubscribe": bool(_header(headers, "List-Unsubscribe", "")),
+        "precedence_bulk": _header(headers, "Precedence", "").strip().lower() in {"bulk", "list", "junk"},
     }

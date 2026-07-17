@@ -51,3 +51,64 @@ def extract_tool_call_names(messages: List[Any]) -> List[str]:
         if tool_calls:
             names.extend(call["name"] for call in tool_calls)
     return names
+
+
+_CLOSING_PHRASES = (
+    "cordialement",
+    "bien à vous",
+    "bien cordialement",
+    "sincères salutations",
+    "meilleures salutations",
+    "best regards",
+    "kind regards",
+    "regards",
+)
+
+_GREETING_PREFIXES = ("bonjour", "bonsoir", "cher ", "chère ", "hello", "hi ", "dear ")
+
+
+def ensure_email_paragraphs(content: str, min_length: int = 400) -> str:
+    """Safety net for degenerate single-paragraph drafts.
+
+    Small local models sometimes emit one dense block even when asked for
+    structure. When a long draft contains no blank line, split it into
+    salutation / short paragraphs / closing so the HTML renderer can produce
+    real <p> blocks. Structured content is returned untouched.
+    """
+    text = (content or "").strip()
+    if not text or len(text) < min_length or "\n\n" in text:
+        return content
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    flat = " ".join(lines)
+
+    greeting = ""
+    lowered = flat.lower()
+    for prefix in _GREETING_PREFIXES:
+        if lowered.startswith(prefix):
+            cut = flat.find(",")
+            if 0 < cut < 60:
+                greeting = flat[: cut + 1]
+                flat = flat[cut + 1 :].strip()
+            break
+
+    closing = ""
+    lowered = flat.lower()
+    for phrase in _CLOSING_PHRASES:
+        idx = lowered.rfind(phrase)
+        if idx != -1 and len(flat) - idx < 80:
+            closing = flat[idx:].strip()
+            flat = flat[:idx].rstrip(" ,.;")
+            if flat:
+                flat += "."
+            break
+
+    import re as _re
+
+    sentences = [s.strip() for s in _re.split(r"(?<=[.!?])\s+", flat) if s.strip()]
+    paragraphs = []
+    for i in range(0, len(sentences), 2):
+        paragraphs.append(" ".join(sentences[i : i + 2]))
+
+    blocks = [b for b in [greeting, *paragraphs, closing] if b]
+    return "\n\n".join(blocks)

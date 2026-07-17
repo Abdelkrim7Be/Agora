@@ -6,7 +6,11 @@ max_tokens: 700
 timeout: 120
 roles:
   triage: "openai:qwen2.5:3b-8k"
-  draft: "openai:qwen2.5:3b-8k"
+  # Draft role: slightly creative, shorter cap — better-structured French emails.
+  draft:
+    model: "openai:qwen2.5:3b-8k"
+    temperature: 0.3
+    max_tokens: 550
   reason: "openai:qwen2.5:3b-8k"
   memory_style: "openai:qwen2.5:3b-8k"
 fallbacks: {}

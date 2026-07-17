@@ -1549,6 +1549,19 @@ def test_alert_and_retention_settings_endpoints_allow_owner_role(monkeypatch):
 
 
 
+def test_retention_run_rejects_disabled_policy(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings(retention_days=0))
+    monkeypatch.setattr(api, "run_retention", lambda: {"deleted": {"runs": 1}})
+
+    with TestClient(app) as client:
+        response = client.post("/retention/run", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 400
+    assert "retention disabled" in response.json()["detail"]
+
+
 def test_metrics_endpoint_returns_prometheus_text(monkeypatch):
     import src.api as api
     monkeypatch.setattr(api, "render_metrics", lambda: "# HELP agora_test demo\n# TYPE agora_test counter\nagora_test 1\n")
