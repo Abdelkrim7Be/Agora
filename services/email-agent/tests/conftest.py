@@ -52,6 +52,27 @@ class _FakeMemoryLLM:
         )
 
 
+class _FakeRedraftLLM:
+    """Replays structured RedraftOutput-shaped revisions for the redraft node.
+
+    Each entry is a dict with to/subject/content (missing keys default to "" so
+    the node falls back to the previous draft's recipient/subject).
+    """
+
+    def __init__(self, sequence: list[dict]):
+        self._sequence = list(sequence)
+        self._i = 0
+
+    def invoke(self, _messages, config=None):
+        draft = self._sequence[min(self._i, len(self._sequence) - 1)]
+        self._i += 1
+        return SimpleNamespace(
+            to=draft.get("to", ""),
+            subject=draft.get("subject", ""),
+            content=draft.get("content", ""),
+        )
+
+
 @pytest.fixture
 def fake_llms(monkeypatch):
     """Patch the graph's router, tool LLM, and memory LLM for offline deterministic tests."""
@@ -60,6 +81,7 @@ def fake_llms(monkeypatch):
         classification: str = "respond",
         tool_sequence=None,
         memory_preference: str = "updated preference",
+        redraft_sequence=None,
     ):
         import src.graph as g
 
@@ -67,6 +89,11 @@ def fake_llms(monkeypatch):
         if tool_sequence is not None:
             monkeypatch.setattr(g, "llm_with_tools", _FakeToolLLM(tool_sequence))
         monkeypatch.setattr(g, "llm_memory", _FakeMemoryLLM(memory_preference))
+        monkeypatch.setattr(
+            g,
+            "llm_redraft",
+            _FakeRedraftLLM(redraft_sequence or [{"content": "Revised draft after feedback."}]),
+        )
 
     return _install
 

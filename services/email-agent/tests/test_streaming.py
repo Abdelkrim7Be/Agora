@@ -36,7 +36,9 @@ def test_respond_stream_emits_redraft_progress(fake_llms, respond_email, monkeyp
         classification="respond",
         tool_sequence=[
             ai_tool_call("write_email", {"to": "alice@example.com", "subject": "Re: question", "content": "Draft one."}, "c1"),
-            ai_tool_call("write_email", {"to": "alice@example.com", "subject": "Re: question", "content": "Draft two, shorter and clearer."}, "c2"),
+        ],
+        redraft_sequence=[
+            {"to": "alice@example.com", "subject": "Re: question", "content": "Draft two, shorter and clearer."},
         ],
     )
 

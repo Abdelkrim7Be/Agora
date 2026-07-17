@@ -184,14 +184,14 @@ def test_ignore_does_not_send_and_updates_triage_memory(fake_llms, respond_email
 
 
 def test_response_feedback_loops_back_and_triggers_redraft(fake_llms, respond_email):
-    """Agent Inbox 'response' (free-text feedback) loops back to llm_call for re-drafting."""
+    """Agent Inbox 'response' (free-text feedback) goes through the dedicated redraft node."""
     fake_llms(
         classification="respond",
         tool_sequence=[
             ai_tool_call("write_email", DRAFT, "c1"),   # first draft — interrupted
-            ai_tool_call("write_email", DRAFT2, "c2"),  # re-draft after feedback
             ai_tool_call("Done", {"done": True}, "c3"),
         ],
+        redraft_sequence=[DRAFT2],
     )
     cfg = _cfg()
 

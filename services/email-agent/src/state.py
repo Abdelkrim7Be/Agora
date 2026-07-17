@@ -74,3 +74,6 @@ class State(MessagesState):
     # Set after human feedback asks for a revised draft; the run must not finish
     # until a new gated write_email draft has been produced and approved.
     redraft_requested: NotRequired[bool]
+    # The latest free-text feedback given on the pending draft; consumed by the
+    # dedicated redraft node so it never has to re-parse message history.
+    redraft_feedback: NotRequired[str]
