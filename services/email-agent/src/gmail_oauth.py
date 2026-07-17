@@ -124,9 +124,37 @@ def _verify_mailbox(credentials: Any, expected_mailbox: str) -> str:
     return actual
 
 
+def _explain_token_fetch_error(exc: Exception) -> str:
+    text = str(exc)
+    lowered = text.lower()
+    if "invalid_grant" in lowered:
+        return (
+            "Google rejected the authorization code (invalid_grant). The code was "
+            "already used or expired — close the window and click Connect Gmail again."
+        )
+    if "redirect_uri_mismatch" in lowered:
+        return (
+            "Redirect URI mismatch: the configured GMAIL_OAUTH_REDIRECT_URI is not "
+            "listed in the Google Cloud OAuth client. Fix the authorized redirect URIs."
+        )
+    if "invalid_client" in lowered or "unauthorized_client" in lowered:
+        return (
+            "Google rejected the OAuth client (invalid_client). credentials.json does "
+            "not match the client configured in Google Cloud Console."
+        )
+    if "access_denied" in lowered:
+        return "Google reported access_denied — the account refused consent or is not a test user of the OAuth app."
+    return f"Token exchange with Google failed: {text}"
+
+
 def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
+    agent_instance_id = state_payload["agent_instance_id"]
     flow = _flow()
-    flow.fetch_token(code=code)
+    try:
+        flow.fetch_token(code=code)
+    except Exception as exc:
+        print(f"oauth: token exchange failed for {agent_instance_id}: {exc!r}")
+        raise ValueError(_explain_token_fetch_error(exc)) from exc
 
     # When the OAuth state carried an explicit mailbox identity, verify the account
     # Google actually authorized matches. Fail closed — never store a token for the
@@ -137,11 +165,23 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
 
     token_json = flow.credentials.to_json()
     user_id = state_payload["user_id"]
-    agent_instance_id = state_payload["agent_instance_id"]
-    with prepared_token_file(user_id, agent_instance_id) as token_path:
-        path = Path(token_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(token_json)
+    try:
+        with prepared_token_file(user_id, agent_instance_id) as token_path:
+            path = Path(token_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(token_json)
+    except Exception as exc:
+        print(f"oauth: token persistence failed for {agent_instance_id}: {exc!r}")
+        raise RuntimeError(
+            f"Gmail authorized but the token could not be stored ({exc}). "
+            "Check the token store volume and encryption key, then reconnect."
+        ) from exc
+    if not getattr(flow.credentials, "refresh_token", "unknown"):
+        print(
+            f"oauth: WARNING — no refresh_token returned for {agent_instance_id}; "
+            "the connection will drop when the access token expires"
+        )
+    print(f"oauth: token stored for {agent_instance_id}")
     return path
 
 

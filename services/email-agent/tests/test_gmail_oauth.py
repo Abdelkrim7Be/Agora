@@ -236,3 +236,64 @@ def test_revoke_gmail_token_deletes_locally_even_if_google_fails(monkeypatch, tm
     result = revoke_gmail_token()
     assert result is True
     assert not token_path.exists()
+
+
+def test_exchange_code_classifies_google_rejection(monkeypatch, tmp_path):
+    """A fetch_token failure surfaces as a clear ValueError, not a generic 500."""
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+
+    class _RejectingFlow(_FakeFlow):
+        def fetch_token(self, code):
+            raise Exception("(invalid_grant) Bad Request")
+
+    monkeypatch.setattr(oauth, "Flow", _RejectingFlow)
+    state = build_state("owner@example.com", "ceo-email-agent", mailbox_identity="")
+    payload = validate_state(state)
+
+    with pytest.raises(ValueError, match="already used or expired"):
+        oauth.exchange_code_for_token("abc", payload)
+
+
+def test_exchange_code_reports_persistence_failure(monkeypatch, tmp_path):
+    """A token-store failure after Google authorized must raise a clear RuntimeError."""
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken_store(user_id, agent_instance_id):
+        raise OSError("disk unavailable")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(oauth, "prepared_token_file", broken_store)
+    state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
+    payload = validate_state(state)
+
+    with pytest.raises(RuntimeError, match="could not be stored"):
+        oauth.exchange_code_for_token("abc", payload)
+
+
+def test_gmail_connect_callback_surfaces_exchange_error_message(monkeypatch):
+    """The popup page must show the real failure reason, not a silent generic error."""
+    import src.api as api
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    state = build_state("owner@example.com", "ceo-email-agent", mailbox_identity="ceo@example.com")
+
+    def failing_exchange(code, payload):
+        raise ValueError("Redirect URI mismatch: fix the authorized redirect URIs.")
+
+    monkeypatch.setattr(api, "exchange_gmail_oauth_code", failing_exchange)
+
+    with TestClient(app) as client:
+        response = client.get(f"/connect/gmail/callback?code=abc123&state={state}")
+
+    assert response.status_code == 400
+    assert "Redirect URI mismatch" in response.text
