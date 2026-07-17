@@ -236,17 +236,25 @@ def prepared_token_file(
     enc_path = _encrypted_path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(target):
-        if enc_path.is_file():
+        # A lingering plaintext file means a previous encryption pass failed after
+        # a successful token write — it is newer than any .enc blob, so keep it.
+        if enc_path.is_file() and not target.is_file():
             target.write_bytes(_decrypt_envelope(enc_path.read_bytes(), keys))
         try:
             yield str(target)
         finally:
-            try:
-                if target.is_file():
+            if target.is_file():
+                try:
                     active_secret = keys[active_key_id]
                     enc_path.write_bytes(
                         _encrypt_envelope(target.read_bytes(), key_id=active_key_id, secret=active_secret)
                     )
-            finally:
-                if target.is_file():
+                except Exception as exc:
+                    # Keep the plaintext token on disk rather than losing the only
+                    # copy: reads fall back to the plaintext file when no .enc exists.
+                    print(
+                        f"token: ENCRYPTION FAILED for {target.name} — keeping plaintext token on disk "
+                        f"so the mailbox stays connected; investigate immediately: {exc}"
+                    )
+                else:
                     target.unlink()

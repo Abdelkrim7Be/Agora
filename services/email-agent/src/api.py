@@ -5,6 +5,7 @@ import base64
 import contextlib
 import html
 import json
+import traceback
 import uuid
 from datetime import datetime, timezone
 
@@ -1055,15 +1056,16 @@ async def gmail_connect_callback(code: str | None = None, state: str | None = No
         exchange_gmail_oauth_code(code, payload)
         record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
+        print(f"api: gmail oauth callback rejected: {exc}")
         return _gmail_callback_page("error", str(exc))
     except Exception as exc:
         # Token exchange reaches out to Google; a transient network failure (or a
         # stale/replayed single-use code) must not surface as a raw 500 in the popup.
-        print(f"api: gmail oauth callback failed: {exc}")
+        print(f"api: gmail oauth callback failed: {exc!r}\n{traceback.format_exc()}")
         return _gmail_callback_page(
             "error",
-            "Could not finish connecting to Google (network issue or the consent "
-            "expired). Close this window and click Connect Gmail again.",
+            "Could not finish connecting to Google "
+            f"({type(exc).__name__}: {exc}). Close this window and click Connect Gmail again.",
         )
     return _gmail_callback_page(
         "connected",
