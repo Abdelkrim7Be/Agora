@@ -664,6 +664,12 @@ def _pending_response_after_decision_error(run_id: str, exc: Exception, action: 
     if not record or record.get("status") != "pending_approval":
         return None
     print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
+    # The redraft give-up carries a user-facing French message; show it as-is
+    # instead of wrapping it in the technical English envelope.
+    if isinstance(exc, graph_module.RedraftGiveUpError):
+        error_text = str(exc)
+    else:
+        error_text = f"Could not complete {action}; draft is still pending. {type(exc).__name__}: {exc}"
     return RunResponse(
         run_id=run_id,
         status="pending_approval",
@@ -676,7 +682,7 @@ def _pending_response_after_decision_error(run_id: str, exc: Exception, action: 
         workflow_owner=record.get("workflow_owner"),
         workflow_approver=record.get("workflow_approver"),
         workflow_route_to=record.get("workflow_route_to") or [],
-        error=f"Could not complete {action}; draft is still pending. {type(exc).__name__}: {exc}",
+        error=error_text,
     )
 
 

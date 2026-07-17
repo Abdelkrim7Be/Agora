@@ -66,10 +66,19 @@ def _build_llm_bindings():
     router_llm = get_llm("triage").with_structured_output(RouterSchema)
     tool_llm = get_llm("draft").bind_tools(tools, tool_choice="any")
     memory_llm = base_llm.with_structured_output(UserPreferences)
-    return base_llm, router_llm, tool_llm, memory_llm
+    redraft_llm = get_llm("draft").with_structured_output(RedraftOutput)
+    return base_llm, router_llm, tool_llm, memory_llm, redraft_llm
 
 
-llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
+class RedraftOutput(PydanticBaseModel):
+    """Structured revision of a pending draft: the only output the redraft node accepts."""
+
+    to: str = ""
+    subject: str = ""
+    content: str = ""
+
+
+llm, llm_router, llm_with_tools, llm_memory, llm_redraft = _build_llm_bindings()
 
 
 def _failed_generation_from_exception(exc: Exception) -> str | None:
@@ -159,13 +168,13 @@ def reload_config() -> None:
     copy and must be restarted (or reload itself) to pick up the change.
     """
     global agent_config, config, tools, tools_prompt, tools_by_name_map, approval_set
-    global llm, llm_router, llm_with_tools, llm_memory
+    global llm, llm_router, llm_with_tools, llm_memory, llm_redraft
     agent_config = load_config()
     config = agent_config
     tools, tools_prompt = load_capabilities(config.capabilities)
     tools_by_name_map = tools_by_name(tools)
     approval_set = approval_required(config.capabilities)
-    llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
+    llm, llm_router, llm_with_tools, llm_memory, llm_redraft = _build_llm_bindings()
 
 
 def _resolve_route_targets(value: str | None) -> list[str]:
@@ -426,6 +435,21 @@ def _last_write_email_args(messages) -> dict:
     return {}
 
 
+def _synthetic_write_email_message(args: dict) -> AIMessage:
+    """An AI message carrying a write_email tool call produced outside the tool loop."""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_email",
+                "args": args,
+                "id": f"llm_coerced_{uuid.uuid4().hex}",
+                "type": "tool_call",
+            }
+        ],
+    )
+
+
 def _coerce_text_draft_to_tool_call(response, messages, run_id: str):
     """Turn a narrated redraft into a write_email tool call.
 
@@ -472,17 +496,7 @@ def _coerce_text_draft_to_tool_call(response, messages, run_id: str):
         "content": content,
     })
     print("✏️ Redraft returned as text; coerced into a write_email tool call")
-    return AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "write_email",
-                "args": args,
-                "id": f"llm_coerced_{uuid.uuid4().hex}",
-                "type": "tool_call",
-            }
-        ],
-    )
+    return _synthetic_write_email_message(args)
 
 
 # Long feedback conversations accumulate one AI+tool pair per round; on small
@@ -796,6 +810,7 @@ def tool_node(state: State, store: BaseStore, config=None):
     result = []
     sent = False
     redraft_requested = False
+    redraft_feedback = None
     redraft_cleared = False
     run_id = _run_id_from_config(config)
 
@@ -884,6 +899,7 @@ def tool_node(state: State, store: BaseStore, config=None):
             if decision_type == "response":
                 feedback = decision_data
                 redraft_requested = True
+                redraft_feedback = feedback if isinstance(feedback, str) else str(feedback)
                 result.append({
                     "role": "tool",
                     "content": (
@@ -999,6 +1015,8 @@ def tool_node(state: State, store: BaseStore, config=None):
     update = {"messages": result}
     if redraft_requested:
         update["redraft_requested"] = True
+        if redraft_feedback:
+            update["redraft_feedback"] = redraft_feedback
     elif redraft_cleared:
         update["redraft_requested"] = False
     if sent:
@@ -1031,7 +1049,7 @@ def force_redraft_after_feedback(state: State, config=None) -> dict:
     return {"messages": messages}
 
 
-def after_tools(state: State) -> Literal["llm_call", "__end__"]:
+def after_tools(state: State) -> Literal["llm_call", "redraft_direct", "__end__"]:
     """Sending, send failures, and auto-organization are terminal."""
     if (
         state.get("email_sent")
@@ -1040,7 +1058,87 @@ def after_tools(state: State) -> Literal["llm_call", "__end__"]:
         or state.get("automation_acted")
     ):
         return END
+    if state.get("redraft_requested"):
+        return "redraft_direct"
     return "llm_call"
+
+
+REDRAFT_GIVE_UP_MESSAGE = (
+    "La retouche automatique a échoué — modifiez le texte directement "
+    "ou renvoyez une instruction plus précise."
+)
+
+
+def _feedback_from_messages(messages) -> str:
+    """Recover the latest feedback text from the message history (fallback path)."""
+    for message in reversed(messages):
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+        if isinstance(content, str) and _FEEDBACK_MARKER in content:
+            feedback = content.split(_FEEDBACK_MARKER, 1)[1]
+            return feedback.split(". Revise the draft by calling write_email", 1)[0].strip()
+    return ""
+
+
+def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
+    """Revise the pending draft with one structured LLM call (no tool-choice loop).
+
+    The generic tool loop lets small local models 'forget' to re-call write_email
+    after feedback, exhausting the nudge budget and giving up. Here the output
+    schema IS the revised draft, so there is no tool decision to get wrong; the
+    synthetic write_email tool call re-enters tool_node for a fresh approval.
+    """
+    previous = _last_write_email_args(state["messages"])
+    feedback = state.get("redraft_feedback") or _feedback_from_messages(state["messages"])
+    response_prefs = get_memory(
+        store,
+        namespace("response_preferences"),
+        agent_config.agent.response_preferences,
+    )
+    writing_style = get_memory(
+        store,
+        namespace("writing_style"),
+        agent_config.agent.writing_style_default,
+    )
+    run_id = _run_id_from_config(config)
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "You revise an email draft according to the user's instruction. "
+                "Apply ONLY the requested change; keep everything else (recipient, "
+                "subject, language, wording, paragraph structure) exactly as it was. "
+                "Return the complete revised email.\n"
+                f"<Response preferences>\n{response_prefs}\n</Response preferences>\n"
+                f"<Writing style>\n{writing_style}\n</Writing style>"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Current draft:\nTo: {previous.get('to', '')}\n"
+                f"Subject: {previous.get('subject', '')}\n"
+                f"Body:\n{previous.get('content', '')}\n\n"
+                f"Instruction from the user: {feedback}"
+            ),
+        },
+    ]
+    for attempt in range(_REDRAFT_MAX_ATTEMPTS):
+        try:
+            revised = _invoke_llm(llm_redraft, prompt, llm_invoke_config(run_id, "redraft"))
+        except Exception as exc:
+            print(f"✏️ Redraft attempt {attempt + 1} failed: {exc}")
+            continue
+        content = (getattr(revised, "content", "") or "").strip()
+        if not content:
+            print(f"✏️ Redraft attempt {attempt + 1} returned no draft body")
+            continue
+        args = _normalize_recipient_args({
+            "to": (getattr(revised, "to", "") or "").strip() or previous.get("to", ""),
+            "subject": (getattr(revised, "subject", "") or "").strip() or previous.get("subject", ""),
+            "content": content,
+        })
+        return {"messages": [_synthetic_write_email_message(args)]}
+    raise RedraftGiveUpError(REDRAFT_GIVE_UP_MESSAGE)
 
 
 _REDRAFT_NUDGE_SNIPPETS = (
@@ -1225,6 +1323,7 @@ overall_workflow = (
     .add_node("llm_call", _traced_node("llm_call", llm_call))
     .add_node("environment", _traced_node("environment", tool_node))
     .add_node("force_redraft", _traced_node("force_redraft", force_redraft_after_feedback))
+    .add_node("redraft_direct", _traced_node("redraft_direct", redraft_direct))
     .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",
@@ -1232,10 +1331,11 @@ overall_workflow = (
         {"environment": "environment", "force_redraft": "force_redraft", END: END},
     )
     .add_edge("force_redraft", "llm_call")
+    .add_edge("redraft_direct", "environment")
     .add_conditional_edges(
         "environment",
         after_tools,
-        {"llm_call": "llm_call", END: END},
+        {"llm_call": "llm_call", "redraft_direct": "redraft_direct", END: END},
     )
 )
 

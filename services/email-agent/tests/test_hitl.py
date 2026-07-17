@@ -156,9 +156,8 @@ def test_api_respond_forces_pending_when_model_tries_done(
         tool_sequence=[
             ai_tool_call("write_email", DRAFT, "c1"),
             ai_tool_call("Done", {"done": True}, "c_done"),
-            ai_tool_call("write_email", DRAFT2, "c2"),
-            ai_tool_call("Done", {"done": True}, "c3"),
         ],
+        redraft_sequence=[DRAFT2],
     )
 
     run = client.post("/run", json=respond_email).json()
