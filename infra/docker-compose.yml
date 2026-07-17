@@ -32,7 +32,10 @@ services:
       context: ../services/security
       network: host
     environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
+      # Local-first quarantine classifier (Ollama, OpenAI-compatible endpoint).
+      SECURITY_SANITIZE_MODEL: ${SECURITY_SANITIZE_MODEL:-openai:qwen2.5:3b-8k}
+      SECURITY_SANITIZE_ENDPOINT: ${SECURITY_SANITIZE_ENDPOINT:-http://ollama:11434/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-ollama-local}
       SECURITY_SECRET_MANAGER_BACKEND: ${SECURITY_SECRET_MANAGER_BACKEND:-disabled}
       SECURITY_SECRET_MANAGER_REQUIRED: ${SECURITY_SECRET_MANAGER_REQUIRED:-false}
       SECURITY_SECRET_BUNDLE_PATH: ${SECURITY_SECRET_BUNDLE_PATH:-}
@@ -93,6 +96,9 @@ services:
     restart: "no"
 
   litellm:
+    # Cloud LLM proxy — only needed by the explicit `prod` LLM profile. The
+    # platform is local-first (Ollama), so this stays out of the default stack.
+    profiles: ["cloud"]
     image: ghcr.io/berriai/litellm:main-latest
     command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
     environment:
@@ -128,6 +134,7 @@ services:
       GMAIL_WEBHOOK_ENABLED: ${GMAIL_WEBHOOK_ENABLED:-false}
       GMAIL_WEBHOOK_TOPIC: ${GMAIL_WEBHOOK_TOPIC:-}
       GMAIL_WEBHOOK_SECRET: ${GMAIL_WEBHOOK_SECRET:-}
+      AGENT_WEBHOOK_FALLBACK_POLL_MIN: ${AGENT_WEBHOOK_FALLBACK_POLL_MIN:-10}
       GMAIL_POLLING_FALLBACK_ENABLED: ${GMAIL_POLLING_FALLBACK_ENABLED:-true}
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
