@@ -55,6 +55,10 @@ public class ProxyController {
             "/api/agent/run", "/api/agent/sync", "/api/agent/inbox"
     );
 
+    // Body cap for proxied requests (uploads included) — the whole body is
+    // buffered in memory, so an explicit limit keeps oversized payloads out.
+    private static final int MAX_PROXY_BODY_BYTES = 2 * 1024 * 1024;
+
     private final RestClient restClient;
     private final String upstreamBase;
     private final AuditService auditService;
@@ -88,6 +92,15 @@ public class ProxyController {
         HttpMethod method = HttpMethod.valueOf(request.getMethod());
         byte[] body = StreamUtils.copyToByteArray(request.getInputStream());
         String contentType = request.getContentType();
+
+        if (body.length > MAX_PROXY_BODY_BYTES) {
+            auditService.record(null, null, deriveAction(request), request.getMethod(),
+                    downstreamPath, 413, "denied");
+            response.setStatus(413);
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.getWriter().write("{\"error\":\"payload too large\"}");
+            return;
+        }
 
         var spec = restClient.method(method).uri(URI.create(upstreamUrl));
 
