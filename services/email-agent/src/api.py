@@ -152,18 +152,21 @@ async def _watch_renewal_loop() -> None:
     Gmail watches expire after 7 days, so the mailbox must be re-registered well
     inside that window for push delivery to keep working. Runs only when webhooks
     are enabled; ensure_watch also seeds the per-user historyId baseline.
+    Renewal is expiration-driven: ensure_watches skips instances whose recorded
+    watch expiration is still beyond the renewal margin, so this loop can check
+    frequently without spamming the Gmail API.
     """
     from src.poller import ensure_watches
 
     setup_gmail_sync()
-    interval = settings.gmail_watch_renew_hours * 3600
+    check_interval = min(3600.0, settings.gmail_watch_renew_margin_hours * 1800)
     while True:
         try:
             await asyncio.to_thread(ensure_watches)
         except Exception as exc:  # network/credential issues must not kill the API
             print(f"api: gmail watch registration failed: {exc}")
             record_sync_failure(str(exc))
-        await asyncio.sleep(interval)
+        await asyncio.sleep(check_interval)
 
 
 @asynccontextmanager
