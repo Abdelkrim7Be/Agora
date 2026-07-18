@@ -16,6 +16,41 @@ class SignatureConfig(BaseModel):
     text: str = ""
     image_url: str | None = None
     image_alt: str = "Signature"
+    # Structured fields (§4): when any is filled they compose the signature
+    # block; the legacy free-text `text` keeps working unchanged when they are
+    # all empty.
+    first_name: str = ""
+    last_name: str = ""
+    title: str = ""
+    company: str = ""
+    phone: str = ""
+    website: str = ""
+
+    def has_structured_fields(self) -> bool:
+        return any(
+            value.strip()
+            for value in (
+                self.first_name, self.last_name, self.title,
+                self.company, self.phone, self.website,
+            )
+        )
+
+    def structured_lines(self) -> list[str]:
+        """The signature block composed from structured fields, line by line."""
+        lines: list[str] = []
+        name = " ".join(part for part in (self.first_name.strip(), self.last_name.strip()) if part)
+        if name:
+            lines.append(name)
+        title_company = " — ".join(
+            part for part in (self.title.strip(), self.company.strip()) if part
+        )
+        if title_company:
+            lines.append(title_company)
+        if self.phone.strip():
+            lines.append(f"Tél. : {self.phone.strip()}")
+        if self.website.strip():
+            lines.append(self.website.strip())
+        return lines
 
 
 def load_signature(agent_instance_id: str | None = None) -> SignatureConfig:
@@ -39,13 +74,20 @@ def append_signature(content: str, signature: SignatureConfig | None = None) -> 
     if not signature.enabled or SIGNATURE_MARKER in body:
         return body
 
+    structured = signature.structured_lines()
     text = signature.text.strip()
     image_url = (signature.image_url or "").strip()
-    if not text and not image_url:
+    if not structured and not text and not image_url:
         return body
 
     parts = []
-    if text:
+    if structured:
+        # Structured fields compose the block; the free text becomes an
+        # optional extra line under it (e.g. a tagline).
+        parts.extend(structured)
+        if text:
+            parts.append(text)
+    elif text:
         parts.append(text)
     if image_url:
         alt = (signature.image_alt or "Signature").strip() or "Signature"
