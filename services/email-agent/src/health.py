@@ -89,6 +89,8 @@ def _queue_depth() -> int:
 async def aggregate_health() -> dict:
     """Never raises and never blocks long: each probe is time-boxed and
     exception-guarded so one down component reports 'down', not a 500."""
+    from src.gmail_budget import budget_status
+
     return {
         "agent": {"status": "up"},
         "poller": _poller_component(),
@@ -97,4 +99,5 @@ async def aggregate_health() -> dict:
         "redis": _redis_component(),
         "queue_depth": _queue_depth(),
         "notifications": {"enabled": settings.notify_enabled},
+        "gmail_budget": budget_status(),
     }
