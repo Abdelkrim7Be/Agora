@@ -48,18 +48,22 @@ GMAIL_WEBHOOK_TOPIC=projects/<project-id>/topics/gmail-push
 GMAIL_WEBHOOK_SECRET=<long random string>       # same value as in the endpoint URL
 GMAIL_POLLING_FALLBACK_ENABLED=true             # keep the safety net
 AGENT_WEBHOOK_FALLBACK_POLL_MIN=10
+GMAIL_WATCH_RENEW_MARGIN_HOURS=12               # renew when expiration is this close
 ```
 
 Restart the stack. On startup the API and poller register a Gmail `watch` for
-every connected instance (one per mailbox token) and renew them every
-`GMAIL_WATCH_RENEW_HOURS` (default 24h; Google expires watches after 7 days).
+every connected instance (one per mailbox token). Renewal is expiration-driven:
+each check re-registers a watch only when its recorded `watch_expires_at` is
+closer than `GMAIL_WATCH_RENEW_MARGIN_HOURS` (Google expires watches after
+7 days), so a restarted or long-running process never lets a watch lapse and
+never spams `users.watch` either.
 
 ## 4. Verify
 
 1. `docker logs infra-poller-1` shows `gmail watch registered for N instance(s)`.
 2. Send a mail to a connected mailbox. Within seconds the API log shows
    `POST /webhooks/gmail` and a run appears in the UI — no poll cycle needed.
-3. `GET /api/agent/gmail/status` reports `sync_mode: webhook` with a
+3. `GET /api/agent/sync/status` reports `sync_mode: webhook` with a
    `watch_expires_at` timestamp.
 
 ## Notes
