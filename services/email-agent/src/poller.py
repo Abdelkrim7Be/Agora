@@ -89,6 +89,7 @@ from src.gmail_client import (
     download_attachment,
     extract_pdf_text,
     fetch_history_message_refs,
+    fetch_messages_batch,
     fetch_thread,
     fetch_unread,
     get_message,
@@ -171,12 +172,13 @@ async def _process_message_with_retry(
     msg_id: str,
     resource,
     rules_config: RulesConfig,
+    message: dict | None = None,
 ) -> tuple:
     max_retries = max(0, settings.poll_max_retries)
     attempt = 0
     while True:
         try:
-            return await process_message(graph, msg_id, resource, rules_config)
+            return await process_message(graph, msg_id, resource, rules_config, message=message)
         except Exception as exc:
             if not _is_transient_error(exc):
                 print(f"poller: {msg_id} failed without retry: {exc}")
@@ -397,6 +399,7 @@ async def process_message(
     msg_id: str,
     resource,
     rules_config: RulesConfig,
+    message: dict | None = None,
 ) -> tuple:
     # An email left UNREAD because it already has a run must not be reprocessed:
     # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
@@ -416,7 +419,9 @@ async def process_message(
         mark_as_read(msg_id, resource=resource)
         return (msg_id, "skipped", existing["run_id"])
 
-    message = get_message(msg_id, resource=resource)
+    # A prefetched message (poll_once batch) skips the per-message round-trip.
+    if message is None:
+        message = get_message(msg_id, resource=resource)
     labels = message.get("labelIds")
     if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
         return (msg_id, "skipped", "")
@@ -599,8 +604,22 @@ async def poll_once(
     if refs is None:
         refs = fetch_unread(max_results, resource=resource)
 
+    # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
+    # round-trip per 50 instead of one per message. Failure falls back to the
+    # per-message serial fetch inside process_message.
+    prefetched: dict[str, dict] = {}
+    if len(refs) > 3:
+        try:
+            prefetched = await asyncio.to_thread(
+                fetch_messages_batch, [ref["id"] for ref in refs], resource
+            )
+        except Exception as exc:
+            print(f"poller: batch message fetch failed, using serial: {exc}")
+
     for ref in refs:
-        outcomes.append(await _process_message_with_retry(graph, ref["id"], resource, rules_config))
+        outcomes.append(await _process_message_with_retry(
+            graph, ref["id"], resource, rules_config, message=prefetched.get(ref["id"])
+        ))
     # A truncated history batch keeps the old baseline so the overflow is picked
     # up next cycle (already-processed overlap is deduped, never re-run).
     if next_baseline and not truncated:
