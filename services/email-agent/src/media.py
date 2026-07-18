@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 from pathlib import Path
 
@@ -10,6 +11,7 @@ MAX_IMAGE_BYTES = 200 * 1024
 SIGNATURE_IMAGE_STEM = "signature-image"
 SIGNATURE_IMAGE_MAX_WIDTH = 300
 SIGNATURE_CID = "agora-signature-img"
+CONTACT_PHOTO_SIZE = 128
 
 _ALLOWED_FORMATS = {"PNG": "png", "JPEG": "jpg"}
 
@@ -89,3 +91,46 @@ def signature_image_inline(agent_instance_id: str | None = None) -> tuple[bytes,
         return None
     subtype = "png" if path.suffix == ".png" else "jpeg"
     return path.read_bytes(), subtype
+
+
+# --- Contact photos: path derived from (instance, email); no DB column needed. ---
+
+
+def _contact_photo_name(email: str) -> str:
+    digest = hashlib.sha1(email.strip().lower().encode()).hexdigest()[:16]
+    return f"{digest}.jpg"
+
+
+def contact_photo_path(email: str, agent_instance_id: str | None = None) -> Path:
+    return instance_media_dir(agent_instance_id) / "contact-photos" / _contact_photo_name(email)
+
+
+def find_contact_photo(email: str, agent_instance_id: str | None = None) -> Path | None:
+    path = contact_photo_path(email, agent_instance_id)
+    return path if path.is_file() else None
+
+
+def save_contact_photo(email: str, data: bytes, agent_instance_id: str | None = None) -> Path:
+    """Validate, center-crop to a 128px square JPEG and store the contact photo."""
+    image = _load_validated_image(data)
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    # Center-crop to a square, then resize to CONTACT_PHOTO_SIZE.
+    side = min(image.width, image.height)
+    left = (image.width - side) // 2
+    top = (image.height - side) // 2
+    image = image.crop((left, top, left + side, top + side))
+    if side != CONTACT_PHOTO_SIZE:
+        image = image.resize((CONTACT_PHOTO_SIZE, CONTACT_PHOTO_SIZE))
+    path = contact_photo_path(email, agent_instance_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, format="JPEG")
+    return path
+
+
+def delete_contact_photo(email: str, agent_instance_id: str | None = None) -> bool:
+    path = find_contact_photo(email, agent_instance_id)
+    if path is None:
+        return False
+    path.unlink(missing_ok=True)
+    return True
