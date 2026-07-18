@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 import yaml
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -142,6 +142,7 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
+from src.media import delete_signature_image, find_signature_image, save_signature_image
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
 from src.signature import SignatureConfig, load_signature, save_signature
@@ -2201,6 +2202,38 @@ async def get_signature() -> dict:
 async def update_signature(body: SignatureConfig) -> dict:
     save_signature(body)
     return {"agent_instance_id": current_agent_instance_id(), **body.model_dump()}
+
+
+@app.post("/signature/image")
+async def upload_signature_image(request: Request, file: UploadFile = File(...)) -> dict:
+    _require_instance_role(request, "owner")
+    data = await file.read()
+    try:
+        path = await asyncio.to_thread(save_signature_image, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "stored": True,
+        "filename": path.name,
+        "size": path.stat().st_size,
+    }
+
+
+@app.get("/signature/image")
+async def get_signature_image() -> FileResponse:
+    path = find_signature_image()
+    if path is None:
+        raise HTTPException(status_code=404, detail="No signature image for this instance")
+    media_type = "image/png" if path.suffix == ".png" else "image/jpeg"
+    return FileResponse(path, media_type=media_type)
+
+
+@app.delete("/signature/image")
+async def remove_signature_image(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    removed = delete_signature_image()
+    return {"agent_instance_id": current_agent_instance_id(), "removed": removed}
 
 
 @app.get("/memory")

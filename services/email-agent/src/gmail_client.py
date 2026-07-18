@@ -325,6 +325,7 @@ def _build_email_message(
     body: str,
     extra_headers: dict[str, str] | None = None,
     rich: bool = True,
+    inline_images: dict[str, tuple[bytes, str]] | None = None,
 ) -> EmailMessage:
     recipients = to if isinstance(to, list) else [to]
     message = EmailMessage()
@@ -336,7 +337,27 @@ def _build_email_message(
     message.set_content(body)
     if rich:
         message.add_alternative(render_rich_email_html(body), subtype="html")
+        if inline_images:
+            # Attach cid-referenced images inside the HTML alternative
+            # (multipart/related) so clients render them without external links.
+            html_part = message.get_payload()[-1]
+            for cid, (data, subtype) in inline_images.items():
+                html_part.add_related(
+                    data, maintype="image", subtype=subtype, cid=f"<{cid}>"
+                )
     return message
+
+
+def _signature_inline_images(body: str) -> dict[str, tuple[bytes, str]] | None:
+    """The stored signature image, when the body references its cid."""
+    from src.media import SIGNATURE_CID, signature_image_inline
+
+    if f"cid:{SIGNATURE_CID}" not in body:
+        return None
+    inline = signature_image_inline()
+    if inline is None:
+        return None
+    return {SIGNATURE_CID: inline}
 
 
 def _send_email_message(
@@ -349,7 +370,10 @@ def _send_email_message(
     rich: bool = True,
 ) -> dict:
     resource = resource or gmail_resource()
-    message = _build_email_message(to, subject, body, extra_headers=extra_headers, rich=rich)
+    message = _build_email_message(
+        to, subject, body, extra_headers=extra_headers, rich=rich,
+        inline_images=_signature_inline_images(body) if rich else None,
+    )
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
         gmail_message["threadId"] = thread_id

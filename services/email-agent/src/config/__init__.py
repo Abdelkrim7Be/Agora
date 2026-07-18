@@ -102,6 +102,8 @@ class Settings:
     gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
     # Per-instance sync observability state (connection status, last success/failure, etc.).
     gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
+    # Uploaded media (signature images, contact photos) — compose mounts /app/data/media.
+    media_dir: str = os.getenv("AGENT_MEDIA_DIR", "logs/instances")
     # Gmail watches expire after 7 days; re-register well inside that window.
     gmail_watch_renew_hours: int = int(os.getenv("GMAIL_WATCH_RENEW_HOURS", "24"))
     # Renew a watch once its recorded expiration is closer than this margin;

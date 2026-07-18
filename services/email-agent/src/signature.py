@@ -74,10 +74,13 @@ def append_signature(content: str, signature: SignatureConfig | None = None) -> 
     if not signature.enabled or SIGNATURE_MARKER in body:
         return body
 
+    from src.media import SIGNATURE_CID, find_signature_image
+
     structured = signature.structured_lines()
     text = signature.text.strip()
     image_url = (signature.image_url or "").strip()
-    if not structured and not text and not image_url:
+    stored_image = find_signature_image() is not None
+    if not structured and not text and not image_url and not stored_image:
         return body
 
     parts = []
@@ -89,8 +92,12 @@ def append_signature(content: str, signature: SignatureConfig | None = None) -> 
             parts.append(text)
     elif text:
         parts.append(text)
-    if image_url:
-        alt = (signature.image_alt or "Signature").strip() or "Signature"
+    alt = (signature.image_alt or "Signature").strip() or "Signature"
+    if stored_image:
+        # Uploaded image is embedded as an inline cid attachment at send time —
+        # no external link that can break or get blocked by the mail client.
+        parts.append(f"![{alt}](cid:{SIGNATURE_CID})")
+    elif image_url:
         parts.append(f"![{alt}]({image_url})")
 
     return f"{body.rstrip()}\n\n{SIGNATURE_MARKER}\n-- \n" + "\n".join(parts)
