@@ -152,7 +152,7 @@ def summarize(
         "turnaround_count": 0,
     })
     dept_rows: dict[str, dict[str, Any]] = defaultdict(lambda: {
-        "dept": "Sans departement",
+        "dept": "Sans département",
         "count": 0,
         "pending": 0,
         "approved": 0,
@@ -168,8 +168,12 @@ def summarize(
         status = str(record.get("status") or "unknown")
         status_breakdown[status] += 1
 
+        # "uncategorized" stays the stable internal key; the UI only ever shows
+        # display_name, which defaults to a French label.
         category_key = str(record.get("category") or "uncategorized")
-        display_name = str(record.get("category_display_name") or category_key or "uncategorized")
+        display_name = str(record.get("category_display_name") or "").strip()
+        if not display_name:
+            display_name = "Sans workflow" if category_key == "uncategorized" else category_key
         workflow = workflow_rows[category_key]
         workflow["category"] = category_key
         workflow["display_name"] = display_name
@@ -177,7 +181,7 @@ def summarize(
         if status == "pending_approval":
             workflow["pending"] += 1
 
-        dept_name = str(record.get("workflow_dept") or "Sans departement")
+        dept_name = str(record.get("workflow_dept") or "Sans département")
         dept = dept_rows[dept_name]
         dept["dept"] = dept_name
         dept["count"] += 1
