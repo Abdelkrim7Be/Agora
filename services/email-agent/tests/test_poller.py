@@ -936,3 +936,25 @@ async def test_retry_exhausted_records_dlq(monkeypatch):
 
     assert outcome == ("m-dlq", "failed", "")
     assert calls[0]["reason"] == "retry_exhausted"
+
+
+def test_rotate_instances_unchanged_below_threshold():
+    poller._rotation_offset = 0
+    ids = ["a", "b", "c"]
+    assert poller._rotate_instances(ids) == ["a", "b", "c"]
+    # Small fleet: order stays stable across cycles.
+    assert poller._rotate_instances(ids) == ["a", "b", "c"]
+
+
+def test_rotate_instances_round_robin_above_threshold():
+    poller._rotation_offset = 0
+    ids = ["a", "b", "c", "d", "e", "f"]
+    assert poller._rotate_instances(ids) == ["a", "b", "c", "d", "e", "f"]
+    assert poller._rotate_instances(ids) == ["b", "c", "d", "e", "f", "a"]
+    assert poller._rotate_instances(ids) == ["c", "d", "e", "f", "a", "b"]
+
+
+def test_instance_stagger_even_for_large_fleet():
+    assert poller._instance_stagger_seconds(6) == poller._ROUND_ROBIN_INTERVAL_SECONDS
+    small = poller._instance_stagger_seconds(3)
+    assert 0.5 <= small <= 3.0

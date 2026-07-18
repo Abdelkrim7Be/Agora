@@ -663,6 +663,34 @@ def active_email_agent_instance_ids() -> list[str]:
     return list(dict.fromkeys(instances)) or [default]
 
 
+# Above this many active mailboxes, random jitter no longer spreads the load
+# evenly; switch to a strict round-robin rotation + even spacing instead.
+_ROUND_ROBIN_THRESHOLD = 5
+_ROUND_ROBIN_INTERVAL_SECONDS = 6.0
+_rotation_offset = 0
+
+
+def _rotate_instances(instances: list[str]) -> list[str]:
+    """Rotate the polling start point each cycle so no mailbox is always first.
+
+    Below the threshold the order is unchanged (jitter still spreads a small
+    fleet fine); above it, a deterministic rotation shares first-place fairly.
+    """
+    global _rotation_offset
+    if len(instances) <= _ROUND_ROBIN_THRESHOLD:
+        return list(instances)
+    offset = _rotation_offset % len(instances)
+    _rotation_offset = (_rotation_offset + 1) % len(instances)
+    return instances[offset:] + instances[:offset]
+
+
+def _instance_stagger_seconds(count: int) -> float:
+    """Even spacing for a large fleet; random jitter for a small one."""
+    if count <= _ROUND_ROBIN_THRESHOLD:
+        return random.uniform(0.5, 3.0)
+    return _ROUND_ROBIN_INTERVAL_SECONDS
+
+
 async def poll_active_instances_once(
     graph,
     instance_ids: list[str] | None = None,
@@ -673,12 +701,11 @@ async def poll_active_instances_once(
         print(f"poller: Gmail rate-limit pause active ({remaining}s left); skipping cycle")
         return {}
     instances = instance_ids or active_email_agent_instance_ids()
+    ordered = _rotate_instances(instances)
     results: dict[str, list[tuple]] = {}
-    for index, raw_instance_id in enumerate(instances):
+    for index, raw_instance_id in enumerate(ordered):
         if index:
-            # Stagger instances inside a cycle so N mailboxes don't produce one
-            # synchronized burst of Gmail calls.
-            await asyncio.sleep(random.uniform(0.5, 3.0))
+            await asyncio.sleep(_instance_stagger_seconds(len(ordered)))
         instance_id = normalize_agent_instance_id(raw_instance_id)
         with agent_instance_context(instance_id):
             try:
