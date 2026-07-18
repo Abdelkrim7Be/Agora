@@ -73,6 +73,7 @@ services:
       # runs it creates are visible to that user and it resolves /app/token.json.
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      AGENT_MEDIA_DIR: /app/data/media
       GMAIL_CREDENTIALS_PATH: credentials.json
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_SECURITY_ENABLED: "true"
