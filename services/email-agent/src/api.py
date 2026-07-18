@@ -143,6 +143,7 @@ from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
 from src.media import delete_signature_image, find_signature_image, save_signature_image
+from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
 from src.signature import SignatureConfig, load_signature, save_signature
@@ -2245,6 +2246,51 @@ async def get_preferences(request: Request) -> dict:
     return {
         "triage_preferences": preferences_text(triage.value) if triage else cfg.agent.triage_instructions,
         "response_preferences": preferences_text(response.value) if response else cfg.agent.response_preferences,
+    }
+
+
+async def _memory_kind_text(request: Request, kind: str) -> str:
+    cfg = load_config()
+    store = request.app.state.store
+    item = await store.aget(namespace(kind), "user_preferences")
+    if item:
+        return preferences_text(item.value)
+    defaults = {
+        "triage_preferences": cfg.agent.triage_instructions,
+        "response_preferences": cfg.agent.response_preferences,
+        "writing_style": cfg.agent.writing_style_default,
+    }
+    return defaults.get(kind, "")
+
+
+@app.get("/memory/summary")
+async def memory_summary(request: Request) -> dict:
+    """Readable memory: one deletable French line per learned item, per kind."""
+    summary: dict = {"agent_instance_id": current_agent_instance_id()}
+    for kind in MEMORY_KINDS:
+        text = await _memory_kind_text(request, kind)
+        summary[kind] = await asyncio.to_thread(
+            summarize_kind, kind, text, graph_module.llm
+        )
+    return summary
+
+
+@app.delete("/memory/item")
+async def delete_memory_item(request: Request, kind: str, id: str) -> dict:
+    _require_instance_role(request, "owner")
+    if kind not in MEMORY_KINDS:
+        raise HTTPException(status_code=400, detail=f"kind must be one of {MEMORY_KINDS}")
+    text = await _memory_kind_text(request, kind)
+    updated = remove_item(kind, text, id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="memory item not found")
+    store = request.app.state.store
+    await store.aput(namespace(kind), "user_preferences", wrap_preferences(updated))
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "kind": kind,
+        "removed": id,
+        "remaining": len(memory_items(kind, updated)),
     }
 
 
