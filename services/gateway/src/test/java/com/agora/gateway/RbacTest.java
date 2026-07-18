@@ -1087,4 +1087,27 @@ class RbacTest {
 
         wireMock.verify(1, deleteRequestedFor(urlPathEqualTo("/memory/item")));
     }
+
+    @Test
+    void viewer_can_read_contact_photo() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/contacts/alice@example.com/photo"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "image/jpeg").withBody("img")));
+
+        mockMvc.perform(get("/api/agent/contacts/alice@example.com/photo")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/contacts/alice@example.com/photo")));
+    }
+
+    @Test
+    void viewer_cannot_upload_contact_photo_403() throws Exception {
+        mockMvc.perform(post("/api/agent/contacts/alice@example.com/photo")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.parseMediaType("multipart/form-data; boundary=agora"))
+                        .content("--agora--\r\n".getBytes()))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/contacts/alice@example.com/photo")));
+    }
 }
