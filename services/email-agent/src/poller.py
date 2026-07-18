@@ -278,11 +278,36 @@ def ensure_watch(resource=None) -> dict | None:
     return result
 
 
-def ensure_watches(instance_ids: list[str] | None = None) -> dict[str, dict | None]:
+def watch_is_fresh(instance_id: str, margin_seconds: float | None = None) -> bool:
+    """Whether the instance's recorded watch expiration is still beyond the margin.
+
+    A missing or unparseable expiration counts as stale so the watch gets
+    re-registered — renewal is idempotent on the Gmail side.
+    """
+    if margin_seconds is None:
+        margin_seconds = settings.gmail_watch_renew_margin_hours * 3600
+    expires = get_status(agent_instance_id=instance_id).get("watch_expires_at")
+    if not expires:
+        return False
+    try:
+        expires_dt = datetime.fromisoformat(expires)
+    except ValueError:
+        return False
+    if expires_dt.tzinfo is None:
+        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+    remaining = (expires_dt - datetime.now(timezone.utc)).total_seconds()
+    return remaining > margin_seconds
+
+
+def ensure_watches(
+    instance_ids: list[str] | None = None, force: bool = False
+) -> dict[str, dict | None]:
     """Register/renew the Gmail push watch for every connected instance.
 
     Each agent instance has its own mailbox token, so each needs its own watch.
     One instance failing (revoked token, rate limit) must not block the others.
+    Renewal is expiration-driven: instances whose recorded watch expiration is
+    still beyond the renewal margin are skipped unless force=True.
     """
     if not settings.gmail_webhook_enabled:
         return {}
@@ -291,6 +316,9 @@ def ensure_watches(instance_ids: list[str] | None = None) -> dict[str, dict | No
         instance_id = normalize_agent_instance_id(raw_instance_id)
         with agent_instance_context(instance_id):
             if not has_stored_token(instance_id):
+                results[instance_id] = None
+                continue
+            if not force and watch_is_fresh(instance_id):
                 results[instance_id] = None
                 continue
             try:
@@ -716,14 +744,12 @@ async def run_forever() -> None:
         else settings.poll_interval_minutes
     )
     interval = interval_minutes * 60
-    renew = settings.gmail_watch_renew_hours * 3600
     upgrade_to_head()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
     setup_trace_store()
     setup_dlq()
-    last_watch = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
             checkpointer=storage.checkpointer, store=storage.store
@@ -739,11 +765,13 @@ async def run_forever() -> None:
             f"({storage.backend})"
         )
         while True:
-            if settings.gmail_webhook_enabled and time.monotonic() - last_watch >= renew:
+            if settings.gmail_webhook_enabled:
+                # Expiration-driven: ensure_watches skips instances whose recorded
+                # watch expiration is still beyond the renewal margin, so checking
+                # every loop is cheap and a watch never silently lapses.
                 watches = await asyncio.to_thread(ensure_watches)
                 registered = sum(1 for value in watches.values() if value)
                 if registered:
-                    last_watch = time.monotonic()
                     print(f"poller: gmail watch registered for {registered} instance(s)")
             if settings.polling_fallback_enabled:
                 await poll_active_instances_once(graph)
