@@ -1008,4 +1008,83 @@ class RbacTest {
 
         wireMock.verify(0, postRequestedFor(urlPathEqualTo("/persona/suggest")));
     }
+
+    @Test
+    void owner_can_upload_signature_image() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/signature/image"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"stored\":true}")));
+
+        mockMvc.perform(post("/api/agent/signature/image")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.parseMediaType("multipart/form-data; boundary=agora"))
+                        .content("--agora\r\nContent-Disposition: form-data; name=\"file\"; filename=\"logo.png\"\r\nContent-Type: image/png\r\n\r\nfake-image-bytes\r\n--agora--\r\n".getBytes()))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/signature/image")));
+    }
+
+    @Test
+    void oversized_proxy_body_rejected_413() throws Exception {
+        byte[] huge = new byte[2 * 1024 * 1024 + 1];
+        mockMvc.perform(post("/api/agent/signature/image")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.parseMediaType("multipart/form-data; boundary=agora"))
+                        .content(huge))
+                .andExpect(status().isPayloadTooLarge());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/signature/image")));
+    }
+
+    @Test
+    void viewer_cannot_upload_signature_image_403() throws Exception {
+        mockMvc.perform(post("/api/agent/signature/image")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.MULTIPART_FORM_DATA)
+                        .content("fake-image-bytes".getBytes()))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/signature/image")));
+    }
+
+    @Test
+    void viewer_can_read_memory_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/memory/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"triage_preferences\":[]}")));
+
+        mockMvc.perform(get("/api/agent/memory/summary")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/memory/summary")));
+    }
+
+    @Test
+    void viewer_cannot_delete_memory_item_403() throws Exception {
+        mockMvc.perform(delete("/api/agent/memory/item?kind=triage_preferences&id=abc")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, deleteRequestedFor(urlPathEqualTo("/memory/item")));
+    }
+
+    @Test
+    void owner_can_delete_memory_item() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.delete(urlPathEqualTo("/memory/item"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"removed\":true}")));
+
+        mockMvc.perform(delete("/api/agent/memory/item?kind=triage_preferences&id=abc")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, deleteRequestedFor(urlPathEqualTo("/memory/item")));
+    }
 }
