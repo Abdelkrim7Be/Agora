@@ -614,7 +614,7 @@ async def test_process_message_retries_transient_error_then_succeeds(monkeypatch
     attempts = {"count": 0}
     sleeps: list[float] = []
 
-    async def fake_process(_graph, msg_id, resource, rules_config):
+    async def fake_process(_graph, msg_id, resource, rules_config, message=None):
         attempts["count"] += 1
         if attempts["count"] < 3:
             raise RuntimeError("429 rate_limit_exceeded")
@@ -641,7 +641,7 @@ async def test_process_message_does_not_retry_deterministic_error(monkeypatch):
     failures: list[str] = []
     attempts = {"count": 0}
 
-    async def fake_process(_graph, msg_id, resource, rules_config):
+    async def fake_process(_graph, msg_id, resource, rules_config, message=None):
         attempts["count"] += 1
         raise ValueError("bad mime payload")
 
@@ -683,7 +683,7 @@ async def test_process_message_records_failure_after_retry_exhaustion_and_contin
 
     attempts = {"m_retry_fail": 0}
 
-    async def fake_process(_graph, msg_id, resource, rules_config):
+    async def fake_process(_graph, msg_id, resource, rules_config, message=None):
         processed.append(msg_id)
         if msg_id == "m_retry_fail":
             attempts[msg_id] += 1

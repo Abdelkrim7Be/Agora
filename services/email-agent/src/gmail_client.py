@@ -133,7 +133,12 @@ def _fetch_inbox_metadata_serial(refs: list[dict], resource) -> list[dict]:
     return [_inbox_metadata_request(resource, ref["id"]).execute() for ref in refs]
 
 
-def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
+def _run_message_batch(requests: dict[str, object], resource) -> dict[str, dict]:
+    """Execute a single Gmail batch of get requests keyed by an id.
+
+    Raises if the resource can't batch or any sub-request fails/misses, so callers
+    can fall back to serial fetches on error.
+    """
     new_batch = getattr(resource, "new_batch_http_request", None)
     if not callable(new_batch):
         raise RuntimeError("Gmail batch requests are unavailable for this resource")
@@ -148,19 +153,45 @@ def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
             responses[str(request_id)] = response
 
     batch = new_batch(callback=callback)
-    request_ids: list[str] = []
-    for index, ref in enumerate(refs):
-        request_id = str(index)
-        request_ids.append(request_id)
-        batch.add(_inbox_metadata_request(resource, ref["id"]), request_id=request_id)
-
+    for request_id, request in requests.items():
+        batch.add(request, request_id=request_id)
     batch.execute()
     if errors:
-        raise RuntimeError(f"Gmail batch metadata failed for {len(errors)} messages")
-    missing = [request_id for request_id in request_ids if request_id not in responses]
+        raise RuntimeError(f"Gmail batch failed for {len(errors)} messages")
+    missing = [request_id for request_id in requests if request_id not in responses]
     if missing:
-        raise RuntimeError(f"Gmail batch metadata missed {len(missing)} messages")
-    return [responses[request_id] for request_id in request_ids]
+        raise RuntimeError(f"Gmail batch missed {len(missing)} messages")
+    return responses
+
+
+def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
+    requests = {str(i): _inbox_metadata_request(resource, ref["id"]) for i, ref in enumerate(refs)}
+    responses = _run_message_batch(requests, resource)
+    return [responses[str(i)] for i in range(len(refs))]
+
+
+# Google caps a single HTTP batch at 100 sub-requests; 50 keeps well inside it.
+_MESSAGE_BATCH_CHUNK = 50
+
+
+def fetch_messages_batch(
+    message_ids: list[str], resource=None, fmt: str = "full", chunk: int = _MESSAGE_BATCH_CHUNK
+) -> dict[str, dict]:
+    """Fetch several full messages in batched HTTP requests → {message_id: message}.
+
+    One round-trip per chunk instead of one per message. Raises on batch failure
+    so the caller can fall back to serial get_message calls.
+    """
+    resource = resource or gmail_resource()
+    result: dict[str, dict] = {}
+    for start in range(0, len(message_ids), max(1, chunk)):
+        window = message_ids[start:start + max(1, chunk)]
+        requests = {
+            mid: resource.users().messages().get(userId="me", id=mid, format=fmt)
+            for mid in window
+        }
+        result.update(_run_message_batch(requests, resource))
+    return result
 
 
 def list_inbox(max_results: int, resource=None) -> list[dict]:

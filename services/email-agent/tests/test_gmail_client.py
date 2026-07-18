@@ -10,6 +10,7 @@ from src.gmail_client import (
     create_draft,
     ensure_label,
     fetch_history_message_refs,
+    fetch_messages_batch,
     fetch_sent,
     forward_message,
     format_thread,
@@ -253,6 +254,30 @@ def test_fetch_sent_returns_usable_style_samples():
         "list",
         {"userId": "me", "q": "in:sent", "maxResults": 10},
     )
+
+
+def test_fetch_messages_batch_returns_full_messages_in_one_call():
+    messages = {
+        "m1": _message([{"name": "Subject", "value": "One"}], {}, msg_id="m1", thread_id="t1"),
+        "m2": _message([{"name": "Subject", "value": "Two"}], {}, msg_id="m2", thread_id="t2"),
+    }
+    resource = _FakeBatchGmailResource(messages=messages)
+
+    result = fetch_messages_batch(["m1", "m2"], resource=resource)
+
+    assert resource.batch_calls == 1
+    assert set(result) == {"m1", "m2"}
+    assert result["m1"]["id"] == "m1"
+
+
+def test_fetch_messages_batch_chunks_large_id_lists():
+    messages = {f"m{i}": _message([], {}, msg_id=f"m{i}", thread_id=f"t{i}") for i in range(5)}
+    resource = _FakeBatchGmailResource(messages=messages)
+
+    result = fetch_messages_batch(list(messages), resource=resource, chunk=2)
+
+    assert resource.batch_calls == 3  # 2 + 2 + 1
+    assert set(result) == set(messages)
 
 
 # --- Gmail mutation helpers ---
