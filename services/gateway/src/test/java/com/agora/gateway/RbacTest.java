@@ -906,4 +906,106 @@ class RbacTest {
 
         wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox")));
     }
+
+    @Test
+    void viewer_can_read_send_mode() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/send-mode"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"send_mode\":\"simulation\"}")));
+
+        mockMvc.perform(get("/api/agent/send-mode")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.send_mode").value("simulation"));
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/send-mode")));
+    }
+
+    @Test
+    void viewer_cannot_update_send_mode_403() throws Exception {
+        mockMvc.perform(put("/api/agent/send-mode")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"send_mode\":\"live\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/send-mode")));
+    }
+
+    @Test
+    void owner_can_update_send_mode() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/send-mode"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"send_mode\":\"live\"}")));
+
+        mockMvc.perform(put("/api/agent/send-mode")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"send_mode\":\"live\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.send_mode").value("live"));
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/send-mode")));
+    }
+
+    @Test
+    void viewer_can_read_persona() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/persona"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"mission\":\"\"}")));
+
+        mockMvc.perform(get("/api/agent/persona")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/persona")));
+    }
+
+    @Test
+    void viewer_cannot_update_persona_403() throws Exception {
+        mockMvc.perform(put("/api/agent/persona")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/persona")));
+    }
+
+    @Test
+    void owner_can_suggest_persona() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/persona/suggest"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"suggestion\":{}}")));
+
+        mockMvc.perform(post("/api/agent/persona/suggest")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/persona/suggest")));
+    }
+
+    @Test
+    void viewer_cannot_suggest_persona_403() throws Exception {
+        mockMvc.perform(post("/api/agent/persona/suggest")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/persona/suggest")));
+    }
 }
