@@ -142,7 +142,14 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
-from src.media import delete_signature_image, find_signature_image, save_signature_image
+from src.media import (
+    delete_contact_photo,
+    delete_signature_image,
+    find_contact_photo,
+    find_signature_image,
+    save_contact_photo,
+    save_signature_image,
+)
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
@@ -1398,6 +1405,41 @@ async def delete_contact_entry(email: str, request: Request) -> dict:
         "agent_instance_id": current_agent_instance_id(),
         "deleted": email.strip().lower(),
         "storage": "contacts-directory",
+    }
+
+
+@app.post("/contacts/{email}/photo")
+async def upload_contact_photo(email: str, request: Request, file: UploadFile = File(...)) -> dict:
+    _require_instance_role(request, "owner")
+    data = await file.read()
+    try:
+        path = await asyncio.to_thread(save_contact_photo, email, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "email": email.strip().lower(),
+        "stored": True,
+        "size": path.stat().st_size,
+    }
+
+
+@app.get("/contacts/{email}/photo")
+async def get_contact_photo(email: str) -> FileResponse:
+    path = find_contact_photo(email)
+    if path is None:
+        raise HTTPException(status_code=404, detail="No photo for this contact")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.delete("/contacts/{email}/photo")
+async def remove_contact_photo(email: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    removed = delete_contact_photo(email)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "email": email.strip().lower(),
+        "removed": removed,
     }
 
 
