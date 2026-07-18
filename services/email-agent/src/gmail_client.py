@@ -11,6 +11,7 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from src.config import SERVICE_ROOT, settings
+from src.gmail_budget import record_gmail_call
 from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
@@ -130,6 +131,7 @@ def _inbox_metadata_request(resource, msg_id: str):
 
 
 def _fetch_inbox_metadata_serial(refs: list[dict], resource) -> list[dict]:
+    record_gmail_call(len(refs))
     return [_inbox_metadata_request(resource, ref["id"]).execute() for ref in refs]
 
 
@@ -166,6 +168,7 @@ def _run_message_batch(requests: dict[str, object], resource) -> dict[str, dict]
 
 def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
     requests = {str(i): _inbox_metadata_request(resource, ref["id"]) for i, ref in enumerate(refs)}
+    record_gmail_call(len(requests))
     responses = _run_message_batch(requests, resource)
     return [responses[str(i)] for i in range(len(refs))]
 
@@ -190,6 +193,7 @@ def fetch_messages_batch(
             mid: resource.users().messages().get(userId="me", id=mid, format=fmt)
             for mid in window
         }
+        record_gmail_call(len(window))
         result.update(_run_message_batch(requests, resource))
     return result
 
@@ -202,6 +206,7 @@ def list_inbox(max_results: int, resource=None) -> list[dict]:
     is surfaced so the caller can render state and drive mark read/unread actions.
     """
     resource = resource or gmail_resource()
+    record_gmail_call()
     refs = (
         resource.users()
         .messages()
@@ -254,6 +259,7 @@ def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
 def current_history_id(resource=None) -> str:
     """Return the mailbox's latest historyId (cheap getProfile call)."""
     resource = resource or gmail_resource()
+    record_gmail_call()
     profile = resource.users().getProfile(userId="me").execute()
     return str(profile.get("historyId") or "")
 
@@ -297,6 +303,7 @@ def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dic
         }
         if page_token:
             kwargs["pageToken"] = page_token
+        record_gmail_call()
         results = resource.users().history().list(**kwargs).execute()
         for entry in results.get("history", []):
             events = entry.get("messagesAdded", []) + entry.get("labelsAdded", [])
@@ -314,6 +321,7 @@ def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dic
 def get_message(msg_id: str, resource=None) -> dict:
     """Fetch a full Gmail message by id."""
     resource = resource or gmail_resource()
+    record_gmail_call()
     return resource.users().messages().get(userId="me", id=msg_id).execute()
 
 
@@ -408,6 +416,7 @@ def _send_email_message(
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
         gmail_message["threadId"] = thread_id
+    record_gmail_call()
     return (
         resource.users()
         .messages()
@@ -514,6 +523,7 @@ def modify_labels(
             remove_label_ids=remove_label_ids,
         )
     resource = resource or gmail_resource()
+    record_gmail_call()
     return (
         resource.users()
         .messages()
@@ -550,6 +560,7 @@ def trash_message(msg_id: str, resource=None) -> dict:
     if effective_dry_run():
         return _dry_run_result("trash_message", message_id=msg_id)
     resource = resource or gmail_resource()
+    record_gmail_call()
     return resource.users().messages().trash(userId="me", id=msg_id).execute()
 
 
@@ -666,6 +677,7 @@ def reply_all_message(message_id: str, body: str, resource=None) -> dict:
 def fetch_thread(thread_id: str, resource=None) -> list[dict]:
     """Return all messages in a Gmail thread (oldest first, as the API orders them)."""
     resource = resource or gmail_resource()
+    record_gmail_call()
     thread = resource.users().threads().get(userId="me", id=thread_id).execute()
     return thread.get("messages", [])
 
