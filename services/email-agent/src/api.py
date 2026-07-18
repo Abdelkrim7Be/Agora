@@ -142,7 +142,7 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
-from src.persona import Persona, compiled_preview, load_persona, save_persona
+from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
 from src.signature import SignatureConfig, load_signature, save_signature
 
@@ -2127,6 +2127,42 @@ async def update_persona(request: Request, body: Persona) -> dict:
         "agent_instance_id": current_agent_instance_id(),
         **body.model_dump(),
         "compiled": compiled,
+    }
+
+
+@app.post("/persona/suggest")
+async def suggest_persona_endpoint(request: Request) -> dict:
+    """Analyse the mailbox and return persona prefill suggestions.
+
+    Read-only: nothing is saved — the UI fills the form and the owner decides.
+    """
+    _require_instance_role(request, "owner")
+    cfg = load_config()
+    user_id = current_user_id()
+    try:
+        resource = await asyncio.to_thread(gmail_resource)
+        sent_samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        received = await asyncio.to_thread(list_inbox, 25, resource)
+    except Exception as exc:
+        print(f"api: persona suggestion Gmail read unavailable for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+    if not sent_samples and not received:
+        raise HTTPException(status_code=422, detail="No usable mailbox samples found for persona suggestions")
+    try:
+        suggestion = await asyncio.to_thread(
+            suggest_persona, sent_samples, received, graph_module.llm
+        )
+    except Exception as exc:
+        print(f"api: persona suggestion analysis failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=503, detail="Persona analysis failed with the configured LLM") from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "suggestion": suggestion.model_dump(),
+        "sent_sample_count": len(sent_samples),
+        "received_sample_count": len(received),
     }
 
 
