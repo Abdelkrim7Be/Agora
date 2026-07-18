@@ -142,6 +142,7 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
+from src.persona import Persona, compiled_preview, load_persona, save_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
 from src.signature import SignatureConfig, load_signature, save_signature
 
@@ -2090,6 +2091,43 @@ async def update_agent_config(body: dict) -> dict:
     )
     reload_config()  # persona/triage edits take effect without a restart (this process)
     return cfg.model_dump()
+
+
+@app.get("/persona")
+async def get_persona() -> dict:
+    persona = load_persona()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **persona.model_dump(),
+        "compiled": compiled_preview(persona),
+    }
+
+
+@app.put("/persona")
+async def update_persona(request: Request, body: Persona) -> dict:
+    """Save the persona and compile it into the agent behavior texts.
+
+    Compilation rewrites background / triage_instructions / response_preferences
+    in the instance config (the graph consumes those unchanged); an empty
+    persona is saved but leaves the config untouched.
+    """
+    _require_instance_role(request, "owner")
+    save_persona(body)
+    compiled = compiled_preview(body)
+    if not body.is_empty():
+        cfg = load_config()
+        cfg.agent.background = compiled["background"]
+        cfg.agent.triage_instructions = compiled["triage_instructions"]
+        cfg.agent.response_preferences = compiled["response_preferences"]
+        write_instance_text(
+            "config", yaml.safe_dump(cfg.model_dump(), sort_keys=False, allow_unicode=True), DEFAULT_CONFIG_PATH
+        )
+        reload_config()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **body.model_dump(),
+        "compiled": compiled,
+    }
 
 
 @app.get("/send-mode")
