@@ -2884,20 +2884,16 @@ async def run_stream(request: Request, email: EmailInput) -> StreamingResponse:
     return StreamingResponse(_stream_run_response(response), media_type="text/event-stream")
 
 
-@app.post("/run/{run_id}/approve", response_model=RunResponse)
-async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
-    _require_instance_role(request, "approver")
-    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
-    _require_dept_access(request, record)
-    graph = request.app.state.graph
+async def _approve_run(graph, run_id: str, args) -> RunResponse:
+    """Resume a paused run with an approve decision. Authorization is the caller's job."""
     config = await _require_run(graph, run_id)
     try:
         result = await _invoke_graph(
             graph,
-            Command(resume={"type": "approve", "args": approval.args}), config, reload_runtime_config=False
+            Command(resume={"type": "approve", "args": args}), config, reload_runtime_config=False
         )
     except Exception as exc:
-        response = _execute_pending_action(run_id, approval.args)
+        response = _execute_pending_action(run_id, args)
         if response is not None:
             print(f"api: approve graph resume failed for run {run_id}; used pending action fallback: {exc}")
             return response
@@ -2910,12 +2906,8 @@ async def approve(request: Request, run_id: str, approval: ApprovalInput) -> Run
     return response
 
 
-@app.post("/run/{run_id}/reject", response_model=RunResponse)
-async def reject(request: Request, run_id: str) -> RunResponse:
-    _require_instance_role(request, "approver")
-    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
-    _require_dept_access(request, record)
-    graph = request.app.state.graph
+async def _reject_run(graph, run_id: str) -> RunResponse:
+    """Resume a paused run with a reject decision. Authorization is the caller's job."""
     config = await _require_run(graph, run_id)
     try:
         result = await _invoke_graph(
@@ -2934,6 +2926,60 @@ async def reject(request: Request, run_id: str) -> RunResponse:
     response = _format(result, run_id)
     _record_response(response)
     return response
+
+
+@app.post("/run/{run_id}/approve", response_model=RunResponse)
+async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    return await _approve_run(request.app.state.graph, run_id, approval.args)
+
+
+@app.post("/run/{run_id}/reject", response_model=RunResponse)
+async def reject(request: Request, run_id: str) -> RunResponse:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    return await _reject_run(request.app.state.graph, run_id)
+
+
+class BulkDecisionInput(BaseModel):
+    run_ids: list[str]
+    decision: str  # "approve" | "reject"
+
+
+@app.post("/runs/bulk")
+async def bulk_decision(request: Request, body: BulkDecisionInput) -> dict:
+    """Approve or reject several pending runs in one call.
+
+    Each run is resumed through the same gated per-run path, so external sends
+    stay individually authorized; a run the caller can't access (dept scope) or
+    that isn't resolvable is skipped with an error entry, others still process.
+    """
+    _require_instance_role(request, "approver")
+    if body.decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be 'approve' or 'reject'")
+    graph = request.app.state.graph
+    results: list[dict] = []
+    for run_id in body.run_ids:
+        record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+        try:
+            _require_dept_access(request, record)
+        except HTTPException as exc:
+            results.append({"run_id": run_id, "status": "denied", "error": str(exc.detail)})
+            continue
+        try:
+            if body.decision == "approve":
+                response = await _approve_run(graph, run_id, None)
+            else:
+                response = await _reject_run(graph, run_id)
+            results.append({"run_id": run_id, "status": response.status, "error": response.error})
+        except HTTPException as exc:
+            results.append({"run_id": run_id, "status": "error", "error": str(exc.detail)})
+        except Exception as exc:
+            results.append({"run_id": run_id, "status": "error", "error": str(exc)})
+    return {"results": results}
 
 
 @app.post("/run/{run_id}/respond", response_model=RunResponse)
