@@ -82,7 +82,9 @@ from src.automation import (
     record_digest_item,
     workflow_sla_snapshot,
 )
-from src.config import settings
+from src.config import load_config, settings
+from src.memory import namespace, wrap_preferences
+from src.style_learning import analyze_style, build_style_text
 from src.security_client import sanitize_email
 from src.gmail_client import (
     current_history_id,
@@ -90,8 +92,11 @@ from src.gmail_client import (
     extract_pdf_text,
     fetch_history_message_refs,
     fetch_messages_batch,
+    fetch_sender_correspondence,
+    fetch_sent,
     fetch_thread,
     fetch_unread,
+    format_sender_correspondence,
     get_message,
     gmail_resource,
     gmail_to_email_input,
@@ -461,6 +466,22 @@ async def process_message(
         "agent_instance_id": current_agent_instance_id(),
     }
 
+    # Relationship context: how the owner previously wrote to this sender
+    # (outside this thread) so replies match the established register. Runs
+    # before sanitization so the block passes the same security boundary.
+    correspondence = fetch_sender_correspondence(
+        email_input.get("author", ""),
+        exclude_thread_id=message.get("threadId", ""),
+        resource=resource,
+    )
+    if correspondence:
+        email_input = {
+            **email_input,
+            "email_thread": email_input["email_thread"]
+            + "\n\n"
+            + format_sender_correspondence(correspondence),
+        }
+
     if settings.extract_attachments:
         pdf_blocks = []
         for att in email_input.get("attachments", []):
@@ -691,9 +712,43 @@ def _instance_stagger_seconds(count: int) -> float:
     return _ROUND_ROBIN_INTERVAL_SECONDS
 
 
+# One auto-seed attempt per instance per process: builds the owner's writing
+# style profile from their sent mail the first time a connected mailbox is
+# polled, so drafts carry the owner's voice without any manual setup step.
+_style_seed_attempted: set[str] = set()
+
+
+async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
+    if store is None or instance_id in _style_seed_attempted:
+        return
+    _style_seed_attempted.add(instance_id)
+    try:
+        cfg = load_config()
+        if not cfg.style_learning.enabled:
+            return
+        existing = await store.aget(namespace("writing_style"), "user_preferences")
+        if existing:
+            return
+        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        if not samples:
+            print(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
+            _style_seed_attempted.discard(instance_id)
+            return
+        from src import graph as graph_module
+
+        profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
+        text = build_style_text(profile)
+        await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(text))
+        print(f"poller: {instance_id} seeded writing style from {len(samples)} sent email(s)")
+    except Exception as exc:
+        # Best-effort: drafts fall back to the configured default style.
+        print(f"poller: {instance_id} style auto-seed skipped: {exc}")
+
+
 async def poll_active_instances_once(
     graph,
     instance_ids: list[str] | None = None,
+    store=None,
 ) -> dict[str, list[tuple]]:
     """Poll every active, connected instance without cross-instance failure spread."""
     if time.time() < _gmail_rate_limited_until:
@@ -720,6 +775,7 @@ async def poll_active_instances_once(
                 try:
                     reload_config()
                     resource = gmail_resource()
+                    await maybe_seed_style_profile(instance_id, store, resource)
                     outcomes = await poll_once(graph, resource=resource)
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
@@ -820,7 +876,7 @@ async def run_forever() -> None:
                 if registered:
                     print(f"poller: gmail watch registered for {registered} instance(s)")
             if settings.polling_fallback_enabled:
-                await poll_active_instances_once(graph)
+                await poll_active_instances_once(graph, store=storage.store)
             else:
                 escalations = await sweep_active_instances_once()
                 for instance_id, items in escalations.items():
