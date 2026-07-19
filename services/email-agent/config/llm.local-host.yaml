@@ -8,11 +8,13 @@ timeout: 120
 # drafting and instruction-following on retouches.
 roles:
   triage: "openai:qwen3:4b-8k"
-  # Draft role: slightly creative, shorter cap — better-structured French emails.
+  # Draft role: slightly creative. qwen3's structured (JSON) drafts need more
+  # completion room than qwen2.5 — a 550 cap truncated the JSON mid-draft and
+  # every redraft failed to parse.
   draft:
     model: "openai:qwen3:4b-8k"
     temperature: 0.3
-    max_tokens: 550
+    max_tokens: 1100
   reason: "openai:qwen3:4b-8k"
   memory_style: "openai:qwen3:4b-8k"
 fallbacks: {}

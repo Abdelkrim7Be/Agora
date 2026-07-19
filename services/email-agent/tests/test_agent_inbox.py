@@ -224,3 +224,12 @@ def test_response_feedback_loops_back_and_triggers_redraft(fake_llms, respond_em
     request2 = paused2["__interrupt__"][0].value[0]
     assert request2["action_request"]["action"] == "write_email"
     assert request2["action_request"]["args"] == DRAFT2
+
+
+def test_strip_content_headers_removes_echoed_envelope():
+    from src.graph import _strip_content_headers
+
+    content = "À : client@x.fr\nSujet : Re: paiement\nCorps : \nBonjour,\n\nMerci.\nCordialement"
+    assert _strip_content_headers(content) == "Bonjour,\n\nMerci.\nCordialement"
+    plain = "Bonjour,\n\nMerci.\nCordialement"
+    assert _strip_content_headers(plain) == plain
