@@ -36,8 +36,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # dry-run while seeding the demo; flip back to "false" for the live-send proof
-      AGENT_DRY_RUN: "true"
+      # LIVE MODE: approved actions send real email.
+      AGENT_DRY_RUN: "false"
       AGENT_LLM_PROFILE: local
       AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
@@ -81,8 +81,8 @@ services:
       AGENT_LLM_PROFILE: local
       AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
-      # dry-run while seeding the demo; flip back to "false" for the live-send proof
-      AGENT_DRY_RUN: "true"
+      # LIVE MODE: approved actions send real email.
+      AGENT_DRY_RUN: "false"
       # 30-second cadence. 6-second full-scan polling used to trip Google's
       # per-user abuse limiter (sliding 30-min "Retry after" bans); polling is
       # now incremental (history.list, ~2-4 quota units per idle cycle) with an
