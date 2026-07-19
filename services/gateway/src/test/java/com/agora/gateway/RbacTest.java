@@ -1089,6 +1089,34 @@ class RbacTest {
     }
 
     @Test
+    void owner_can_bulk_decide() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/runs/bulk"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"results\":[]}")));
+
+        mockMvc.perform(post("/api/agent/runs/bulk")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"run_ids\":[\"r1\"],\"decision\":\"approve\"}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/runs/bulk")));
+    }
+
+    @Test
+    void viewer_cannot_bulk_decide_403() throws Exception {
+        mockMvc.perform(post("/api/agent/runs/bulk")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"run_ids\":[\"r1\"],\"decision\":\"approve\"}"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/runs/bulk")));
+    }
+
+    @Test
     void viewer_can_read_contact_photo() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/contacts/alice@example.com/photo"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "image/jpeg").withBody("img")));
