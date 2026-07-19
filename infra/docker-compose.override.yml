@@ -38,6 +38,7 @@ services:
     environment:
       # LIVE MODE: approved actions send real email.
       AGENT_DRY_RUN: "false"
+      PYTHONUNBUFFERED: "1"
       AGENT_LLM_PROFILE: local
       AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
