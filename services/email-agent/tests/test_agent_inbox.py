@@ -54,7 +54,24 @@ def test_parse_decision_agent_inbox_edit_unnests_args():
 def test_parse_decision_response_passes_feedback_string():
     type_, data = _parse_decision([{"type": "response", "args": "make it shorter"}])
     assert type_ == "response"
-    assert data == "make it shorter"
+    assert data == {"feedback": "make it shorter", "draft": None}
+
+
+def test_parse_decision_response_carries_user_draft():
+    draft = {"to": "a@b.c", "subject": "Re: hello", "content": "edited body"}
+    type_, data = _parse_decision(
+        [{"type": "response", "args": "make it shorter", "draft": draft}]
+    )
+    assert type_ == "response"
+    assert data == {"feedback": "make it shorter", "draft": draft}
+
+
+def test_parse_decision_response_ignores_non_dict_draft():
+    type_, data = _parse_decision(
+        [{"type": "response", "args": "make it shorter", "draft": "not-a-dict"}]
+    )
+    assert type_ == "response"
+    assert data == {"feedback": "make it shorter", "draft": None}
 
 
 def test_parse_decision_missing_type_fails_closed():

@@ -287,6 +287,9 @@ class ApprovalInput(BaseModel):
 
 class RespondInput(BaseModel):
     feedback: str
+    # The draft as currently shown/edited in the UI; used as the redraft
+    # baseline so manual edits survive a retouche.
+    draft: dict | None = None
 
 
 class SendModeInput(BaseModel):
@@ -2992,7 +2995,7 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     try:
         result = await _invoke_graph(
             graph,
-            Command(resume=[{"type": "response", "args": body.feedback}]), config, reload_runtime_config=False
+            Command(resume=[{"type": "response", "args": body.feedback, "draft": body.draft}]), config, reload_runtime_config=False
         )
     except Exception as exc:
         response = _pending_response_after_decision_error(run_id, exc, "regenerate draft")
@@ -3004,7 +3007,7 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     return response
 
 
-async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str):
+async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str, draft: dict | None = None):
     yield _sse_event("status", {
         "run_id": run_id,
         "message": "L’agent rédige une nouvelle version du brouillon...",
@@ -3012,7 +3015,7 @@ async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str
     try:
         result = await _invoke_graph(
             graph,
-            Command(resume=[{"type": "response", "args": feedback}]), config, reload_runtime_config=False
+            Command(resume=[{"type": "response", "args": feedback, "draft": draft}]), config, reload_runtime_config=False
         )
         response = _format(result, run_id)
         _record_response(response)
@@ -3033,4 +3036,4 @@ async def respond_stream(request: Request, run_id: str, body: RespondInput) -> S
     _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
-    return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback), media_type="text/event-stream")
+    return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback, body.draft), media_type="text/event-stream")
