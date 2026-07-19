@@ -1077,6 +1077,23 @@ REDRAFT_GIVE_UP_MESSAGE = (
     "ou renvoyez une instruction plus précise."
 )
 
+# Small models sometimes echo email headers into the body field ("À : …",
+# "Sujet : …", "Corps :"). Strip any such leading header lines.
+_CONTENT_HEADER_LINE = _re.compile(
+    r"^\s*(?:to|à|a|destinataire|subject|sujet|objet|body|corps)\s*:.*$",
+    _re.IGNORECASE,
+)
+
+
+def _strip_content_headers(content: str) -> str:
+    lines = content.splitlines()
+    index = 0
+    while index < len(lines) and (
+        not lines[index].strip() or _CONTENT_HEADER_LINE.match(lines[index])
+    ):
+        index += 1
+    return "\n".join(lines[index:]).strip() if index else content.strip()
+
 
 def _feedback_from_messages(messages) -> str:
     """Recover the latest feedback text from the message history (fallback path)."""
@@ -1119,7 +1136,10 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
             "content": (
                 "You revise an email draft according to the user's instruction. "
                 "Apply ONLY the requested change; keep everything else (recipient, "
-                "subject, language, wording, paragraph structure) exactly as it was. "
+                "subject, wording, paragraph structure) exactly as it was. "
+                "HARD RULE: write the revised email in the SAME language as the "
+                "current draft — never translate it. If the draft is in French, "
+                "the revision MUST be in French. "
                 "Return the complete revised email.\n"
                 f"<Response preferences>\n{response_prefs}\n</Response preferences>\n"
                 f"<Writing style>\n{writing_style}\n</Writing style>"
@@ -1141,13 +1161,16 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
         except Exception as exc:
             print(f"✏️ Redraft attempt {attempt + 1} failed: {exc}")
             continue
-        content = (getattr(revised, "content", "") or "").strip()
+        content = _strip_content_headers((getattr(revised, "content", "") or "").strip())
         if not content:
             print(f"✏️ Redraft attempt {attempt + 1} returned no draft body")
             continue
+        # Recipient and subject are NEVER taken from the model: a retouche is a
+        # body revision, and small models corrupt addresses (dropped letters,
+        # translations). Changing to/subject is a direct field edit in the UI.
         args = _normalize_recipient_args({
-            "to": (getattr(revised, "to", "") or "").strip() or previous.get("to", ""),
-            "subject": (getattr(revised, "subject", "") or "").strip() or previous.get("subject", ""),
+            "to": previous.get("to", ""),
+            "subject": previous.get("subject", ""),
             "content": content,
         })
         return {"messages": [_synthetic_write_email_message(args)]}
