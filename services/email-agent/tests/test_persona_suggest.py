@@ -52,6 +52,23 @@ def test_suggest_persona_requires_some_samples():
         suggest_persona([], [], _FakeStructuredLLM(SUGGESTION))
 
 
+def test_suggest_persona_normalizes_tone_and_language():
+    raw = PersonaSuggestion(
+        prenom="Karim", ton=" Chaleureux ", mission="Gérer les demandes RH", langue_reponse="FR",
+    )
+    result = suggest_persona(SENT, RECEIVED, _FakeStructuredLLM(raw))
+    assert result.ton == "chaleureux"
+    assert result.langue_reponse == "fr"
+    assert result.mission == "Gérer les demandes RH"
+
+
+def test_suggest_persona_drops_invalid_tone_and_language():
+    raw = PersonaSuggestion(prenom="Karim", ton="sarcastique", langue_reponse="klingon")
+    result = suggest_persona(SENT, RECEIVED, _FakeStructuredLLM(raw))
+    assert result.ton == ""
+    assert result.langue_reponse == ""
+
+
 @pytest.fixture
 def suggest_env(monkeypatch):
     monkeypatch.setattr(api_module, "gmail_resource", lambda: object())
