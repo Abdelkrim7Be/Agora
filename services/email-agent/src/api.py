@@ -462,6 +462,8 @@ class RunResponse(BaseModel):
     workflow_dept: str | None = None
     assignee: str | None = None
     action_type: str | None = None
+    confidence: str | None = None
+    review_reason: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     sla_label: str | None = None
@@ -482,12 +484,48 @@ def _derive_action_type(pending_action: list | None, classification: str | None)
         return "reply_draft"
     if name == "forward_email":
         return "notify" if classification == "notify" else "forward"
+    if name == "reply_all":
+        return "reply_all"
+    if name == "create_draft":
+        return "draft"
     if name in ("trash_email", "apply_label", "archive_email"):
         return "organize"
     if "campaign" in name:
         return "campaign"
     print(f"Unknown pending action tool name: {name}")
     return "unknown"
+
+
+def _derive_confidence(record: dict) -> tuple[str, str]:
+    """Heuristic review-confidence band + French reason, from persisted fields only.
+
+    No LLM and no stored column — computed on read like action_type. It gives the
+    reviewer a coarse hint plus a one-line "why is this in the queue".
+    """
+    category = (record.get("category") or "").strip()
+    route_to = record.get("workflow_route_to") or []
+    dept = record.get("workflow_dept")
+    has_workflow = bool(
+        (category and category != "uncategorized")
+        or record.get("template")
+        or record.get("workflow_owner")
+        or route_to
+    )
+    classification = record.get("classification")
+    action_type = record.get("action_type") or _derive_action_type(
+        record.get("pending_action"), classification
+    )
+    if has_workflow:
+        if action_type in ("forward", "notify") and (route_to or dept):
+            target = dept or route_to[0]
+            return "élevée", f"Règle de routage : {target}".strip()
+        display = record.get("category_display_name") or category or "workflow"
+        return "élevée", f"Workflow reconnu : {display}".strip()
+    if classification == "respond":
+        return "moyenne", "Brouillon rédigé par l'agent, aucune règle déterministe."
+    if classification == "notify" or action_type == "unknown":
+        return "faible", "Classé « à notifier » sans règle claire — à vérifier."
+    return "moyenne", "Validation requise avant envoi."
 
 
 def _thread_config(run_id: str) -> dict:
@@ -498,6 +536,18 @@ def _format(result: dict, run_id: str) -> RunResponse:
     """Turn a graph result into a response — paused on approval, or completed."""
     interrupts = result.get("__interrupt__")
     if interrupts:
+        action_type = _derive_action_type(interrupts[0].value, result.get("classification_decision"))
+        confidence, review_reason = _derive_confidence({
+            "pending_action": interrupts[0].value,
+            "classification": result.get("classification_decision"),
+            "category": result.get("category"),
+            "category_display_name": result.get("category_display_name"),
+            "template": result.get("template"),
+            "workflow_owner": result.get("workflow_owner"),
+            "workflow_route_to": result.get("workflow_route_to") or [],
+            "workflow_dept": result.get("workflow_dept"),
+            "action_type": action_type,
+        })
         return RunResponse(
             run_id=run_id,
             status="pending_approval",
@@ -511,7 +561,9 @@ def _format(result: dict, run_id: str) -> RunResponse:
             workflow_route_to=result.get("workflow_route_to") or [],
             workflow_dept=result.get("workflow_dept"),
             assignee=result.get("assignee"),
-            action_type=_derive_action_type(interrupts[0].value, result.get("classification_decision")),
+            action_type=action_type,
+            confidence=confidence,
+            review_reason=review_reason,
         )
     if result.get("email_send_failed"):
         return RunResponse(
@@ -591,6 +643,9 @@ def _annotate_run_record(
 ) -> dict:
     enriched = dict(record)
     enriched["action_type"] = _derive_action_type(record.get("pending_action"), record.get("classification"))
+    confidence, review_reason = _derive_confidence(enriched)
+    enriched["confidence"] = confidence
+    enriched["review_reason"] = review_reason
     if record.get("status") == "pending_approval":
         categories_cfg = categories_cfg or load_categories(agent_instance_id=current_agent_instance_id())
         escalation_state = escalation_state or load_escalation_state()
@@ -624,6 +679,8 @@ def _run_response_from_record(record: dict) -> RunResponse:
         workflow_dept=record.get("workflow_dept"),
         assignee=record.get("assignee"),
         action_type=record.get("action_type"),
+        confidence=record.get("confidence"),
+        review_reason=record.get("review_reason"),
         created_at=record.get("created_at"),
         updated_at=record.get("updated_at"),
         sla_label=record.get("sla_label"),
