@@ -89,6 +89,63 @@ def fetch_sent(max_messages: int = 50, resource=None) -> list[dict]:
     return samples
 
 
+def fetch_sender_correspondence(
+    sender_email: str,
+    exclude_thread_id: str = "",
+    max_messages: int = 2,
+    max_chars: int = 600,
+    resource=None,
+) -> list[dict]:
+    """Return the owner's most recent sent messages to this correspondent.
+
+    Gives the drafting LLM the established tone/register with a known contact
+    (outside the current thread). Empty on any failure — this context is a
+    bonus, never a blocker.
+    """
+    address = (sender_email or "").strip()
+    if "<" in address and ">" in address:
+        address = address.split("<", 1)[1].split(">", 1)[0].strip()
+    if not address or "@" not in address:
+        return []
+    try:
+        resource = resource or gmail_resource()
+        refs = search_messages(f"in:sent to:{address}", max_messages + 2, resource=resource)
+        blocks: list[dict] = []
+        for ref in refs:
+            message = get_message(ref["id"], resource=resource)
+            if exclude_thread_id and message.get("threadId") == exclude_thread_id:
+                continue
+            body = _extract_message_part(message.get("payload", {})).strip()
+            if len(body) < 20:
+                continue
+            blocks.append(
+                {
+                    "subject": _header_value(message, "Subject"),
+                    "date": _header_value(message, "Date"),
+                    "body": body[:max_chars],
+                }
+            )
+            if len(blocks) >= max_messages:
+                break
+        return blocks
+    except Exception:
+        return []
+
+
+def format_sender_correspondence(blocks: list[dict]) -> str:
+    """Compact labeled section appended to the email thread context."""
+    if not blocks:
+        return ""
+    parts = []
+    for block in blocks:
+        header = " — ".join(p for p in (block.get("date", ""), block.get("subject", "")) if p)
+        parts.append(f"--- {header} ---\n{block.get('body', '')}")
+    return (
+        "Previous emails the mailbox owner sent to this correspondent "
+        "(style/register reference only):\n" + "\n\n".join(parts)
+    )
+
+
 def list_messages_by_label(label_id: str, max_results: int, resource=None) -> list[dict]:
     """Return message refs carrying a Gmail label id."""
     resource = resource or gmail_resource()
