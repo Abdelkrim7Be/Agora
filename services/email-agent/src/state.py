@@ -77,3 +77,6 @@ class State(MessagesState):
     # The latest free-text feedback given on the pending draft; consumed by the
     # dedicated redraft node so it never has to re-parse message history.
     redraft_feedback: NotRequired[str]
+    # The draft as the user last saw (and possibly hand-edited) it; the redraft
+    # node starts from this instead of the last server-generated draft.
+    redraft_baseline: NotRequired[dict]

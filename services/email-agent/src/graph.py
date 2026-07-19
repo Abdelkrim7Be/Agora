@@ -629,7 +629,11 @@ def _parse_decision(raw) -> tuple[str, object]:
         else:
             data = raw_args
     elif type_ == "response":
-        data = raw_args
+        # Optional "draft" carries the user's current (possibly hand-edited)
+        # draft so the redraft starts from what the user sees, not from the
+        # last server-side draft.
+        draft = d.get("draft")
+        data = {"feedback": raw_args, "draft": draft if isinstance(draft, dict) else None}
     else:
         data = None
 
@@ -811,6 +815,7 @@ def tool_node(state: State, store: BaseStore, config=None):
     sent = False
     redraft_requested = False
     redraft_feedback = None
+    redraft_baseline = None
     redraft_cleared = False
     run_id = _run_id_from_config(config)
 
@@ -897,9 +902,12 @@ def tool_node(state: State, store: BaseStore, config=None):
                 continue
 
             if decision_type == "response":
-                feedback = decision_data
+                feedback = decision_data.get("feedback") if isinstance(decision_data, dict) else decision_data
+                user_draft = decision_data.get("draft") if isinstance(decision_data, dict) else None
                 redraft_requested = True
                 redraft_feedback = feedback if isinstance(feedback, str) else str(feedback)
+                if user_draft:
+                    redraft_baseline = {k: v for k, v in user_draft.items() if isinstance(v, str)}
                 result.append({
                     "role": "tool",
                     "content": (
@@ -1017,6 +1025,7 @@ def tool_node(state: State, store: BaseStore, config=None):
         update["redraft_requested"] = True
         if redraft_feedback:
             update["redraft_feedback"] = redraft_feedback
+        update["redraft_baseline"] = redraft_baseline or {}
     elif redraft_cleared:
         update["redraft_requested"] = False
     if sent:
@@ -1088,6 +1097,10 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
     synthetic write_email tool call re-enters tool_node for a fresh approval.
     """
     previous = _last_write_email_args(state["messages"])
+    baseline = state.get("redraft_baseline") or {}
+    # The user's on-screen draft (with any manual edits) wins over the last
+    # server-side draft so a retouche never resets hand edits.
+    previous = {**previous, **{k: v for k, v in baseline.items() if isinstance(v, str) and v.strip()}}
     feedback = state.get("redraft_feedback") or _feedback_from_messages(state["messages"])
     response_prefs = get_memory(
         store,
