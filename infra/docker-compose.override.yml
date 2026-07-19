@@ -83,10 +83,12 @@ services:
       OPENAI_API_KEY: ollama-local
       # dry-run while seeding the demo; flip back to "false" for the live-send proof
       AGENT_DRY_RUN: "true"
-      # 1-minute cadence: 6-second polling ran for days and tripped Google's
-      # per-user abuse limiter (sliding 30-min "Retry after" bans on the whole
-      # mailbox). One minute is still fast enough for a live demo.
-      AGENT_POLL_INTERVAL_MIN: "1"
+      # 30-second cadence. 6-second full-scan polling used to trip Google's
+      # per-user abuse limiter (sliding 30-min "Retry after" bans); polling is
+      # now incremental (history.list, ~2-4 quota units per idle cycle) with an
+      # hourly call budget alarm and an automatic rate-limit pause, so 30s stays
+      # far below Gmail per-user quotas while feeling near-instant in the UI.
+      AGENT_POLL_INTERVAL_MIN: "0.5"
       GMAIL_TOKEN_PATH: /app/data/token.json
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
       GMAIL_POLLING_FALLBACK_ENABLED: "true"
