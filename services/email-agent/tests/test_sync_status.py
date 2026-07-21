@@ -113,6 +113,19 @@ def test_uses_tenant_context(monkeypatch, tmp_path):
     assert sync_status.get_status("carol@example.com", "ceo-email-agent")["connection_status"] == "disconnected"
 
 
+def test_gmail_rate_limit_error_names_gmail(monkeypatch, tmp_path):
+    _use_json(monkeypatch, tmp_path)
+    raw_error = (
+        "<HttpError 429 when requesting https://gmail.googleapis.com/gmail/v1/users/me/profile?alt=json "
+        "returned \"User-rate limit exceeded. Retry after 2026-07-16T09:30:25.911Z\". "
+        "Details: \"[{'reason': 'rateLimitExceeded'}]\">"
+    )
+    sync_status.record_failure(raw_error, "alice@example.com", "default-email-agent")
+    s = sync_status.get_status("alice@example.com", "default-email-agent")
+    assert s["last_error"].startswith("Gmail rate limit reached.")
+    assert "AI provider" not in s["last_error"]
+
+
 def test_provider_rate_limit_error_is_sanitized(monkeypatch, tmp_path):
     _use_json(monkeypatch, tmp_path)
     raw_error = "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.3-70b-versatile` in organization `org_secret`'}}"

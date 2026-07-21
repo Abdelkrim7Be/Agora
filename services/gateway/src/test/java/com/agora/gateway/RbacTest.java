@@ -29,6 +29,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -748,6 +749,19 @@ class RbacTest {
     }
 
     @Test
+    void admin_cannot_disable_current_user() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        var admin = userRepository.findByUsername("admin").orElseThrow();
+
+        mockMvc.perform(post("/users/" + admin.getId() + "/disable")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest());
+
+        assertTrue(userRepository.findByUsername("admin").orElseThrow().isEnabled());
+    }
+
+
+    @Test
     void approver_role_passes_approve_route_gate() throws Exception {
         // A global "approver" JWT role must clear the SecurityConfig JWT gate on
         // /approve (the slice-05 TODO this slice resolves), then the existing
@@ -891,5 +905,237 @@ class RbacTest {
                 .andExpect(status().isOk());
 
         wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox")));
+    }
+
+    @Test
+    void viewer_can_read_send_mode() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/send-mode"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"send_mode\":\"simulation\"}")));
+
+        mockMvc.perform(get("/api/agent/send-mode")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.send_mode").value("simulation"));
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/send-mode")));
+    }
+
+    @Test
+    void viewer_cannot_update_send_mode_403() throws Exception {
+        mockMvc.perform(put("/api/agent/send-mode")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"send_mode\":\"live\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/send-mode")));
+    }
+
+    @Test
+    void owner_can_update_send_mode() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/send-mode"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"send_mode\":\"live\"}")));
+
+        mockMvc.perform(put("/api/agent/send-mode")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"send_mode\":\"live\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.send_mode").value("live"));
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/send-mode")));
+    }
+
+    @Test
+    void viewer_can_read_persona() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/persona"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"mission\":\"\"}")));
+
+        mockMvc.perform(get("/api/agent/persona")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/persona")));
+    }
+
+    @Test
+    void viewer_cannot_update_persona_403() throws Exception {
+        mockMvc.perform(put("/api/agent/persona")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/persona")));
+    }
+
+    @Test
+    void owner_can_suggest_persona() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/persona/suggest"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"suggestion\":{}}")));
+
+        mockMvc.perform(post("/api/agent/persona/suggest")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/persona/suggest")));
+    }
+
+    @Test
+    void viewer_cannot_suggest_persona_403() throws Exception {
+        mockMvc.perform(post("/api/agent/persona/suggest")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/persona/suggest")));
+    }
+
+    @Test
+    void owner_can_upload_signature_image() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/signature/image"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"stored\":true}")));
+
+        mockMvc.perform(post("/api/agent/signature/image")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.parseMediaType("multipart/form-data; boundary=agora"))
+                        .content("--agora\r\nContent-Disposition: form-data; name=\"file\"; filename=\"logo.png\"\r\nContent-Type: image/png\r\n\r\nfake-image-bytes\r\n--agora--\r\n".getBytes()))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/signature/image")));
+    }
+
+    @Test
+    void oversized_proxy_body_rejected_413() throws Exception {
+        byte[] huge = new byte[2 * 1024 * 1024 + 1];
+        mockMvc.perform(post("/api/agent/signature/image")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.parseMediaType("multipart/form-data; boundary=agora"))
+                        .content(huge))
+                .andExpect(status().isPayloadTooLarge());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/signature/image")));
+    }
+
+    @Test
+    void viewer_cannot_upload_signature_image_403() throws Exception {
+        mockMvc.perform(post("/api/agent/signature/image")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.MULTIPART_FORM_DATA)
+                        .content("fake-image-bytes".getBytes()))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/signature/image")));
+    }
+
+    @Test
+    void viewer_can_read_memory_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/memory/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"triage_preferences\":[]}")));
+
+        mockMvc.perform(get("/api/agent/memory/summary")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/memory/summary")));
+    }
+
+    @Test
+    void viewer_cannot_delete_memory_item_403() throws Exception {
+        mockMvc.perform(delete("/api/agent/memory/item?kind=triage_preferences&id=abc")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, deleteRequestedFor(urlPathEqualTo("/memory/item")));
+    }
+
+    @Test
+    void owner_can_delete_memory_item() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.delete(urlPathEqualTo("/memory/item"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"removed\":true}")));
+
+        mockMvc.perform(delete("/api/agent/memory/item?kind=triage_preferences&id=abc")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, deleteRequestedFor(urlPathEqualTo("/memory/item")));
+    }
+
+    @Test
+    void owner_can_bulk_decide() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/runs/bulk"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"results\":[]}")));
+
+        mockMvc.perform(post("/api/agent/runs/bulk")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"run_ids\":[\"r1\"],\"decision\":\"approve\"}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/runs/bulk")));
+    }
+
+    @Test
+    void viewer_cannot_bulk_decide_403() throws Exception {
+        mockMvc.perform(post("/api/agent/runs/bulk")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"run_ids\":[\"r1\"],\"decision\":\"approve\"}"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/runs/bulk")));
+    }
+
+    @Test
+    void viewer_can_read_contact_photo() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/contacts/alice@example.com/photo"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "image/jpeg").withBody("img")));
+
+        mockMvc.perform(get("/api/agent/contacts/alice@example.com/photo")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/contacts/alice@example.com/photo")));
+    }
+
+    @Test
+    void viewer_cannot_upload_contact_photo_403() throws Exception {
+        mockMvc.perform(post("/api/agent/contacts/alice@example.com/photo")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.parseMediaType("multipart/form-data; boundary=agora"))
+                        .content("--agora--\r\n".getBytes()))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/contacts/alice@example.com/photo")));
     }
 }

@@ -8,7 +8,7 @@ def test_write_email_dry_run():
     """With AGENT_DRY_RUN=true (default), write_email returns a dry-run string without touching Gmail."""
     result = write_email.invoke({"to": "test@example.com", "subject": "hi", "content": "body"})
     assert "Email sent to test@example.com" in result
-    assert "dry run" in result
+    assert "Simulé" in result
 
 
 def test_write_email_live_path_invokes_rich_gmail_helper_after_approval(monkeypatch):
@@ -64,7 +64,7 @@ def test_forward_email_dry_run_uses_context_email_id(monkeypatch):
     finally:
         current_email_id.reset(token)
 
-    assert result == "Forwarded current email to a@example.com [dry run]"
+    assert result == "Forwarded current email to a@example.com (Simulé — aucun e-mail réel envoyé)"
 
 
 def test_reply_all_dry_run_uses_context_email_id():
@@ -74,7 +74,7 @@ def test_reply_all_dry_run_uses_context_email_id():
     finally:
         current_email_id.reset(token)
 
-    assert result == "Reply-all sent on the current thread [dry run]"
+    assert result == "Reply-all sent on the current thread (Simulé — aucun e-mail réel envoyé)"
 
 
 def test_forward_email_live_path_requires_human_approval(monkeypatch):

@@ -46,7 +46,9 @@ public class AgentRegistryController {
     public List<AgentInstanceResponse> instances(Authentication auth) {
         String username = auth.getName();
         String role = role(auth);
-        return service.visibleInstances(username, role).stream()
+        // Summaries block on upstream calls (health + drafts + costs); fetching them
+        // in parallel keeps the listing at roughly one instance's latency.
+        return service.visibleInstances(username, role).parallelStream()
                 .map(instance -> AgentInstanceResponse.from(instance, service.summary(instance, username),
                         grants.effectiveRole(instance.getId(), username, role).orElse("")))
                 .toList();

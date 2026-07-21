@@ -46,13 +46,18 @@ public class ProxyController {
     private static final Set<String> WRITE_PATH_PREFIXES = Set.of(
             "/api/agent/config", "/api/agent/capabilities", "/api/agent/categories",
             "/api/agent/templates", "/api/agent/contacts", "/api/agent/rules",
-            "/api/agent/memory", "/api/agent/style", "/api/agent/signature", "/api/agent/costs"
+            "/api/agent/memory", "/api/agent/style", "/api/agent/signature", "/api/agent/costs",
+            "/api/agent/persona", "/api/agent/send-mode"
     );
 
     // Approve-tier paths: owner or approver (instance-granted).
     private static final Set<String> APPROVE_PATH_PREFIXES = Set.of(
             "/api/agent/run", "/api/agent/sync", "/api/agent/inbox"
     );
+
+    // Body cap for proxied requests (uploads included) — the whole body is
+    // buffered in memory, so an explicit limit keeps oversized payloads out.
+    private static final int MAX_PROXY_BODY_BYTES = 2 * 1024 * 1024;
 
     private final RestClient restClient;
     private final String upstreamBase;
@@ -87,6 +92,15 @@ public class ProxyController {
         HttpMethod method = HttpMethod.valueOf(request.getMethod());
         byte[] body = StreamUtils.copyToByteArray(request.getInputStream());
         String contentType = request.getContentType();
+
+        if (body.length > MAX_PROXY_BODY_BYTES) {
+            auditService.record(null, null, deriveAction(request), request.getMethod(),
+                    downstreamPath, 413, "denied");
+            response.setStatus(413);
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.getWriter().write("{\"error\":\"payload too large\"}");
+            return;
+        }
 
         var spec = restClient.method(method).uri(URI.create(upstreamUrl));
 
@@ -155,8 +169,10 @@ public class ProxyController {
         spec.exchange((req, resp) -> {
             int status = resp.getStatusCode().value();
 
-            auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                    downstreamPath, status, "forwarded");
+            if (shouldRecordForwardedAudit(request, downstreamPath)) {
+                auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
+                        downstreamPath, status, "forwarded");
+            }
 
             response.setStatus(status);
             MediaType upstreamContentType = resp.getHeaders().getContentType();
@@ -202,6 +218,10 @@ public class ProxyController {
             if (path.startsWith(prefix)) return "approve";
         }
         return "write";
+    }
+
+    private boolean shouldRecordForwardedAudit(HttpServletRequest request, String downstreamPath) {
+        return !("GET".equals(request.getMethod()) && "/api/agent/runs".equals(downstreamPath));
     }
 
     private String deriveAction(HttpServletRequest request) {

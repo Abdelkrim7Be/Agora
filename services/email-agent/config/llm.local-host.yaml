@@ -1,12 +1,20 @@
 endpoint: "http://host.docker.internal:11434/v1"
 temperature: 0.0
-# Small local model rambles to the context limit without a cap; keep replies
-# bounded so a draft takes seconds, not minutes.
+# Bounded replies so a draft takes seconds, not minutes.
 max_tokens: 700
 timeout: 120
+# qwen3:4b-8k for every role: single resident model on the 4GB GPU (no VRAM
+# swap between calls), and a clear quality jump over qwen2.5:3b for French
+# drafting and instruction-following on retouches.
 roles:
-  triage: "openai:qwen2.5:3b-8k"
-  draft: "openai:qwen2.5:3b-8k"
-  reason: "openai:qwen2.5:3b-8k"
-  memory_style: "openai:qwen2.5:3b-8k"
+  triage: "openai:qwen3:4b-8k"
+  # Draft role: slightly creative. qwen3's structured (JSON) drafts need more
+  # completion room than qwen2.5 — a 550 cap truncated the JSON mid-draft and
+  # every redraft failed to parse.
+  draft:
+    model: "openai:qwen3:4b-8k"
+    temperature: 0.3
+    max_tokens: 1100
+  reason: "openai:qwen3:4b-8k"
+  memory_style: "openai:qwen3:4b-8k"
 fallbacks: {}

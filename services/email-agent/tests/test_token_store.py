@@ -248,3 +248,57 @@ def test_non_default_instance_gets_isolated_token_file(monkeypatch, tmp_path) ->
     path = token_file_for_user(agent_instance_id="ceo-email-agent")
 
     assert path == tmp_path / "gmail_tokens" / "instance__ceo-email-agent.json"
+
+
+def test_encryption_failure_keeps_plaintext_token(monkeypatch, tmp_path) -> None:
+    """A failed at-rest encryption must never destroy the only copy of the token."""
+    import src.token_store as token_store
+
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "unit-test-secret")
+    monkeypatch.setattr(settings, "token_encryption_required", True)
+    monkeypatch.setattr(settings, "tenant_mode", "multi")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+
+    def broken_encrypt(*args, **kwargs):
+        raise RuntimeError("simulated encryption failure")
+
+    monkeypatch.setattr(token_store, "_encrypt_envelope", broken_encrypt)
+    with prepared_token_file("alice@example.com") as token_path:
+        Path(token_path).write_text('{"token": "fresh-oauth"}', encoding="utf-8")
+
+    plaintext = tmp_path / "token.json"
+    assert plaintext.is_file()
+    assert json.loads(plaintext.read_text())["token"] == "fresh-oauth"
+    assert not (tmp_path / "token.json.enc").exists()
+
+    # Once encryption works again the surviving plaintext is re-encrypted normally.
+    monkeypatch.undo()
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "unit-test-secret")
+    monkeypatch.setattr(settings, "token_encryption_required", True)
+    monkeypatch.setattr(settings, "tenant_mode", "multi")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    with prepared_token_file("alice@example.com") as token_path:
+        assert json.loads(Path(token_path).read_text())["token"] == "fresh-oauth"
+    assert not plaintext.exists()
+    assert (tmp_path / "token.json.enc").is_file()
+
+
+def test_surviving_plaintext_wins_over_stale_encrypted_blob(monkeypatch, tmp_path) -> None:
+    """When both a plaintext token and an older .enc blob exist, the plaintext is newer."""
+    import src.token_store as token_store
+
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "unit-test-secret")
+    monkeypatch.setattr(settings, "token_encryption_required", True)
+    monkeypatch.setattr(settings, "tenant_mode", "multi")
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+
+    with prepared_token_file("alice@example.com") as token_path:
+        Path(token_path).write_text('{"token": "old-oauth"}', encoding="utf-8")
+    # Simulate a newer plaintext left behind by a failed encryption pass.
+    (tmp_path / "token.json").write_text('{"token": "new-oauth"}', encoding="utf-8")
+
+    with prepared_token_file("alice@example.com") as token_path:
+        assert json.loads(Path(token_path).read_text())["token"] == "new-oauth"

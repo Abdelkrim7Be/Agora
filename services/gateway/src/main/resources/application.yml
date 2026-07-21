@@ -11,6 +11,12 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: false
+  servlet:
+    multipart:
+      # The proxy forwards multipart bodies as raw bytes; Spring's multipart
+      # resolver must not consume/parse them first. Size is capped in
+      # ProxyController (MAX_PROXY_BODY_BYTES) instead.
+      enabled: false
 
 server:
   port: 8080

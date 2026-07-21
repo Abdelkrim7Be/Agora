@@ -14,11 +14,13 @@ def _env_bool(name: str, default: str = "false") -> bool:
 
 
 class Settings:
-    groq_api_key: str = get_secret("SECURITY", "GROQ_API_KEY")
     api_host: str = os.getenv("SECURITY_API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("SECURITY_API_PORT", "8001"))
 
-    sanitize_model: str = os.getenv("SECURITY_SANITIZE_MODEL", "groq:llama-3.3-70b-versatile")
+    # Local-first: quarantine classifier runs on Ollama via the OpenAI-compatible
+    # endpoint. Clear SECURITY_SANITIZE_ENDPOINT to use a hosted provider model.
+    sanitize_model: str = os.getenv("SECURITY_SANITIZE_MODEL", "openai:qwen2.5:3b-8k")
+    sanitize_endpoint: str = os.getenv("SECURITY_SANITIZE_ENDPOINT", "http://localhost:11434/v1")
     sanitize_always_llm: bool = os.getenv("SECURITY_SANITIZE_ALWAYS_LLM", "false").lower() == "true"
     sanitize_max_chars: int = int(os.getenv("SECURITY_SANITIZE_MAX_CHARS", "6000"))
 

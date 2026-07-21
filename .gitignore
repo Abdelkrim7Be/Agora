@@ -90,3 +90,13 @@ test-artifacts/
 stitch-export/
 *-desktop.png
 agora-control-panel*.png
+--full-page
+style.png
+
+# agent-browser local state / dogfood runs (local)
+.agents/
+skills-lock.json
+dogfood-output/
+
+# Claude Code local settings (local)
+.claude/

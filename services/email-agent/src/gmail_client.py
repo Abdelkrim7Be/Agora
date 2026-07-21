@@ -11,6 +11,8 @@ except ImportError:
     _pypdf = None  # type: ignore[assignment]
 
 from src.config import SERVICE_ROOT, settings
+from src.gmail_budget import record_gmail_call
+from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
 
@@ -87,6 +89,63 @@ def fetch_sent(max_messages: int = 50, resource=None) -> list[dict]:
     return samples
 
 
+def fetch_sender_correspondence(
+    sender_email: str,
+    exclude_thread_id: str = "",
+    max_messages: int = 2,
+    max_chars: int = 600,
+    resource=None,
+) -> list[dict]:
+    """Return the owner's most recent sent messages to this correspondent.
+
+    Gives the drafting LLM the established tone/register with a known contact
+    (outside the current thread). Empty on any failure — this context is a
+    bonus, never a blocker.
+    """
+    address = (sender_email or "").strip()
+    if "<" in address and ">" in address:
+        address = address.split("<", 1)[1].split(">", 1)[0].strip()
+    if not address or "@" not in address:
+        return []
+    try:
+        resource = resource or gmail_resource()
+        refs = search_messages(f"in:sent to:{address}", max_messages + 2, resource=resource)
+        blocks: list[dict] = []
+        for ref in refs:
+            message = get_message(ref["id"], resource=resource)
+            if exclude_thread_id and message.get("threadId") == exclude_thread_id:
+                continue
+            body = _extract_message_part(message.get("payload", {})).strip()
+            if len(body) < 20:
+                continue
+            blocks.append(
+                {
+                    "subject": _header_value(message, "Subject"),
+                    "date": _header_value(message, "Date"),
+                    "body": body[:max_chars],
+                }
+            )
+            if len(blocks) >= max_messages:
+                break
+        return blocks
+    except Exception:
+        return []
+
+
+def format_sender_correspondence(blocks: list[dict]) -> str:
+    """Compact labeled section appended to the email thread context."""
+    if not blocks:
+        return ""
+    parts = []
+    for block in blocks:
+        header = " — ".join(p for p in (block.get("date", ""), block.get("subject", "")) if p)
+        parts.append(f"--- {header} ---\n{block.get('body', '')}")
+    return (
+        "Previous emails the mailbox owner sent to this correspondent "
+        "(style/register reference only):\n" + "\n\n".join(parts)
+    )
+
+
 def list_messages_by_label(label_id: str, max_results: int, resource=None) -> list[dict]:
     """Return message refs carrying a Gmail label id."""
     resource = resource or gmail_resource()
@@ -129,10 +188,16 @@ def _inbox_metadata_request(resource, msg_id: str):
 
 
 def _fetch_inbox_metadata_serial(refs: list[dict], resource) -> list[dict]:
+    record_gmail_call(len(refs))
     return [_inbox_metadata_request(resource, ref["id"]).execute() for ref in refs]
 
 
-def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
+def _run_message_batch(requests: dict[str, object], resource) -> dict[str, dict]:
+    """Execute a single Gmail batch of get requests keyed by an id.
+
+    Raises if the resource can't batch or any sub-request fails/misses, so callers
+    can fall back to serial fetches on error.
+    """
     new_batch = getattr(resource, "new_batch_http_request", None)
     if not callable(new_batch):
         raise RuntimeError("Gmail batch requests are unavailable for this resource")
@@ -147,19 +212,47 @@ def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
             responses[str(request_id)] = response
 
     batch = new_batch(callback=callback)
-    request_ids: list[str] = []
-    for index, ref in enumerate(refs):
-        request_id = str(index)
-        request_ids.append(request_id)
-        batch.add(_inbox_metadata_request(resource, ref["id"]), request_id=request_id)
-
+    for request_id, request in requests.items():
+        batch.add(request, request_id=request_id)
     batch.execute()
     if errors:
-        raise RuntimeError(f"Gmail batch metadata failed for {len(errors)} messages")
-    missing = [request_id for request_id in request_ids if request_id not in responses]
+        raise RuntimeError(f"Gmail batch failed for {len(errors)} messages")
+    missing = [request_id for request_id in requests if request_id not in responses]
     if missing:
-        raise RuntimeError(f"Gmail batch metadata missed {len(missing)} messages")
-    return [responses[request_id] for request_id in request_ids]
+        raise RuntimeError(f"Gmail batch missed {len(missing)} messages")
+    return responses
+
+
+def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
+    requests = {str(i): _inbox_metadata_request(resource, ref["id"]) for i, ref in enumerate(refs)}
+    record_gmail_call(len(requests))
+    responses = _run_message_batch(requests, resource)
+    return [responses[str(i)] for i in range(len(refs))]
+
+
+# Google caps a single HTTP batch at 100 sub-requests; 50 keeps well inside it.
+_MESSAGE_BATCH_CHUNK = 50
+
+
+def fetch_messages_batch(
+    message_ids: list[str], resource=None, fmt: str = "full", chunk: int = _MESSAGE_BATCH_CHUNK
+) -> dict[str, dict]:
+    """Fetch several full messages in batched HTTP requests → {message_id: message}.
+
+    One round-trip per chunk instead of one per message. Raises on batch failure
+    so the caller can fall back to serial get_message calls.
+    """
+    resource = resource or gmail_resource()
+    result: dict[str, dict] = {}
+    for start in range(0, len(message_ids), max(1, chunk)):
+        window = message_ids[start:start + max(1, chunk)]
+        requests = {
+            mid: resource.users().messages().get(userId="me", id=mid, format=fmt)
+            for mid in window
+        }
+        record_gmail_call(len(window))
+        result.update(_run_message_batch(requests, resource))
+    return result
 
 
 def list_inbox(max_results: int, resource=None) -> list[dict]:
@@ -170,6 +263,7 @@ def list_inbox(max_results: int, resource=None) -> list[dict]:
     is surfaced so the caller can render state and drive mark read/unread actions.
     """
     resource = resource or gmail_resource()
+    record_gmail_call()
     refs = (
         resource.users()
         .messages()
@@ -219,6 +313,38 @@ def watch_mailbox(topic_name: str | None = None, resource=None) -> dict:
     )
 
 
+def current_history_id(resource=None) -> str:
+    """Return the mailbox's latest historyId (cheap getProfile call)."""
+    resource = resource or gmail_resource()
+    record_gmail_call()
+    profile = resource.users().getProfile(userId="me").execute()
+    return str(profile.get("historyId") or "")
+
+
+def _http_status_code(exc: Exception) -> int | None:
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def is_stale_history_error(exc: Exception) -> bool:
+    """True when Gmail reports the startHistoryId window is gone (~1 week purge)."""
+    status = _http_status_code(exc)
+    if status in {404, 410}:
+        return True
+    message = str(exc).lower()
+    return "starthistoryid" in message and any(marker in message for marker in (
+        "too old",
+        "not found",
+        "expired",
+        "invalid",
+    ))
+
+
 def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dict]:
     """Return unique message refs mentioned by Gmail history since start_history_id."""
     resource = resource or gmail_resource()
@@ -234,6 +360,7 @@ def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dic
         }
         if page_token:
             kwargs["pageToken"] = page_token
+        record_gmail_call()
         results = resource.users().history().list(**kwargs).execute()
         for entry in results.get("history", []):
             events = entry.get("messagesAdded", []) + entry.get("labelsAdded", [])
@@ -251,6 +378,7 @@ def fetch_history_message_refs(start_history_id: str, resource=None) -> list[dic
 def get_message(msg_id: str, resource=None) -> dict:
     """Fetch a full Gmail message by id."""
     resource = resource or gmail_resource()
+    record_gmail_call()
     return resource.users().messages().get(userId="me", id=msg_id).execute()
 
 
@@ -293,6 +421,7 @@ def _build_email_message(
     body: str,
     extra_headers: dict[str, str] | None = None,
     rich: bool = True,
+    inline_images: dict[str, tuple[bytes, str]] | None = None,
 ) -> EmailMessage:
     recipients = to if isinstance(to, list) else [to]
     message = EmailMessage()
@@ -304,7 +433,27 @@ def _build_email_message(
     message.set_content(body)
     if rich:
         message.add_alternative(render_rich_email_html(body), subtype="html")
+        if inline_images:
+            # Attach cid-referenced images inside the HTML alternative
+            # (multipart/related) so clients render them without external links.
+            html_part = message.get_payload()[-1]
+            for cid, (data, subtype) in inline_images.items():
+                html_part.add_related(
+                    data, maintype="image", subtype=subtype, cid=f"<{cid}>"
+                )
     return message
+
+
+def _signature_inline_images(body: str) -> dict[str, tuple[bytes, str]] | None:
+    """The stored signature image, when the body references its cid."""
+    from src.media import SIGNATURE_CID, signature_image_inline
+
+    if f"cid:{SIGNATURE_CID}" not in body:
+        return None
+    inline = signature_image_inline()
+    if inline is None:
+        return None
+    return {SIGNATURE_CID: inline}
 
 
 def _send_email_message(
@@ -317,10 +466,14 @@ def _send_email_message(
     rich: bool = True,
 ) -> dict:
     resource = resource or gmail_resource()
-    message = _build_email_message(to, subject, body, extra_headers=extra_headers, rich=rich)
+    message = _build_email_message(
+        to, subject, body, extra_headers=extra_headers, rich=rich,
+        inline_images=_signature_inline_images(body) if rich else None,
+    )
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
         gmail_message["threadId"] = thread_id
+    record_gmail_call()
     return (
         resource.users()
         .messages()
@@ -331,7 +484,7 @@ def _send_email_message(
 
 def send_message(to: str, subject: str, body: str, resource=None) -> dict:
     """Send an agent-authored email with plain-text and HTML alternatives."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("send_message", to=to, subject=subject)
     return _send_email_message(to=to, subject=subject, body=body, resource=resource, rich=True)
 
@@ -350,7 +503,7 @@ def send_html_message(
     Gmail rather than a raw markdown block. Honors AGENT_DRY_RUN like the other
     send helpers so approval-gated broadcasts stay safe in dev.
     """
-    if respect_dry_run and settings.dry_run:
+    if respect_dry_run and effective_dry_run():
         return _dry_run_result("send_html", to=to, subject=subject)
     resource = resource or gmail_resource()
     message = EmailMessage()
@@ -419,7 +572,7 @@ def modify_labels(
     """
     add_label_ids = add_label_ids or []
     remove_label_ids = remove_label_ids or []
-    if respect_dry_run and settings.dry_run:
+    if respect_dry_run and effective_dry_run():
         return _dry_run_result(
             "modify_labels",
             message_id=message_id,
@@ -427,6 +580,7 @@ def modify_labels(
             remove_label_ids=remove_label_ids,
         )
     resource = resource or gmail_resource()
+    record_gmail_call()
     return (
         resource.users()
         .messages()
@@ -460,9 +614,10 @@ def archive_message(msg_id: str, resource=None) -> dict:
 
 def trash_message(msg_id: str, resource=None) -> dict:
     """Move a message to Gmail trash."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("trash_message", message_id=msg_id)
     resource = resource or gmail_resource()
+    record_gmail_call()
     return resource.users().messages().trash(userId="me", id=msg_id).execute()
 
 
@@ -475,7 +630,7 @@ def list_labels(resource=None) -> list[dict]:
 
 def ensure_label(name: str, resource=None) -> str:
     """Return a Gmail label id, creating the label when missing."""
-    if settings.dry_run:
+    if effective_dry_run():
         return f"dry-run-label:{name}"
     resource = resource or gmail_resource()
     for label in list_labels(resource=resource):
@@ -505,7 +660,7 @@ def create_draft(
     resource=None,
 ) -> dict:
     """Create a Gmail draft without sending it."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result(
             "create_draft",
             to=to,
@@ -527,7 +682,7 @@ def create_draft(
 
 def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
     """Forward a Gmail message to a recipient, optionally with a note."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("forward_message", message_id=message_id, to=to)
     resource = resource or gmail_resource()
     original = get_message(message_id, resource=resource)
@@ -547,7 +702,7 @@ def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
 
 def reply_all_message(message_id: str, body: str, resource=None) -> dict:
     """Reply to all participants on a Gmail message's thread."""
-    if settings.dry_run:
+    if effective_dry_run():
         return _dry_run_result("reply_all_message", message_id=message_id)
     resource = resource or gmail_resource()
     original = get_message(message_id, resource=resource)
@@ -579,6 +734,7 @@ def reply_all_message(message_id: str, body: str, resource=None) -> dict:
 def fetch_thread(thread_id: str, resource=None) -> list[dict]:
     """Return all messages in a Gmail thread (oldest first, as the API orders them)."""
     resource = resource or gmail_resource()
+    record_gmail_call()
     thread = resource.users().threads().get(userId="me", id=thread_id).execute()
     return thread.get("messages", [])
 
@@ -719,4 +875,6 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "gmail_thread_id": message["threadId"],
         "attachments": extract_attachments(message["payload"]),
         "labels": message.get("labelIds", []),
+        "list_unsubscribe": bool(_header(headers, "List-Unsubscribe", "")),
+        "precedence_bulk": _header(headers, "Precedence", "").strip().lower() in {"bulk", "list", "junk"},
     }

@@ -71,6 +71,9 @@ def _isolate_run_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(rr, "DEFAULT_RUN_INDEX", tmp_path / "runs.json")
     monkeypatch.setattr(rr.settings, "run_registry_backend", "json")
     monkeypatch.setattr(rr.settings, "database_url", "")
+    # Isolate the incremental-sync baseline too; a leaked repo-level
+    # gmail_sync.json would flip poll_once into history mode mid-suite.
+    monkeypatch.setattr(rr.settings, "gmail_sync_path", str(tmp_path / "gmail_sync.json"))
 
 
 @pytest.fixture
@@ -95,6 +98,7 @@ def mocked_gmail(monkeypatch):
         lambda thread_id, resource=None: [m for m in messages.values() if m["threadId"] == thread_id],
     )
     monkeypatch.setattr(poller, "mark_as_read", lambda msg_id, resource=None: marked.append(msg_id))
+    monkeypatch.setattr(poller, "current_history_id", lambda resource=None: "")
     return set_unread, marked
 
 
@@ -511,11 +515,106 @@ async def test_poll_history_processes_history_refs(monkeypatch, fake_llms):
     assert marked == ["m_hist"]
 
 
+async def test_poll_once_uses_history_delta_when_baseline_exists(mocked_gmail, fake_llms, monkeypatch):
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m_delta", "New mail", "hello")])
+    monkeypatch.setattr(
+        poller, "fetch_unread",
+        lambda max_results, resource=None: (_ for _ in ()).throw(AssertionError("full scan must not run")),
+    )
+    monkeypatch.setattr(poller, "get_last_history_id", lambda: "100")
+    monkeypatch.setattr(
+        poller, "fetch_history_message_refs",
+        lambda start_history_id, resource=None: [{"id": "m_delta"}],
+    )
+    monkeypatch.setattr(poller, "current_history_id", lambda resource=None: "200")
+    advanced: list[str] = []
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: advanced.append(hid))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert [o[0] for o in outcomes] == ["m_delta"]
+    assert advanced == ["200"]
+
+
+async def test_poll_once_falls_back_to_full_scan_on_stale_history(mocked_gmail, fake_llms, monkeypatch):
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m_full", "New mail", "hello")])
+    monkeypatch.setattr(poller, "get_last_history_id", lambda: "100")
+
+    class StaleError(Exception):
+        status_code = 404
+
+    def stale(start_history_id, resource=None):
+        raise StaleError("startHistoryId too old")
+
+    monkeypatch.setattr(poller, "fetch_history_message_refs", stale)
+    monkeypatch.setattr(poller, "current_history_id", lambda resource=None: "300")
+    advanced: list[str] = []
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: advanced.append(hid))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert [o[0] for o in outcomes] == ["m_full"]  # from fetch_unread
+    assert advanced == ["300"]  # baseline reseeded after the full scan
+
+
+async def test_poll_once_keeps_baseline_when_history_batch_truncated(mocked_gmail, fake_llms, monkeypatch):
+    set_unread, marked = mocked_gmail
+    set_unread([
+        _raw_message("m_a", "One", "a"),
+        _raw_message("m_b", "Two", "b"),
+    ])
+    monkeypatch.setattr(poller, "get_last_history_id", lambda: "100")
+    monkeypatch.setattr(
+        poller, "fetch_history_message_refs",
+        lambda start_history_id, resource=None: [{"id": "m_a"}, {"id": "m_b"}],
+    )
+    monkeypatch.setattr(poller, "current_history_id", lambda resource=None: "400")
+    advanced: list[str] = []
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: advanced.append(hid))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), resource=object(), max_results=1)
+
+    assert [o[0] for o in outcomes] == ["m_a"]
+    assert advanced == []  # overflow (m_b) stays inside the old window for next cycle
+
+
+async def test_ensure_watches_registers_each_connected_instance(monkeypatch):
+    monkeypatch.setattr(poller.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(
+        poller, "active_email_agent_instance_ids", lambda: ["inst-a", "inst-b", "inst-c"]
+    )
+    monkeypatch.setattr(poller, "has_stored_token", lambda instance_id: instance_id != "inst-b")
+    registered: list[str] = []
+
+    def fake_ensure_watch(resource=None):
+        registered.append(current_agent_instance_id())
+        if current_agent_instance_id() == "inst-c":
+            raise RuntimeError("watch boom")
+        return {"historyId": "1"}
+
+    monkeypatch.setattr(poller, "ensure_watch", fake_ensure_watch)
+    failures: list[str] = []
+    monkeypatch.setattr(poller, "record_failure", lambda err: failures.append(err))
+
+    results = poller.ensure_watches()
+
+    assert registered == ["inst-a", "inst-c"]  # tokenless inst-b skipped
+    assert results["inst-a"] == {"historyId": "1"}
+    assert results["inst-b"] is None
+    assert results["inst-c"] is None  # failure isolated, loop continued
+    assert failures and "watch boom" in failures[0]
+
+
 async def test_process_message_retries_transient_error_then_succeeds(monkeypatch):
     attempts = {"count": 0}
     sleeps: list[float] = []
 
-    async def fake_process(_graph, msg_id, resource, rules_config):
+    async def fake_process(_graph, msg_id, resource, rules_config, message=None):
         attempts["count"] += 1
         if attempts["count"] < 3:
             raise RuntimeError("429 rate_limit_exceeded")
@@ -542,7 +641,7 @@ async def test_process_message_does_not_retry_deterministic_error(monkeypatch):
     failures: list[str] = []
     attempts = {"count": 0}
 
-    async def fake_process(_graph, msg_id, resource, rules_config):
+    async def fake_process(_graph, msg_id, resource, rules_config, message=None):
         attempts["count"] += 1
         raise ValueError("bad mime payload")
 
@@ -584,7 +683,7 @@ async def test_process_message_records_failure_after_retry_exhaustion_and_contin
 
     attempts = {"m_retry_fail": 0}
 
-    async def fake_process(_graph, msg_id, resource, rules_config):
+    async def fake_process(_graph, msg_id, resource, rules_config, message=None):
         processed.append(msg_id)
         if msg_id == "m_retry_fail":
             attempts[msg_id] += 1
@@ -837,3 +936,25 @@ async def test_retry_exhausted_records_dlq(monkeypatch):
 
     assert outcome == ("m-dlq", "failed", "")
     assert calls[0]["reason"] == "retry_exhausted"
+
+
+def test_rotate_instances_unchanged_below_threshold():
+    poller._rotation_offset = 0
+    ids = ["a", "b", "c"]
+    assert poller._rotate_instances(ids) == ["a", "b", "c"]
+    # Small fleet: order stays stable across cycles.
+    assert poller._rotate_instances(ids) == ["a", "b", "c"]
+
+
+def test_rotate_instances_round_robin_above_threshold():
+    poller._rotation_offset = 0
+    ids = ["a", "b", "c", "d", "e", "f"]
+    assert poller._rotate_instances(ids) == ["a", "b", "c", "d", "e", "f"]
+    assert poller._rotate_instances(ids) == ["b", "c", "d", "e", "f", "a"]
+    assert poller._rotate_instances(ids) == ["c", "d", "e", "f", "a", "b"]
+
+
+def test_instance_stagger_even_for_large_fleet():
+    assert poller._instance_stagger_seconds(6) == poller._ROUND_ROBIN_INTERVAL_SECONDS
+    small = poller._instance_stagger_seconds(3)
+    assert 0.5 <= small <= 3.0

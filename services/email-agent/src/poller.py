@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import random
 import re as _re
 import time
 import uuid
@@ -16,10 +17,15 @@ MAX_BACKOFF_SECONDS = 30.0
 # Google's "Retry after" slides forward when probed too early, so the pause
 # honors the server timestamp with a margin and doubles on consecutive hits.
 RATE_LIMIT_PAUSE_MIN_SECONDS = 300.0
-RATE_LIMIT_PAUSE_MAX_SECONDS = 1800.0
-RATE_LIMIT_RETRY_MARGIN_SECONDS = 90.0
+RATE_LIMIT_PAUSE_MAX_SECONDS = 14400.0
+RATE_LIMIT_RETRY_MARGIN_SECONDS = 300.0
 _gmail_rate_limited_until = 0.0
 _gmail_rate_limit_pause = RATE_LIMIT_PAUSE_MIN_SECONDS
+
+
+def gmail_rate_limit_pause_remaining() -> float:
+    """Seconds until the global Gmail rate-limit pause lifts (0 when not paused)."""
+    return max(0.0, _gmail_rate_limited_until - time.time())
 
 
 def _retry_after_epoch(exc_text: str) -> float | None:
@@ -50,6 +56,12 @@ def _note_gmail_rate_limit(exc: Exception) -> bool:
     if retry_after:
         until = max(until, retry_after + RATE_LIMIT_RETRY_MARGIN_SECONDS)
     _gmail_rate_limited_until = until
+    # Next consecutive hit doubles from the pause actually served, not the
+    # small base — otherwise a sliding server ban is re-probed (and renewed)
+    # many times before the cap is reached.
+    _gmail_rate_limit_pause = min(
+        max(_gmail_rate_limit_pause, until - now), RATE_LIMIT_PAUSE_MAX_SECONDS
+    )
     print(
         f"poller: Gmail rate limit hit; pausing all polling for "
         f"{int(until - now)}s"
@@ -70,17 +82,25 @@ from src.automation import (
     record_digest_item,
     workflow_sla_snapshot,
 )
-from src.config import settings
+from src.config import load_config, settings
+from src.memory import namespace, wrap_preferences
+from src.style_learning import analyze_style, build_style_text
 from src.security_client import sanitize_email
 from src.gmail_client import (
+    current_history_id,
     download_attachment,
     extract_pdf_text,
     fetch_history_message_refs,
+    fetch_messages_batch,
+    fetch_sender_correspondence,
+    fetch_sent,
     fetch_thread,
     fetch_unread,
+    format_sender_correspondence,
     get_message,
     gmail_resource,
     gmail_to_email_input,
+    is_stale_history_error,
     list_labels,
     list_messages_by_label,
     mark_as_read,
@@ -88,7 +108,8 @@ from src.gmail_client import (
     search_messages,
     watch_mailbox,
 )
-from src.categories import load_categories
+from src.categories import classify_category, load_categories
+from src.junk_gate import is_junk
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
 from src.notifications import notify_overdue_approval, notify_pending_approval
@@ -98,7 +119,7 @@ from src.health import aggregate_health
 from src.alerts import evaluate_alerts
 from src.retention import run_retention
 from src.trace import setup_trace_store
-from src.gmail_sync import set_last_history_id, setup_gmail_sync
+from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
 from src.run_registry import (
     ACTIVE_RUN_STATUSES,
@@ -156,12 +177,13 @@ async def _process_message_with_retry(
     msg_id: str,
     resource,
     rules_config: RulesConfig,
+    message: dict | None = None,
 ) -> tuple:
     max_retries = max(0, settings.poll_max_retries)
     attempt = 0
     while True:
         try:
-            return await process_message(graph, msg_id, resource, rules_config)
+            return await process_message(graph, msg_id, resource, rules_config, message=message)
         except Exception as exc:
             if not _is_transient_error(exc):
                 print(f"poller: {msg_id} failed without retry: {exc}")
@@ -263,6 +285,58 @@ def ensure_watch(resource=None) -> dict | None:
     return result
 
 
+def watch_is_fresh(instance_id: str, margin_seconds: float | None = None) -> bool:
+    """Whether the instance's recorded watch expiration is still beyond the margin.
+
+    A missing or unparseable expiration counts as stale so the watch gets
+    re-registered — renewal is idempotent on the Gmail side.
+    """
+    if margin_seconds is None:
+        margin_seconds = settings.gmail_watch_renew_margin_hours * 3600
+    expires = get_status(agent_instance_id=instance_id).get("watch_expires_at")
+    if not expires:
+        return False
+    try:
+        expires_dt = datetime.fromisoformat(expires)
+    except ValueError:
+        return False
+    if expires_dt.tzinfo is None:
+        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+    remaining = (expires_dt - datetime.now(timezone.utc)).total_seconds()
+    return remaining > margin_seconds
+
+
+def ensure_watches(
+    instance_ids: list[str] | None = None, force: bool = False
+) -> dict[str, dict | None]:
+    """Register/renew the Gmail push watch for every connected instance.
+
+    Each agent instance has its own mailbox token, so each needs its own watch.
+    One instance failing (revoked token, rate limit) must not block the others.
+    Renewal is expiration-driven: instances whose recorded watch expiration is
+    still beyond the renewal margin are skipped unless force=True.
+    """
+    if not settings.gmail_webhook_enabled:
+        return {}
+    results: dict[str, dict | None] = {}
+    for raw_instance_id in instance_ids or active_email_agent_instance_ids():
+        instance_id = normalize_agent_instance_id(raw_instance_id)
+        with agent_instance_context(instance_id):
+            if not has_stored_token(instance_id):
+                results[instance_id] = None
+                continue
+            if not force and watch_is_fresh(instance_id):
+                results[instance_id] = None
+                continue
+            try:
+                results[instance_id] = ensure_watch()
+            except Exception as exc:
+                print(f"poller: {instance_id} gmail watch failed: {exc}")
+                record_failure(str(exc))
+                results[instance_id] = None
+    return results
+
+
 def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
     """Move due snoozed messages back to INBOX/UNREAD."""
     surfaced: list[tuple[str, str]] = []
@@ -330,6 +404,7 @@ async def process_message(
     msg_id: str,
     resource,
     rules_config: RulesConfig,
+    message: dict | None = None,
 ) -> tuple:
     # An email left UNREAD because it already has a run must not be reprocessed:
     # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
@@ -349,16 +424,63 @@ async def process_message(
         mark_as_read(msg_id, resource=resource)
         return (msg_id, "skipped", existing["run_id"])
 
-    message = get_message(msg_id, resource=resource)
+    # A prefetched message (poll_once batch) skips the per-message round-trip.
+    if message is None:
+        message = get_message(msg_id, resource=resource)
     labels = message.get("labelIds")
     if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
         return (msg_id, "skipped", "")
+
+    # Deterministic junk gate: bulk/no-reply mail never reaches the LLM or the
+    # validation box — unless a configured workflow claims it (workflow wins).
+    # Runs before fetch_thread so gated mail costs no extra Gmail call.
+    gate_input = {
+        **gmail_to_email_input(message),
+        "agent_instance_id": current_agent_instance_id(),
+    }
+    categories_config = load_categories(agent_instance_id=current_agent_instance_id())
+    category_match = classify_category(gate_input, categories_config)
+    if not category_match.get("category"):
+        junk, junk_reason = is_junk(gate_input)
+        if junk:
+            run_id = str(uuid.uuid4())
+            upsert_run(
+                run_id,
+                "completed",
+                email_input={
+                    **gate_input,
+                    "category": "junk_auto",
+                    "category_display_name": "Ignoré automatiquement",
+                },
+                classification="ignore",
+                pending_action=None,
+                agent_instance_id=current_agent_instance_id(),
+            )
+            mark_as_read(msg_id, resource=resource)
+            print(f"poller: junk-gated {msg_id} ({junk_reason})")
+            return (msg_id, "completed", run_id)
 
     thread = fetch_thread(message["threadId"], resource=resource)
     email_input = {
         **gmail_to_email_input(message, thread_messages=thread),
         "agent_instance_id": current_agent_instance_id(),
     }
+
+    # Relationship context: how the owner previously wrote to this sender
+    # (outside this thread) so replies match the established register. Runs
+    # before sanitization so the block passes the same security boundary.
+    correspondence = fetch_sender_correspondence(
+        email_input.get("author", ""),
+        exclude_thread_id=message.get("threadId", ""),
+        resource=resource,
+    )
+    if correspondence:
+        email_input = {
+            **email_input,
+            "email_thread": email_input["email_thread"]
+            + "\n\n"
+            + format_sender_correspondence(correspondence),
+        }
 
     if settings.extract_attachments:
         pdf_blocks = []
@@ -478,8 +600,51 @@ async def poll_once(
         for msg_id, label_name in resurface_due_snoozed(resource, rules_config):
             outcomes.append((msg_id, "snoozed_resurfaced", label_name))
 
-    for ref in fetch_unread(max_results, resource=resource):
-        outcomes.append(await _process_message_with_retry(graph, ref["id"], resource, rules_config))
+    # Incremental sync: with a stored baseline, ask Gmail only for what changed
+    # (history.list) instead of relisting the unread inbox every cycle. A stale
+    # baseline (Gmail purges history after ~1 week) falls back to the full scan,
+    # which reseeds below. The new baseline is captured BEFORE the scan so mail
+    # arriving mid-cycle lands in the next window as overlap, never as a gap —
+    # process_message dedups overlap via the run registry.
+    refs: list[dict] | None = None
+    truncated = False
+    baseline = get_last_history_id()
+    if baseline:
+        try:
+            history_refs = fetch_history_message_refs(baseline, resource=resource)
+            truncated = len(history_refs) > max_results
+            refs = history_refs[:max_results]
+        except Exception as exc:
+            if not is_stale_history_error(exc):
+                raise
+            print(f"poller: history window stale; falling back to full unread scan: {exc}")
+    try:
+        next_baseline = current_history_id(resource=resource)
+    except Exception:
+        next_baseline = ""
+    if refs is None:
+        refs = fetch_unread(max_results, resource=resource)
+
+    # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
+    # round-trip per 50 instead of one per message. Failure falls back to the
+    # per-message serial fetch inside process_message.
+    prefetched: dict[str, dict] = {}
+    if len(refs) > 3:
+        try:
+            prefetched = await asyncio.to_thread(
+                fetch_messages_batch, [ref["id"] for ref in refs], resource
+            )
+        except Exception as exc:
+            print(f"poller: batch message fetch failed, using serial: {exc}")
+
+    for ref in refs:
+        outcomes.append(await _process_message_with_retry(
+            graph, ref["id"], resource, rules_config, message=prefetched.get(ref["id"])
+        ))
+    # A truncated history batch keeps the old baseline so the overflow is picked
+    # up next cycle (already-processed overlap is deduped, never re-run).
+    if next_baseline and not truncated:
+        set_last_history_id(next_baseline)
 
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
     for _msg_id, status, _run_id in outcomes:
@@ -519,9 +684,71 @@ def active_email_agent_instance_ids() -> list[str]:
     return list(dict.fromkeys(instances)) or [default]
 
 
+# Above this many active mailboxes, random jitter no longer spreads the load
+# evenly; switch to a strict round-robin rotation + even spacing instead.
+_ROUND_ROBIN_THRESHOLD = 5
+_ROUND_ROBIN_INTERVAL_SECONDS = 6.0
+_rotation_offset = 0
+
+
+def _rotate_instances(instances: list[str]) -> list[str]:
+    """Rotate the polling start point each cycle so no mailbox is always first.
+
+    Below the threshold the order is unchanged (jitter still spreads a small
+    fleet fine); above it, a deterministic rotation shares first-place fairly.
+    """
+    global _rotation_offset
+    if len(instances) <= _ROUND_ROBIN_THRESHOLD:
+        return list(instances)
+    offset = _rotation_offset % len(instances)
+    _rotation_offset = (_rotation_offset + 1) % len(instances)
+    return instances[offset:] + instances[:offset]
+
+
+def _instance_stagger_seconds(count: int) -> float:
+    """Even spacing for a large fleet; random jitter for a small one."""
+    if count <= _ROUND_ROBIN_THRESHOLD:
+        return random.uniform(0.5, 3.0)
+    return _ROUND_ROBIN_INTERVAL_SECONDS
+
+
+# One auto-seed attempt per instance per process: builds the owner's writing
+# style profile from their sent mail the first time a connected mailbox is
+# polled, so drafts carry the owner's voice without any manual setup step.
+_style_seed_attempted: set[str] = set()
+
+
+async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
+    if store is None or instance_id in _style_seed_attempted:
+        return
+    _style_seed_attempted.add(instance_id)
+    try:
+        cfg = load_config()
+        if not cfg.style_learning.enabled:
+            return
+        existing = await store.aget(namespace("writing_style"), "user_preferences")
+        if existing:
+            return
+        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        if not samples:
+            print(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
+            _style_seed_attempted.discard(instance_id)
+            return
+        from src import graph as graph_module
+
+        profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
+        text = build_style_text(profile)
+        await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(text))
+        print(f"poller: {instance_id} seeded writing style from {len(samples)} sent email(s)")
+    except Exception as exc:
+        # Best-effort: drafts fall back to the configured default style.
+        print(f"poller: {instance_id} style auto-seed skipped: {exc}")
+
+
 async def poll_active_instances_once(
     graph,
     instance_ids: list[str] | None = None,
+    store=None,
 ) -> dict[str, list[tuple]]:
     """Poll every active, connected instance without cross-instance failure spread."""
     if time.time() < _gmail_rate_limited_until:
@@ -529,8 +756,11 @@ async def poll_active_instances_once(
         print(f"poller: Gmail rate-limit pause active ({remaining}s left); skipping cycle")
         return {}
     instances = instance_ids or active_email_agent_instance_ids()
+    ordered = _rotate_instances(instances)
     results: dict[str, list[tuple]] = {}
-    for raw_instance_id in instances:
+    for index, raw_instance_id in enumerate(ordered):
+        if index:
+            await asyncio.sleep(_instance_stagger_seconds(len(ordered)))
         instance_id = normalize_agent_instance_id(raw_instance_id)
         with agent_instance_context(instance_id):
             try:
@@ -545,6 +775,7 @@ async def poll_active_instances_once(
                 try:
                     reload_config()
                     resource = gmail_resource()
+                    await maybe_seed_style_profile(instance_id, store, resource)
                     outcomes = await poll_once(graph, resource=resource)
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
@@ -608,15 +839,19 @@ async def sweep_active_instances_once(
 
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
-    interval = settings.poll_interval_minutes * 60
-    renew = settings.gmail_watch_renew_hours * 3600
+    # With push webhooks on, polling is only a safety net — run it slowly.
+    interval_minutes = (
+        settings.webhook_fallback_poll_minutes
+        if settings.gmail_webhook_enabled
+        else settings.poll_interval_minutes
+    )
+    interval = interval_minutes * 60
     upgrade_to_head()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
     setup_trace_store()
     setup_dlq()
-    last_watch = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
             checkpointer=storage.checkpointer, store=storage.store
@@ -628,26 +863,28 @@ async def run_forever() -> None:
         else:
             mode = "idle"
         print(
-            f"poller: {mode} every {settings.poll_interval_minutes} min "
+            f"poller: {mode} every {interval_minutes} min "
             f"({storage.backend})"
         )
         while True:
-            if settings.gmail_webhook_enabled and time.monotonic() - last_watch >= renew:
-                try:
-                    ensure_watch()
-                    last_watch = time.monotonic()
-                    print("poller: gmail watch registered")
-                except Exception as exc:
-                    print(f"poller: gmail watch failed: {exc}")
-                    record_failure(str(exc))
+            if settings.gmail_webhook_enabled:
+                # Expiration-driven: ensure_watches skips instances whose recorded
+                # watch expiration is still beyond the renewal margin, so checking
+                # every loop is cheap and a watch never silently lapses.
+                watches = await asyncio.to_thread(ensure_watches)
+                registered = sum(1 for value in watches.values() if value)
+                if registered:
+                    print(f"poller: gmail watch registered for {registered} instance(s)")
             if settings.polling_fallback_enabled:
-                await poll_active_instances_once(graph)
+                await poll_active_instances_once(graph, store=storage.store)
             else:
                 escalations = await sweep_active_instances_once()
                 for instance_id, items in escalations.items():
                     if items:
                         print(f"poller: {instance_id} escalated {len(items)} overdue approval(s): {items}")
-            await asyncio.sleep(interval)
+            # Jitter so a fleet of pollers (or many instances) never hits Gmail in
+            # lockstep — synced bursts look robotic to Google's abuse limiter.
+            await asyncio.sleep(interval * random.uniform(0.85, 1.15))
 
 
 def main() -> None:

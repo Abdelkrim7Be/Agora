@@ -34,6 +34,9 @@ class EmailInput(TypedDict):
     gmail_thread_id: NotRequired[str]
     attachments: NotRequired[list]
     labels: NotRequired[list[str]]
+    # Bulk-mail header signals extracted by the poller for the deterministic junk gate.
+    list_unsubscribe: NotRequired[bool]
+    precedence_bulk: NotRequired[bool]
     automation: NotRequired[dict]
     # Verdict from the security service /sanitize, attached by the poller when
     # AGENT_SECURITY_ENABLED=true. Absent on the manual /run path. triage_router reads it.
@@ -71,3 +74,9 @@ class State(MessagesState):
     # Set after human feedback asks for a revised draft; the run must not finish
     # until a new gated write_email draft has been produced and approved.
     redraft_requested: NotRequired[bool]
+    # The latest free-text feedback given on the pending draft; consumed by the
+    # dedicated redraft node so it never has to re-parse message history.
+    redraft_feedback: NotRequired[str]
+    # The draft as the user last saw (and possibly hand-edited) it; the redraft
+    # node starts from this instead of the last server-generated draft.
+    redraft_baseline: NotRequired[dict]
