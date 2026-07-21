@@ -20,6 +20,8 @@ DEFAULT_LLM_CONFIG_DIR = SERVICE_ROOT / "config"
 class LlmProfile(BaseModel):
     endpoint: str | None = None
     temperature: float = 0.0
+    max_tokens: int | None = None
+    timeout: float | None = None
     roles: dict[str, str]
     fallbacks: dict[str, list[str]] = Field(default_factory=dict)
 
@@ -153,6 +155,16 @@ def _model_kwargs(profile: LlmProfile) -> dict[str, Any]:
     kwargs: dict[str, Any] = {"temperature": profile.temperature}
     if profile.endpoint:
         kwargs["base_url"] = profile.endpoint
+    if profile.max_tokens is not None:
+        if profile.endpoint:
+            # langchain-openai serializes max_tokens as max_completion_tokens,
+            # which OpenAI-compatible backends like Ollama ignore; send the raw
+            # field via extra_body so local models are actually capped.
+            kwargs["extra_body"] = {"max_tokens": profile.max_tokens}
+        else:
+            kwargs["max_tokens"] = profile.max_tokens
+    if profile.timeout is not None:
+        kwargs["timeout"] = profile.timeout
     return kwargs
 
 

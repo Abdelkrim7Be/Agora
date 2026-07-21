@@ -186,6 +186,22 @@ class RbacTest {
     }
 
     @Test
+    void admin_can_read_cost_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"period\":\"session\"}")));
+
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.period").value("session"));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+    @Test
     void viewer_cannot_read_cost_summary_403() throws Exception {
         mockMvc.perform(get("/api/agent/costs/summary?period=session")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
@@ -222,10 +238,56 @@ class RbacTest {
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/style/learn")));
     }
+    @Test
+    void viewer_can_read_signature() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/signature"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"enabled\":false}")));
+
+        mockMvc.perform(get("/api/agent/signature")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/signature")));
+    }
+
+    @Test
+    void viewer_cannot_update_signature_403() throws Exception {
+        mockMvc.perform(put("/api/agent/signature")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true,\"text\":\"Karim\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlEqualTo("/signature")));
+    }
 
 
 
 
+
+
+    @Test
+    void admin_can_update_signature() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlEqualTo("/signature"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"enabled\":true}")));
+
+        mockMvc.perform(put("/api/agent/signature")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true,\"text\":\"Karim\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(true));
+
+        wireMock.verify(1, putRequestedFor(urlEqualTo("/signature")));
+    }
 
     @Test
     void viewer_can_read_roles() throws Exception {
@@ -634,11 +696,10 @@ class RbacTest {
     }
 
     @Test
-    void owner_cannot_list_users_403() throws Exception {
+    void owner_can_list_users_for_instance_grants() throws Exception {
         mockMvc.perform(get("/users")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass")))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("forbidden"));
+                .andExpect(status().isOk());
     }
 
     @Test

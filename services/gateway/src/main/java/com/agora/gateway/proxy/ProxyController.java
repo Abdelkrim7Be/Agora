@@ -46,7 +46,7 @@ public class ProxyController {
     private static final Set<String> WRITE_PATH_PREFIXES = Set.of(
             "/api/agent/config", "/api/agent/capabilities", "/api/agent/categories",
             "/api/agent/templates", "/api/agent/contacts", "/api/agent/rules",
-            "/api/agent/memory", "/api/agent/style", "/api/agent/costs"
+            "/api/agent/memory", "/api/agent/style", "/api/agent/signature", "/api/agent/costs"
     );
 
     // Approve-tier paths: owner or approver (instance-granted).

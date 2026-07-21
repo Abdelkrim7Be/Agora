@@ -57,6 +57,41 @@ services:
     networks:
       - agora
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: 24h
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ollama_data:/root/.ollama
+    gpus: all
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - agora
+
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "qwen2.5:3b"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - agora
+    restart: "no"
+
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
@@ -82,7 +117,9 @@ services:
       AGENT_SECRET_MANAGER_URL: ${AGENT_SECRET_MANAGER_URL:-}
       AGENT_SECRET_MANAGER_PATH: ${AGENT_SECRET_MANAGER_PATH:-}
       AGENT_SECRET_MANAGER_TOKEN_FILE: ${AGENT_SECRET_MANAGER_TOKEN_FILE:-}
-      AGENT_LLM_PROFILE: ${AGENT_LLM_PROFILE:-dev}
+      AGENT_LLM_PROFILE: ${AGENT_LLM_PROFILE:-local}
+      AGENT_LLM_CONFIG_PATH: ${AGENT_LLM_CONFIG_PATH:-config/llm.local-docker.yaml}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-ollama-local}
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
       TENANT_MODE: ${TENANT_MODE:-single}
@@ -118,8 +155,8 @@ services:
         condition: service_healthy
       security:
         condition: service_healthy
-      litellm:
-        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
     networks:
       - agora
 
@@ -170,6 +207,7 @@ volumes:
   postgres_data:
   redis_data:
   agent_data:
+  ollama_data:
 
 networks:
   agora:
