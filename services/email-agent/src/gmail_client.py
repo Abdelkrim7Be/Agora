@@ -111,6 +111,57 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
+_INBOX_METADATA_HEADERS = ["From", "Subject", "Date"]
+
+
+def _inbox_metadata_request(resource, msg_id: str):
+    return (
+        resource.users()
+        .messages()
+        .get(
+            userId="me",
+            id=msg_id,
+            format="metadata",
+            metadataHeaders=_INBOX_METADATA_HEADERS,
+            fields="id,threadId,labelIds,snippet,payload/headers",
+        )
+    )
+
+
+def _fetch_inbox_metadata_serial(refs: list[dict], resource) -> list[dict]:
+    return [_inbox_metadata_request(resource, ref["id"]).execute() for ref in refs]
+
+
+def _fetch_inbox_metadata_batch(refs: list[dict], resource) -> list[dict]:
+    new_batch = getattr(resource, "new_batch_http_request", None)
+    if not callable(new_batch):
+        raise RuntimeError("Gmail batch requests are unavailable for this resource")
+
+    responses: dict[str, dict] = {}
+    errors: dict[str, Exception] = {}
+
+    def callback(request_id, response, exception):
+        if exception is not None:
+            errors[str(request_id)] = exception
+        else:
+            responses[str(request_id)] = response
+
+    batch = new_batch(callback=callback)
+    request_ids: list[str] = []
+    for index, ref in enumerate(refs):
+        request_id = str(index)
+        request_ids.append(request_id)
+        batch.add(_inbox_metadata_request(resource, ref["id"]), request_id=request_id)
+
+    batch.execute()
+    if errors:
+        raise RuntimeError(f"Gmail batch metadata failed for {len(errors)} messages")
+    missing = [request_id for request_id in request_ids if request_id not in responses]
+    if missing:
+        raise RuntimeError(f"Gmail batch metadata missed {len(missing)} messages")
+    return [responses[request_id] for request_id in request_ids]
+
+
 def list_inbox(max_results: int, resource=None) -> list[dict]:
     """Return summarized inbox messages (newest first) for the management view.
 
@@ -126,19 +177,13 @@ def list_inbox(max_results: int, resource=None) -> list[dict]:
         .execute()
         .get("messages", [])
     )
+    try:
+        messages = _fetch_inbox_metadata_batch(refs, resource)
+    except Exception:
+        messages = _fetch_inbox_metadata_serial(refs, resource)
+
     summaries: list[dict] = []
-    for ref in refs:
-        message = (
-            resource.users()
-            .messages()
-            .get(
-                userId="me",
-                id=ref["id"],
-                format="metadata",
-                metadataHeaders=["From", "Subject", "Date"],
-            )
-            .execute()
-        )
+    for message in messages:
         labels = message.get("labelIds", [])
         summaries.append(
             {

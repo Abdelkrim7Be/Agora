@@ -13,8 +13,8 @@ def test_default_policy_loads():
     assert "write_email" in policy.tools
     assert policy.tools["write_email"].decision == "hitl"
     assert policy.tools["write_email"].limits is not None
-    assert policy.tools["write_email"].limits.max_per_run == 1
-    assert policy.tools["write_email"].limits.max_per_day == 100
+    assert policy.tools["write_email"].limits.max_per_run == 50
+    assert policy.tools["write_email"].limits.max_per_day == 1000
     assert policy.tools["write_email"].limits.max_content_chars == 20000
     for action in (
         "apply_label",
@@ -37,7 +37,7 @@ def test_default_policy_loads():
     assert policy.tools["trash_email"].decision == "hitl"
     assert policy.tools["forward_email"].decision == "hitl"
     assert policy.tools["reply_all"].decision == "hitl"
-    assert policy.tools["forward_email"].limits.max_per_run == 1
+    assert policy.tools["forward_email"].limits.max_per_run == 20
     assert policy.tools["reply_all"].limits.max_content_chars == 20000
 
 

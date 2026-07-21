@@ -111,4 +111,14 @@ def update_memory(
     except Exception as exc:
         print(f"memory: preference update skipped: {exc}")
         return
-    store.put(ns, "user_preferences", wrap_preferences(result.user_preferences))
+    updated = (result.user_preferences or "").strip()
+    # Guard against destructive rewrites: small models sometimes replace the
+    # whole profile with a one-line summary of the latest feedback. A real
+    # incremental update never collapses an established profile.
+    if current and len(current) > 200 and len(updated) < len(current) // 2:
+        print(
+            f"memory: preference update rejected for {ns}: proposed profile "
+            f"({len(updated)} chars) would collapse the current one ({len(current)} chars)"
+        )
+        return
+    store.put(ns, "user_preferences", wrap_preferences(updated))

@@ -14,6 +14,7 @@ from src.gmail_client import (
     forward_message,
     format_thread,
     gmail_to_email_input,
+    list_inbox,
     list_labels,
     mark_as_read,
     mark_as_unread,
@@ -177,6 +178,29 @@ class _FakeGmailResource:
         return self._users
 
 
+class _FakeBatch:
+    def __init__(self, callback):
+        self.callback = callback
+        self.requests: list[tuple[str, _Execute]] = []
+
+    def add(self, request, request_id: str):
+        self.requests.append((request_id, request))
+
+    def execute(self):
+        for request_id, request in self.requests:
+            self.callback(request_id, request.execute(), None)
+
+
+class _FakeBatchGmailResource(_FakeGmailResource):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.batch_calls = 0
+
+    def new_batch_http_request(self, callback=None):
+        self.batch_calls += 1
+        return _FakeBatch(callback)
+
+
 HEADERS = [
     {"name": "From", "value": "Alice <alice@example.com>"},
     {"name": "To", "value": "Me <me@example.com>"},
@@ -232,6 +256,87 @@ def test_fetch_sent_returns_usable_style_samples():
 
 
 # --- Gmail mutation helpers ---
+
+def test_list_inbox_uses_batch_metadata_fetch():
+    messages = {
+        "m1": _message(
+            [
+                {"name": "From", "value": "Alice <alice@example.com>"},
+                {"name": "Subject", "value": "Hello"},
+                {"name": "Date", "value": "Mon, 1 Jun 2026 10:00:00 +0000"},
+            ],
+            {},
+            msg_id="m1",
+            thread_id="t1",
+        )
+        | {"labelIds": ["INBOX", "UNREAD"], "snippet": "First"},
+        "m2": _message(
+            [
+                {"name": "From", "value": "Bob <bob@example.com>"},
+                {"name": "Subject", "value": "Update"},
+                {"name": "Date", "value": "Tue, 2 Jun 2026 10:00:00 +0000"},
+            ],
+            {},
+            msg_id="m2",
+            thread_id="t2",
+        )
+        | {"labelIds": ["INBOX"], "snippet": "Second"},
+    }
+    resource = _FakeBatchGmailResource(messages=messages)
+
+    rows = list_inbox(10, resource=resource)
+
+    assert resource.batch_calls == 1
+    assert rows == [
+        {
+            "id": "m1",
+            "thread_id": "t1",
+            "from": "Alice <alice@example.com>",
+            "subject": "Hello",
+            "snippet": "First",
+            "date": "Mon, 1 Jun 2026 10:00:00 +0000",
+            "unread": True,
+        },
+        {
+            "id": "m2",
+            "thread_id": "t2",
+            "from": "Bob <bob@example.com>",
+            "subject": "Update",
+            "snippet": "Second",
+            "date": "Tue, 2 Jun 2026 10:00:00 +0000",
+            "unread": False,
+        },
+    ]
+
+
+def test_list_inbox_falls_back_to_serial_metadata_fetch():
+    messages = {
+        "m1": _message(
+            [
+                {"name": "From", "value": "Alice <alice@example.com>"},
+                {"name": "Subject", "value": "Hello"},
+                {"name": "Date", "value": "Mon, 1 Jun 2026 10:00:00 +0000"},
+            ],
+            {},
+            msg_id="m1",
+            thread_id="t1",
+        )
+        | {"labelIds": ["INBOX"], "snippet": "First"},
+    }
+    resource = _FakeGmailResource(messages=messages)
+
+    assert list_inbox(10, resource=resource) == [
+        {
+            "id": "m1",
+            "thread_id": "t1",
+            "from": "Alice <alice@example.com>",
+            "subject": "Hello",
+            "snippet": "First",
+            "date": "Mon, 1 Jun 2026 10:00:00 +0000",
+            "unread": False,
+        }
+    ]
+
 
 def test_watch_mailbox_registers_inbox_watch(monkeypatch):
     monkeypatch.setattr(settings, "gmail_webhook_topic", "projects/agora/topics/gmail")

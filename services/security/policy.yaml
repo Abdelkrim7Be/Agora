@@ -11,8 +11,13 @@ tools:
       deny_domains: []
     limits:
       max_content_chars: 20000
-      max_per_run: 1          # one send per email run
-      max_per_day: 100
+      # The reservation is taken when a draft is PROPOSED (each HITL feedback
+      # round proposes a new draft with a new action id), not when it is sent —
+      # the approval gate still guarantees at most one actual send. Dev-friendly
+      # ceilings: long feedback conversations must never exhaust a run; tighten
+      # for production.
+      max_per_run: 50
+      max_per_day: 1000
 
   # Reversible inbox organization actions.
   apply_label:
@@ -48,14 +53,14 @@ tools:
       deny_domains: []
     limits:
       max_content_chars: 20000
-      max_per_run: 1
-      max_per_day: 100
+      max_per_run: 20
+      max_per_day: 500
   reply_all:
     decision: hitl
     limits:
       max_content_chars: 20000
-      max_per_run: 1
-      max_per_day: 100
+      max_per_run: 20
+      max_per_day: 500
 
   # Outbound broadcast campaigns. The batch approval in the control panel is the
   # human gate, so the decision is allow — but every recipient is still checked

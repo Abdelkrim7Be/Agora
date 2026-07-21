@@ -42,7 +42,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "gateway.owner.username=owner",
         "gateway.owner.password=ownerpass",
         "gateway.viewer.username=viewer",
-        "gateway.viewer.password=viewerpass"
+        "gateway.viewer.password=viewerpass",
+        "gateway.admin.username=admin",
+        "gateway.admin.password=adminpass"
 })
 class InstanceGrantTest {
 
@@ -192,7 +194,7 @@ class InstanceGrantTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isCreated());
-        mockMvc.perform(delete("/agent-instances/temp-deactivated")
+        mockMvc.perform(post("/agent-instances/temp-deactivated/deactivate")
                         .header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isOk());
 
@@ -212,5 +214,17 @@ class InstanceGrantTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void admin_can_add_grant() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of("user_id", "admin-added", "role", "viewer"));
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.role").value("viewer"))
+                .andExpect(jsonPath("$.user_id").value("admin-added"));
     }
 }
