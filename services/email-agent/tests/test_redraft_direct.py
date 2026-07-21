@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from langgraph.types import Command
@@ -121,3 +122,47 @@ def test_accept_after_redraft_completes_the_run(fake_llms, respond_email):
     done = email_assistant.invoke(Command(resume=[{"type": "accept"}]), cfg)
     assert "__interrupt__" not in done
     assert done.get("email_sent") is True
+
+
+def test_redraft_strips_signature_before_prompt_and_reappends_once(fake_llms, respond_email, monkeypatch):
+    """Regression for the duplicate-signoff bug: the redraft LLM must never see
+    the signature block (so it can't improvise its own), and the canonical
+    signature must come back exactly once in the revised draft."""
+    import src.graph as g
+    import src.signature as sig
+    from src.signature import SignatureConfig
+
+    signature = SignatureConfig(enabled=True, text="Karim\nAgora Consulting")
+    monkeypatch.setattr(sig, "load_signature", lambda *args, **kwargs: signature)
+
+    signed_block = "-- \nKarim\nAgora Consulting"
+    already_signed_draft = {**DRAFT, "content": f"Here you go.\n\n{signed_block}"}
+
+    captured_prompts = []
+
+    class _CapturingRedraftLLM:
+        def invoke(self, messages, config=None):
+            captured_prompts.append(messages)
+            return SimpleNamespace(to="", subject="", content="Shorter version.")
+
+    fake_llms(
+        classification="respond",
+        tool_sequence=[ai_tool_call("write_email", already_signed_draft, "c1")],
+    )
+    monkeypatch.setattr(g, "llm_redraft", _CapturingRedraftLLM())
+    cfg = _cfg()
+
+    paused = email_assistant.invoke({"email_input": respond_email}, cfg)
+    assert paused["__interrupt__"]
+
+    paused = email_assistant.invoke(
+        Command(resume=[{"type": "response", "args": "shorter"}]), cfg
+    )
+
+    user_prompt = captured_prompts[0][1]["content"]
+    assert signed_block not in user_prompt
+    assert "Karim" not in user_prompt
+
+    args = _pending_args(paused)
+    assert args["content"] == f"Shorter version.\n\n{signed_block}"
+    assert args["content"].count("Karim") == 1

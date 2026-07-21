@@ -1,4 +1,4 @@
-from src.signature import SignatureConfig, SIGNATURE_MARKER, append_signature, apply_signature_to_args
+from src.signature import SignatureConfig, append_signature, apply_signature_to_args, strip_signature
 
 
 def test_disabled_signature_leaves_content_unchanged():
@@ -16,10 +16,12 @@ def test_signature_appends_text_and_image_once():
 
     signed = append_signature("Bonjour", signature)
 
-    assert SIGNATURE_MARKER in signed
+    assert "<!--" not in signed and "-->" not in signed
+    assert "-- \n" in signed
     assert "Karim\nAgora Consulting" in signed
     assert "![Logo Agora](https://example.com/signature.png)" in signed
     assert append_signature(signed, signature) == signed
+    assert strip_signature(signed, signature) == "Bonjour"
 
 
 def test_apply_signature_only_touches_email_content_tools():
@@ -62,3 +64,14 @@ def test_legacy_text_only_signature_unchanged():
     signature = SignatureConfig(enabled=True, text="Karim\nAgora Consulting")
     signed = append_signature("Bonjour", signature)
     assert "-- \nKarim\nAgora Consulting" in signed
+
+
+def test_strip_signature_is_the_inverse_of_append():
+    signature = SignatureConfig(enabled=True, text="Karim\nAgora Consulting")
+    signed = append_signature("Bonjour,\n\nDetails.", signature)
+    assert strip_signature(signed, signature) == "Bonjour,\n\nDetails."
+
+
+def test_strip_signature_noop_when_not_signed():
+    signature = SignatureConfig(enabled=True, text="Karim")
+    assert strip_signature("Bonjour", signature) == "Bonjour"

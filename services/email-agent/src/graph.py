@@ -39,7 +39,7 @@ from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.roles import resolve_role
 from src.security_client import authorize_action
-from src.signature import apply_signature_to_args
+from src.signature import apply_signature_to_args, strip_signature
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
@@ -315,7 +315,10 @@ def category_router(
                                 f"Content: {content}\n\n"
                                 f"Fill in the unresolved placeholders "
                                 f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
-                                f"from the email context below, then call write_email:\n\n{email_markdown}"
+                                f"from the email context below, then call write_email. "
+                                f"Keep the template's closing (\"{content.rstrip().splitlines()[-1] if content.strip() else ''}\") "
+                                f"as the last line of the body — do not add a name, title, or company "
+                                f"after it; the signature is appended automatically.\n\n{email_markdown}"
                             ),
                         }],
                     },
@@ -1130,6 +1133,12 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
         agent_config.agent.writing_style_default,
     )
     run_id = _run_id_from_config(config)
+    # Strip any already-appended signature before the model ever sees the
+    # body: otherwise it tends to "helpfully" add its own closing line on
+    # top of the real signature block, producing a duplicate sign-off. The
+    # canonical signature is re-appended after the LLM call by tool_node's
+    # apply_signature_to_args, exactly once.
+    body_for_prompt = strip_signature(previous.get("content", ""))
     prompt = [
         {
             "role": "system",
@@ -1140,7 +1149,10 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
                 "HARD RULE: write the revised email in the SAME language as the "
                 "current draft — never translate it. If the draft is in French, "
                 "the revision MUST be in French. "
-                "Return the complete revised email.\n"
+                "HARD RULE: do not add a closing sign-off or signature line "
+                "(name, title, company). The signature is appended "
+                "automatically after your revision — never write one yourself. "
+                "Return the complete revised email body, without any signature.\n"
                 f"<Response preferences>\n{response_prefs}\n</Response preferences>\n"
                 f"<Writing style>\n{writing_style}\n</Writing style>"
             ),
@@ -1150,7 +1162,7 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
             "content": (
                 f"Current draft:\nTo: {previous.get('to', '')}\n"
                 f"Subject: {previous.get('subject', '')}\n"
-                f"Body:\n{previous.get('content', '')}\n\n"
+                f"Body (signature already stripped, do not add one back):\n{body_for_prompt}\n\n"
                 f"Instruction from the user: {feedback}"
             ),
         },
