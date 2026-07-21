@@ -15,7 +15,11 @@ def _clear_profile_cache():
     clear_llm_profile_cache()
 
 
-def test_get_llm_uses_default_dev_profile(monkeypatch):
+def test_get_llm_uses_default_local_profile(monkeypatch):
+    monkeypatch.delenv("AGENT_LLM_PROFILE", raising=False)
+    monkeypatch.delenv("AGENT_LLM_CONFIG_PATH", raising=False)
+    monkeypatch.setattr("src.llm.settings.llm_profile", "local")
+    monkeypatch.setattr("src.llm.settings.llm_config_path", "")
     captured = {}
 
     def fake_init_chat_model(model_name, **kwargs):
@@ -27,11 +31,8 @@ def test_get_llm_uses_default_dev_profile(monkeypatch):
 
     model = get_llm("triage")
 
-    assert model.model_name == "groq:llama-3.3-70b-versatile"
-    assert captured == {
-        "model_name": "groq:llama-3.3-70b-versatile",
-        "kwargs": {"temperature": 0.0},
-    }
+    assert model.model_name == "openai:qwen2.5:3b-8k"
+    assert captured["kwargs"]["base_url"] == "http://localhost:11434/v1"
 
 
 def test_loads_prod_profile_mapping(monkeypatch):
@@ -106,8 +107,9 @@ def test_profile_flip_changes_models_without_code_change(monkeypatch):
 
     safe_profile = load_llm_profile()
 
-    assert safe_profile.endpoint is None
-    assert safe_profile.roles["draft"] == "groq:llama-3.3-70b-versatile"
+    assert safe_profile.endpoint == "http://localhost:11434/v1"
+    assert safe_profile.roles["draft"] == "openai:qwen2.5:3b-8k"
+    assert safe_profile.max_tokens == 400
 
 
 def test_unknown_role_raises_clear_error():

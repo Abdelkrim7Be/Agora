@@ -1549,6 +1549,19 @@ def test_alert_and_retention_settings_endpoints_allow_owner_role(monkeypatch):
 
 
 
+def test_retention_run_rejects_disabled_policy(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings(retention_days=0))
+    monkeypatch.setattr(api, "run_retention", lambda: {"deleted": {"runs": 1}})
+
+    with TestClient(app) as client:
+        response = client.post("/retention/run", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 400
+    assert "retention disabled" in response.json()["detail"]
+
+
 def test_metrics_endpoint_returns_prometheus_text(monkeypatch):
     import src.api as api
     monkeypatch.setattr(api, "render_metrics", lambda: "# HELP agora_test demo\n# TYPE agora_test counter\nagora_test 1\n")
@@ -1565,3 +1578,80 @@ def test_dlq_endpoint_returns_entries(monkeypatch):
         response = client.get('/dlq', headers={"X-Agora-Instance-Role": "owner"})
     assert response.status_code == 200
     assert response.json()["entries"][0]["entry_id"] == "e1"
+
+
+# --- confidence band + review reason (derived on read, no migration) ---
+
+def _pending(action: str, args: dict | None = None) -> list:
+    return [{"action_request": {"action": action, "args": args or {}}}]
+
+
+def test_derive_action_type_covers_reply_all_and_draft():
+    from src.api import _derive_action_type
+    assert _derive_action_type(_pending("reply_all"), "respond") == "reply_all"
+    assert _derive_action_type(_pending("create_draft"), "respond") == "draft"
+
+
+def test_confidence_high_for_recognised_workflow():
+    from src.api import _derive_confidence
+    band, reason = _derive_confidence({
+        "category": "attestation_travail",
+        "category_display_name": "Attestation de travail",
+        "classification": "respond",
+        "pending_action": _pending("write_email"),
+    })
+    assert band == "élevée"
+    assert "Attestation de travail" in reason
+
+
+def test_confidence_high_for_routing_rule():
+    from src.api import _derive_confidence
+    band, reason = _derive_confidence({
+        "category": "facture",
+        "classification": "notify",
+        "workflow_dept": "Finance",
+        "workflow_route_to": ["finance@example.com"],
+        "pending_action": _pending("forward_email"),
+    })
+    assert band == "élevée"
+    assert "Finance" in reason
+
+
+def test_confidence_medium_for_llm_draft_without_workflow():
+    from src.api import _derive_confidence
+    band, reason = _derive_confidence({
+        "category": "uncategorized",
+        "classification": "respond",
+        "pending_action": _pending("write_email"),
+    })
+    assert band == "moyenne"
+    assert "aucune règle déterministe" in reason
+
+
+def test_confidence_low_for_forced_notify_without_category():
+    from src.api import _derive_confidence
+    band, reason = _derive_confidence({
+        "category": "",
+        "classification": "notify",
+        "pending_action": _pending("forward_email"),
+    })
+    assert band == "faible"
+    assert "à vérifier" in reason
+
+
+def test_runs_list_carries_confidence_and_review_reason(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "list_runs", lambda **kwargs: [{
+        "run_id": "r1",
+        "status": "pending_approval",
+        "classification": "respond",
+        "category": "uncategorized",
+        "pending_action": _pending("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}),
+    }])
+    with TestClient(app) as client:
+        body = client.get("/runs?status=pending_approval", headers={"X-Agora-Instance-Role": "viewer"}).json()
+    row = body["runs"][0]
+    assert row["confidence"] == "moyenne"
+    assert row["action_type"] == "reply_draft"
+    assert "review_reason" in row

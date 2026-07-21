@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 
 from langchain.chat_models import init_chat_model
@@ -16,7 +17,13 @@ quarantine_llm = None
 def _get_quarantine_llm():
     global quarantine_llm
     if quarantine_llm is None:
-        _llm = init_chat_model(settings.sanitize_model, temperature=0.0)
+        kwargs: dict = {"temperature": 0.0}
+        if settings.sanitize_endpoint:
+            kwargs["base_url"] = settings.sanitize_endpoint
+            # Ollama's OpenAI-compatible endpoint ignores the key but the
+            # client requires one.
+            kwargs["api_key"] = os.getenv("OPENAI_API_KEY") or "ollama-local"
+        _llm = init_chat_model(settings.sanitize_model, **kwargs)
         quarantine_llm = _llm.with_structured_output(QuarantineVerdict)
     return quarantine_llm
 

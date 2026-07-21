@@ -54,7 +54,24 @@ def test_parse_decision_agent_inbox_edit_unnests_args():
 def test_parse_decision_response_passes_feedback_string():
     type_, data = _parse_decision([{"type": "response", "args": "make it shorter"}])
     assert type_ == "response"
-    assert data == "make it shorter"
+    assert data == {"feedback": "make it shorter", "draft": None}
+
+
+def test_parse_decision_response_carries_user_draft():
+    draft = {"to": "a@b.c", "subject": "Re: hello", "content": "edited body"}
+    type_, data = _parse_decision(
+        [{"type": "response", "args": "make it shorter", "draft": draft}]
+    )
+    assert type_ == "response"
+    assert data == {"feedback": "make it shorter", "draft": draft}
+
+
+def test_parse_decision_response_ignores_non_dict_draft():
+    type_, data = _parse_decision(
+        [{"type": "response", "args": "make it shorter", "draft": "not-a-dict"}]
+    )
+    assert type_ == "response"
+    assert data == {"feedback": "make it shorter", "draft": None}
 
 
 def test_parse_decision_missing_type_fails_closed():
@@ -184,14 +201,14 @@ def test_ignore_does_not_send_and_updates_triage_memory(fake_llms, respond_email
 
 
 def test_response_feedback_loops_back_and_triggers_redraft(fake_llms, respond_email):
-    """Agent Inbox 'response' (free-text feedback) loops back to llm_call for re-drafting."""
+    """Agent Inbox 'response' (free-text feedback) goes through the dedicated redraft node."""
     fake_llms(
         classification="respond",
         tool_sequence=[
             ai_tool_call("write_email", DRAFT, "c1"),   # first draft — interrupted
-            ai_tool_call("write_email", DRAFT2, "c2"),  # re-draft after feedback
             ai_tool_call("Done", {"done": True}, "c3"),
         ],
+        redraft_sequence=[DRAFT2],
     )
     cfg = _cfg()
 
@@ -207,3 +224,12 @@ def test_response_feedback_loops_back_and_triggers_redraft(fake_llms, respond_em
     request2 = paused2["__interrupt__"][0].value[0]
     assert request2["action_request"]["action"] == "write_email"
     assert request2["action_request"]["args"] == DRAFT2
+
+
+def test_strip_content_headers_removes_echoed_envelope():
+    from src.graph import _strip_content_headers
+
+    content = "À : client@x.fr\nSujet : Re: paiement\nCorps : \nBonjour,\n\nMerci.\nCordialement"
+    assert _strip_content_headers(content) == "Bonjour,\n\nMerci.\nCordialement"
+    plain = "Bonjour,\n\nMerci.\nCordialement"
+    assert _strip_content_headers(plain) == plain

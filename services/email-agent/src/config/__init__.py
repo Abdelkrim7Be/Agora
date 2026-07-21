@@ -34,10 +34,9 @@ def _parse_user_map() -> dict[str, str]:
 
 
 class Settings:
-    groq_api_key: str = get_secret("AGENT", "GROQ_API_KEY")
     openai_api_key: str = get_secret("AGENT", "OPENAI_API_KEY")
     anthropic_api_key: str = get_secret("AGENT", "ANTHROPIC_API_KEY")
-    llm_profile: str = os.getenv("AGENT_LLM_PROFILE", "dev")
+    llm_profile: str = os.getenv("AGENT_LLM_PROFILE", "local")
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
     llm_streaming_enabled: bool = _env_bool("AGENT_LLM_STREAMING_ENABLED", "true")
     roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")
@@ -50,7 +49,6 @@ class Settings:
     token_encryption_key_file: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY_FILE", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     token_encryption_required: bool = _env_bool("AGENT_TOKEN_ENCRYPTION_REQUIRED", "false")
-    default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
     poll_interval_minutes: float = float(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     poll_max_retries: int = int(os.getenv("AGENT_POLL_MAX_RETRIES", "3"))
@@ -104,9 +102,18 @@ class Settings:
     gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
     # Per-instance sync observability state (connection status, last success/failure, etc.).
     gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
+    # Uploaded media (signature images, contact photos) — compose mounts /app/data/media.
+    media_dir: str = os.getenv("AGENT_MEDIA_DIR", "logs/instances")
+    # Soft per-instance hourly Gmail API call budget (health display + 80% alert).
+    gmail_hourly_call_budget: int = int(os.getenv("GMAIL_HOURLY_CALL_BUDGET", "1000"))
     # Gmail watches expire after 7 days; re-register well inside that window.
     gmail_watch_renew_hours: int = int(os.getenv("GMAIL_WATCH_RENEW_HOURS", "24"))
+    # Renew a watch once its recorded expiration is closer than this margin;
+    # watches with no recorded expiration are renewed on every check.
+    gmail_watch_renew_margin_hours: float = float(os.getenv("GMAIL_WATCH_RENEW_MARGIN_HOURS", "12"))
     polling_fallback_enabled: bool = _env_bool("GMAIL_POLLING_FALLBACK_ENABLED", "true")
+    # Poll cadence when push webhooks are on and polling is only the safety net.
+    webhook_fallback_poll_minutes: float = float(os.getenv("AGENT_WEBHOOK_FALLBACK_POLL_MIN", "10"))
     # External-identity -> platform user id (aligns webhook tenant key with the gateway).
     user_map: dict = _parse_user_map()
 

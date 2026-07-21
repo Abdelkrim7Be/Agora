@@ -63,6 +63,7 @@ async def test_security_up_when_probe_returns_2xx(monkeypatch):
 
 
 def test_poller_component_up_after_recent_success(monkeypatch):
+    monkeypatch.setattr(health, "latest_success_at", lambda: None)
     monkeypatch.setattr(
         health,
         "get_sync_status",
@@ -76,6 +77,22 @@ def test_poller_component_up_after_recent_success(monkeypatch):
     component = health._poller_component()
     assert component["status"] == "up"
     assert component["last_poll_at"] == "2026-07-09T10:00:00Z"
+
+
+def test_poller_component_prefers_freshest_instance_poll(monkeypatch):
+    monkeypatch.setattr(health, "latest_success_at", lambda: "2026-07-09T12:00:00Z")
+    monkeypatch.setattr(
+        health,
+        "get_sync_status",
+        lambda: {
+            "last_success_at": "2026-07-09T10:00:00Z",
+            "last_failure_at": None,
+            "paused": False,
+            "last_error": None,
+        },
+    )
+    component = health._poller_component()
+    assert component["last_poll_at"] == "2026-07-09T12:00:00Z"
 
 
 def test_poller_component_down_when_failure_after_success(monkeypatch):
@@ -95,6 +112,7 @@ def test_poller_component_down_when_failure_after_success(monkeypatch):
 
 
 def test_poller_component_up_when_success_after_failure(monkeypatch):
+    monkeypatch.setattr(health, "latest_success_at", lambda: None)
     monkeypatch.setattr(
         health,
         "get_sync_status",

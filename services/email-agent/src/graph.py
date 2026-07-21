@@ -39,7 +39,7 @@ from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.roles import resolve_role
 from src.security_client import authorize_action
-from src.signature import apply_signature_to_args
+from src.signature import apply_signature_to_args, strip_signature
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
@@ -48,7 +48,7 @@ from src.prompts import (
     triage_user_prompt,
 )
 from src.state import RouterSchema, State, StateInput
-from src.utils import format_draft_markdown, format_email_markdown, parse_email
+from src.utils import ensure_email_paragraphs, format_draft_markdown, format_email_markdown, parse_email
 from src.trace import record_trace
 
 load_dotenv()
@@ -66,10 +66,19 @@ def _build_llm_bindings():
     router_llm = get_llm("triage").with_structured_output(RouterSchema)
     tool_llm = get_llm("draft").bind_tools(tools, tool_choice="any")
     memory_llm = base_llm.with_structured_output(UserPreferences)
-    return base_llm, router_llm, tool_llm, memory_llm
+    redraft_llm = get_llm("draft").with_structured_output(RedraftOutput)
+    return base_llm, router_llm, tool_llm, memory_llm, redraft_llm
 
 
-llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
+class RedraftOutput(PydanticBaseModel):
+    """Structured revision of a pending draft: the only output the redraft node accepts."""
+
+    to: str = ""
+    subject: str = ""
+    content: str = ""
+
+
+llm, llm_router, llm_with_tools, llm_memory, llm_redraft = _build_llm_bindings()
 
 
 def _failed_generation_from_exception(exc: Exception) -> str | None:
@@ -159,13 +168,13 @@ def reload_config() -> None:
     copy and must be restarted (or reload itself) to pick up the change.
     """
     global agent_config, config, tools, tools_prompt, tools_by_name_map, approval_set
-    global llm, llm_router, llm_with_tools, llm_memory
+    global llm, llm_router, llm_with_tools, llm_memory, llm_redraft
     agent_config = load_config()
     config = agent_config
     tools, tools_prompt = load_capabilities(config.capabilities)
     tools_by_name_map = tools_by_name(tools)
     approval_set = approval_required(config.capabilities)
-    llm, llm_router, llm_with_tools, llm_memory = _build_llm_bindings()
+    llm, llm_router, llm_with_tools, llm_memory, llm_redraft = _build_llm_bindings()
 
 
 def _resolve_route_targets(value: str | None) -> list[str]:
@@ -306,7 +315,10 @@ def category_router(
                                 f"Content: {content}\n\n"
                                 f"Fill in the unresolved placeholders "
                                 f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
-                                f"from the email context below, then call write_email:\n\n{email_markdown}"
+                                f"from the email context below, then call write_email. "
+                                f"Keep the template's closing (\"{content.rstrip().splitlines()[-1] if content.strip() else ''}\") "
+                                f"as the last line of the body — do not add a name, title, or company "
+                                f"after it; the signature is appended automatically.\n\n{email_markdown}"
                             ),
                         }],
                     },
@@ -426,6 +438,21 @@ def _last_write_email_args(messages) -> dict:
     return {}
 
 
+def _synthetic_write_email_message(args: dict) -> AIMessage:
+    """An AI message carrying a write_email tool call produced outside the tool loop."""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_email",
+                "args": args,
+                "id": f"llm_coerced_{uuid.uuid4().hex}",
+                "type": "tool_call",
+            }
+        ],
+    )
+
+
 def _coerce_text_draft_to_tool_call(response, messages, run_id: str):
     """Turn a narrated redraft into a write_email tool call.
 
@@ -472,17 +499,7 @@ def _coerce_text_draft_to_tool_call(response, messages, run_id: str):
         "content": content,
     })
     print("✏️ Redraft returned as text; coerced into a write_email tool call")
-    return AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "write_email",
-                "args": args,
-                "id": f"llm_coerced_{uuid.uuid4().hex}",
-                "type": "tool_call",
-            }
-        ],
-    )
+    return _synthetic_write_email_message(args)
 
 
 # Long feedback conversations accumulate one AI+tool pair per round; on small
@@ -615,7 +632,11 @@ def _parse_decision(raw) -> tuple[str, object]:
         else:
             data = raw_args
     elif type_ == "response":
-        data = raw_args
+        # Optional "draft" carries the user's current (possibly hand-edited)
+        # draft so the redraft starts from what the user sees, not from the
+        # last server-side draft.
+        draft = d.get("draft")
+        data = {"feedback": raw_args, "draft": draft if isinstance(draft, dict) else None}
     else:
         data = None
 
@@ -796,6 +817,8 @@ def tool_node(state: State, store: BaseStore, config=None):
     result = []
     sent = False
     redraft_requested = False
+    redraft_feedback = None
+    redraft_baseline = None
     redraft_cleared = False
     run_id = _run_id_from_config(config)
 
@@ -821,7 +844,12 @@ def tool_node(state: State, store: BaseStore, config=None):
 
     for tool_call in state["messages"][-1].tool_calls:
         name = tool_call["name"]
-        args = _normalize_recipient_args(apply_signature_to_args(name, tool_call["args"]))
+        raw_args = tool_call["args"]
+        # Structure safety net for agent-generated bodies (never touches
+        # human-edited args, which resume through a different path below).
+        if name in {"write_email", "reply_all", "create_draft"} and isinstance(raw_args.get("content"), str):
+            raw_args = {**raw_args, "content": ensure_email_paragraphs(raw_args["content"])}
+        args = _normalize_recipient_args(apply_signature_to_args(name, raw_args))
         authorization_decision = "hitl" if name in approval_set else "allow"
 
         if settings.security_enabled:
@@ -877,13 +905,19 @@ def tool_node(state: State, store: BaseStore, config=None):
                 continue
 
             if decision_type == "response":
-                feedback = decision_data
+                feedback = decision_data.get("feedback") if isinstance(decision_data, dict) else decision_data
+                user_draft = decision_data.get("draft") if isinstance(decision_data, dict) else None
                 redraft_requested = True
+                redraft_feedback = feedback if isinstance(feedback, str) else str(feedback)
+                if user_draft:
+                    redraft_baseline = {k: v for k, v in user_draft.items() if isinstance(v, str)}
                 result.append({
                     "role": "tool",
                     "content": (
                         f"The user requested changes to this draft: {feedback}. "
                         "Revise the draft by calling write_email again for approval. "
+                        "Apply ONLY the requested change; keep everything else in the draft "
+                        "(recipients, subject, wording, paragraph structure) exactly as it was. "
                         "Do not call Done until a revised draft has been approved and sent."
                     ),
                     "tool_call_id": tool_call["id"],
@@ -992,6 +1026,9 @@ def tool_node(state: State, store: BaseStore, config=None):
     update = {"messages": result}
     if redraft_requested:
         update["redraft_requested"] = True
+        if redraft_feedback:
+            update["redraft_feedback"] = redraft_feedback
+        update["redraft_baseline"] = redraft_baseline or {}
     elif redraft_cleared:
         update["redraft_requested"] = False
     if sent:
@@ -1024,7 +1061,7 @@ def force_redraft_after_feedback(state: State, config=None) -> dict:
     return {"messages": messages}
 
 
-def after_tools(state: State) -> Literal["llm_call", "__end__"]:
+def after_tools(state: State) -> Literal["llm_call", "redraft_direct", "__end__"]:
     """Sending, send failures, and auto-organization are terminal."""
     if (
         state.get("email_sent")
@@ -1033,7 +1070,123 @@ def after_tools(state: State) -> Literal["llm_call", "__end__"]:
         or state.get("automation_acted")
     ):
         return END
+    if state.get("redraft_requested"):
+        return "redraft_direct"
     return "llm_call"
+
+
+REDRAFT_GIVE_UP_MESSAGE = (
+    "La retouche automatique a échoué — modifiez le texte directement "
+    "ou renvoyez une instruction plus précise."
+)
+
+# Small models sometimes echo email headers into the body field ("À : …",
+# "Sujet : …", "Corps :"). Strip any such leading header lines.
+_CONTENT_HEADER_LINE = _re.compile(
+    r"^\s*(?:to|à|a|destinataire|subject|sujet|objet|body|corps)\s*:.*$",
+    _re.IGNORECASE,
+)
+
+
+def _strip_content_headers(content: str) -> str:
+    lines = content.splitlines()
+    index = 0
+    while index < len(lines) and (
+        not lines[index].strip() or _CONTENT_HEADER_LINE.match(lines[index])
+    ):
+        index += 1
+    return "\n".join(lines[index:]).strip() if index else content.strip()
+
+
+def _feedback_from_messages(messages) -> str:
+    """Recover the latest feedback text from the message history (fallback path)."""
+    for message in reversed(messages):
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+        if isinstance(content, str) and _FEEDBACK_MARKER in content:
+            feedback = content.split(_FEEDBACK_MARKER, 1)[1]
+            return feedback.split(". Revise the draft by calling write_email", 1)[0].strip()
+    return ""
+
+
+def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
+    """Revise the pending draft with one structured LLM call (no tool-choice loop).
+
+    The generic tool loop lets small local models 'forget' to re-call write_email
+    after feedback, exhausting the nudge budget and giving up. Here the output
+    schema IS the revised draft, so there is no tool decision to get wrong; the
+    synthetic write_email tool call re-enters tool_node for a fresh approval.
+    """
+    previous = _last_write_email_args(state["messages"])
+    baseline = state.get("redraft_baseline") or {}
+    # The user's on-screen draft (with any manual edits) wins over the last
+    # server-side draft so a retouche never resets hand edits.
+    previous = {**previous, **{k: v for k, v in baseline.items() if isinstance(v, str) and v.strip()}}
+    feedback = state.get("redraft_feedback") or _feedback_from_messages(state["messages"])
+    response_prefs = get_memory(
+        store,
+        namespace("response_preferences"),
+        agent_config.agent.response_preferences,
+    )
+    writing_style = get_memory(
+        store,
+        namespace("writing_style"),
+        agent_config.agent.writing_style_default,
+    )
+    run_id = _run_id_from_config(config)
+    # Strip any already-appended signature before the model ever sees the
+    # body: otherwise it tends to "helpfully" add its own closing line on
+    # top of the real signature block, producing a duplicate sign-off. The
+    # canonical signature is re-appended after the LLM call by tool_node's
+    # apply_signature_to_args, exactly once.
+    body_for_prompt = strip_signature(previous.get("content", ""))
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "You revise an email draft according to the user's instruction. "
+                "Apply ONLY the requested change; keep everything else (recipient, "
+                "subject, wording, paragraph structure) exactly as it was. "
+                "HARD RULE: write the revised email in the SAME language as the "
+                "current draft — never translate it. If the draft is in French, "
+                "the revision MUST be in French. "
+                "HARD RULE: do not add a closing sign-off or signature line "
+                "(name, title, company). The signature is appended "
+                "automatically after your revision — never write one yourself. "
+                "Return the complete revised email body, without any signature.\n"
+                f"<Response preferences>\n{response_prefs}\n</Response preferences>\n"
+                f"<Writing style>\n{writing_style}\n</Writing style>"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Current draft:\nTo: {previous.get('to', '')}\n"
+                f"Subject: {previous.get('subject', '')}\n"
+                f"Body (signature already stripped, do not add one back):\n{body_for_prompt}\n\n"
+                f"Instruction from the user: {feedback}"
+            ),
+        },
+    ]
+    for attempt in range(_REDRAFT_MAX_ATTEMPTS):
+        try:
+            revised = _invoke_llm(llm_redraft, prompt, llm_invoke_config(run_id, "redraft"))
+        except Exception as exc:
+            print(f"✏️ Redraft attempt {attempt + 1} failed: {exc}")
+            continue
+        content = _strip_content_headers((getattr(revised, "content", "") or "").strip())
+        if not content:
+            print(f"✏️ Redraft attempt {attempt + 1} returned no draft body")
+            continue
+        # Recipient and subject are NEVER taken from the model: a retouche is a
+        # body revision, and small models corrupt addresses (dropped letters,
+        # translations). Changing to/subject is a direct field edit in the UI.
+        args = _normalize_recipient_args({
+            "to": previous.get("to", ""),
+            "subject": previous.get("subject", ""),
+            "content": content,
+        })
+        return {"messages": [_synthetic_write_email_message(args)]}
+    raise RedraftGiveUpError(REDRAFT_GIVE_UP_MESSAGE)
 
 
 _REDRAFT_NUDGE_SNIPPETS = (
@@ -1218,6 +1371,7 @@ overall_workflow = (
     .add_node("llm_call", _traced_node("llm_call", llm_call))
     .add_node("environment", _traced_node("environment", tool_node))
     .add_node("force_redraft", _traced_node("force_redraft", force_redraft_after_feedback))
+    .add_node("redraft_direct", _traced_node("redraft_direct", redraft_direct))
     .add_edge(START, "automation_router")
     .add_conditional_edges(
         "llm_call",
@@ -1225,10 +1379,11 @@ overall_workflow = (
         {"environment": "environment", "force_redraft": "force_redraft", END: END},
     )
     .add_edge("force_redraft", "llm_call")
+    .add_edge("redraft_direct", "environment")
     .add_conditional_edges(
         "environment",
         after_tools,
-        {"llm_call": "llm_call", END: END},
+        {"llm_call": "llm_call", "redraft_direct": "redraft_direct", END: END},
     )
 )
 

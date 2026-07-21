@@ -5,13 +5,15 @@ import base64
 import contextlib
 import html
 import json
+import traceback
 import uuid
+from datetime import datetime, timezone
 
 import yaml
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -41,7 +43,7 @@ from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
-from src.poller import poll_history, poll_once
+from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once
 from src.memory import namespace, preferences_text, wrap_preferences
 from src.roles import (
     RoleConflictError,
@@ -106,6 +108,7 @@ from src.gmail_client import (
     archive_message,
     fetch_sent,
     gmail_resource,
+    is_stale_history_error,
     list_inbox,
     mark_as_read,
     mark_as_unread,
@@ -139,6 +142,17 @@ from src.tenant import (
 from src.security_client import authorize_action, fetch_policy
 from src.storage import open_graph_storage
 from src.style_learning import analyze_style, build_style_text
+from src.media import (
+    delete_contact_photo,
+    delete_signature_image,
+    find_contact_photo,
+    find_signature_image,
+    save_contact_photo,
+    save_signature_image,
+)
+from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
+from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
+from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
 from src.signature import SignatureConfig, load_signature, save_signature
 
 
@@ -148,18 +162,21 @@ async def _watch_renewal_loop() -> None:
     Gmail watches expire after 7 days, so the mailbox must be re-registered well
     inside that window for push delivery to keep working. Runs only when webhooks
     are enabled; ensure_watch also seeds the per-user historyId baseline.
+    Renewal is expiration-driven: ensure_watches skips instances whose recorded
+    watch expiration is still beyond the renewal margin, so this loop can check
+    frequently without spamming the Gmail API.
     """
-    from src.poller import ensure_watch
+    from src.poller import ensure_watches
 
     setup_gmail_sync()
-    interval = settings.gmail_watch_renew_hours * 3600
+    check_interval = min(3600.0, settings.gmail_watch_renew_margin_hours * 1800)
     while True:
         try:
-            await asyncio.to_thread(ensure_watch)
+            await asyncio.to_thread(ensure_watches)
         except Exception as exc:  # network/credential issues must not kill the API
             print(f"api: gmail watch registration failed: {exc}")
             record_sync_failure(str(exc))
-        await asyncio.sleep(interval)
+        await asyncio.sleep(check_interval)
 
 
 @asynccontextmanager
@@ -270,6 +287,13 @@ class ApprovalInput(BaseModel):
 
 class RespondInput(BaseModel):
     feedback: str
+    # The draft as currently shown/edited in the UI; used as the redraft
+    # baseline so manual edits survive a retouche.
+    draft: dict | None = None
+
+
+class SendModeInput(BaseModel):
+    send_mode: str
 
 
 class GroupInput(BaseModel):
@@ -441,6 +465,8 @@ class RunResponse(BaseModel):
     workflow_dept: str | None = None
     assignee: str | None = None
     action_type: str | None = None
+    confidence: str | None = None
+    review_reason: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     sla_label: str | None = None
@@ -461,12 +487,48 @@ def _derive_action_type(pending_action: list | None, classification: str | None)
         return "reply_draft"
     if name == "forward_email":
         return "notify" if classification == "notify" else "forward"
+    if name == "reply_all":
+        return "reply_all"
+    if name == "create_draft":
+        return "draft"
     if name in ("trash_email", "apply_label", "archive_email"):
         return "organize"
     if "campaign" in name:
         return "campaign"
     print(f"Unknown pending action tool name: {name}")
     return "unknown"
+
+
+def _derive_confidence(record: dict) -> tuple[str, str]:
+    """Heuristic review-confidence band + French reason, from persisted fields only.
+
+    No LLM and no stored column — computed on read like action_type. It gives the
+    reviewer a coarse hint plus a one-line "why is this in the queue".
+    """
+    category = (record.get("category") or "").strip()
+    route_to = record.get("workflow_route_to") or []
+    dept = record.get("workflow_dept")
+    has_workflow = bool(
+        (category and category != "uncategorized")
+        or record.get("template")
+        or record.get("workflow_owner")
+        or route_to
+    )
+    classification = record.get("classification")
+    action_type = record.get("action_type") or _derive_action_type(
+        record.get("pending_action"), classification
+    )
+    if has_workflow:
+        if action_type in ("forward", "notify") and (route_to or dept):
+            target = dept or route_to[0]
+            return "élevée", f"Règle de routage : {target}".strip()
+        display = record.get("category_display_name") or category or "workflow"
+        return "élevée", f"Workflow reconnu : {display}".strip()
+    if classification == "respond":
+        return "moyenne", "Brouillon rédigé par l'agent, aucune règle déterministe."
+    if classification == "notify" or action_type == "unknown":
+        return "faible", "Classé « à notifier » sans règle claire — à vérifier."
+    return "moyenne", "Validation requise avant envoi."
 
 
 def _thread_config(run_id: str) -> dict:
@@ -477,6 +539,18 @@ def _format(result: dict, run_id: str) -> RunResponse:
     """Turn a graph result into a response — paused on approval, or completed."""
     interrupts = result.get("__interrupt__")
     if interrupts:
+        action_type = _derive_action_type(interrupts[0].value, result.get("classification_decision"))
+        confidence, review_reason = _derive_confidence({
+            "pending_action": interrupts[0].value,
+            "classification": result.get("classification_decision"),
+            "category": result.get("category"),
+            "category_display_name": result.get("category_display_name"),
+            "template": result.get("template"),
+            "workflow_owner": result.get("workflow_owner"),
+            "workflow_route_to": result.get("workflow_route_to") or [],
+            "workflow_dept": result.get("workflow_dept"),
+            "action_type": action_type,
+        })
         return RunResponse(
             run_id=run_id,
             status="pending_approval",
@@ -490,7 +564,9 @@ def _format(result: dict, run_id: str) -> RunResponse:
             workflow_route_to=result.get("workflow_route_to") or [],
             workflow_dept=result.get("workflow_dept"),
             assignee=result.get("assignee"),
-            action_type=_derive_action_type(interrupts[0].value, result.get("classification_decision")),
+            action_type=action_type,
+            confidence=confidence,
+            review_reason=review_reason,
         )
     if result.get("email_send_failed"):
         return RunResponse(
@@ -570,6 +646,9 @@ def _annotate_run_record(
 ) -> dict:
     enriched = dict(record)
     enriched["action_type"] = _derive_action_type(record.get("pending_action"), record.get("classification"))
+    confidence, review_reason = _derive_confidence(enriched)
+    enriched["confidence"] = confidence
+    enriched["review_reason"] = review_reason
     if record.get("status") == "pending_approval":
         categories_cfg = categories_cfg or load_categories(agent_instance_id=current_agent_instance_id())
         escalation_state = escalation_state or load_escalation_state()
@@ -603,6 +682,8 @@ def _run_response_from_record(record: dict) -> RunResponse:
         workflow_dept=record.get("workflow_dept"),
         assignee=record.get("assignee"),
         action_type=record.get("action_type"),
+        confidence=record.get("confidence"),
+        review_reason=record.get("review_reason"),
         created_at=record.get("created_at"),
         updated_at=record.get("updated_at"),
         sla_label=record.get("sla_label"),
@@ -661,6 +742,12 @@ def _pending_response_after_decision_error(run_id: str, exc: Exception, action: 
     if not record or record.get("status") != "pending_approval":
         return None
     print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
+    # The redraft give-up carries a user-facing French message; show it as-is
+    # instead of wrapping it in the technical English envelope.
+    if isinstance(exc, graph_module.RedraftGiveUpError):
+        error_text = str(exc)
+    else:
+        error_text = f"Could not complete {action}; draft is still pending. {type(exc).__name__}: {exc}"
     return RunResponse(
         run_id=run_id,
         status="pending_approval",
@@ -673,7 +760,7 @@ def _pending_response_after_decision_error(run_id: str, exc: Exception, action: 
         workflow_owner=record.get("workflow_owner"),
         workflow_approver=record.get("workflow_approver"),
         workflow_route_to=record.get("workflow_route_to") or [],
-        error=f"Could not complete {action}; draft is still pending. {type(exc).__name__}: {exc}",
+        error=error_text,
     )
 
 
@@ -851,28 +938,7 @@ def _decode_pubsub_data(message: dict) -> dict:
     return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
 
 
-def _http_status_code(exc: Exception) -> int | None:
-    response = getattr(exc, "resp", None)
-    status = getattr(response, "status", None)
-    if status is None:
-        status = getattr(exc, "status_code", None)
-    try:
-        return int(status) if status is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _is_stale_history_error(exc: Exception) -> bool:
-    status = _http_status_code(exc)
-    if status in {404, 410}:
-        return True
-    message = str(exc).lower()
-    return "starthistoryid" in message and any(marker in message for marker in (
-        "too old",
-        "not found",
-        "expired",
-        "invalid",
-    ))
+_is_stale_history_error = is_stale_history_error
 
 
 def _require_webhook_secret(request: Request) -> None:
@@ -1021,6 +1087,9 @@ async def retention_dry_run(request: Request) -> dict:
 @app.post("/retention/run")
 async def retention_execute(request: Request) -> dict:
     _require_instance_role(request, "owner")
+    retention_config = await asyncio.to_thread(load_retention_settings)
+    if retention_config.retention_days <= 0:
+        raise HTTPException(status_code=400, detail="retention disabled; set retention_days > 0 before executing")
     return await asyncio.to_thread(run_retention)
 
 
@@ -1071,15 +1140,16 @@ async def gmail_connect_callback(code: str | None = None, state: str | None = No
         exchange_gmail_oauth_code(code, payload)
         record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
+        print(f"api: gmail oauth callback rejected: {exc}")
         return _gmail_callback_page("error", str(exc))
     except Exception as exc:
         # Token exchange reaches out to Google; a transient network failure (or a
         # stale/replayed single-use code) must not surface as a raw 500 in the popup.
-        print(f"api: gmail oauth callback failed: {exc}")
+        print(f"api: gmail oauth callback failed: {exc!r}\n{traceback.format_exc()}")
         return _gmail_callback_page(
             "error",
-            "Could not finish connecting to Google (network issue or the consent "
-            "expired). Close this window and click Connect Gmail again.",
+            "Could not finish connecting to Google "
+            f"({type(exc).__name__}: {exc}). Close this window and click Connect Gmail again.",
         )
     return _gmail_callback_page(
         "connected",
@@ -1395,6 +1465,41 @@ async def delete_contact_entry(email: str, request: Request) -> dict:
         "agent_instance_id": current_agent_instance_id(),
         "deleted": email.strip().lower(),
         "storage": "contacts-directory",
+    }
+
+
+@app.post("/contacts/{email}/photo")
+async def upload_contact_photo(email: str, request: Request, file: UploadFile = File(...)) -> dict:
+    _require_instance_role(request, "owner")
+    data = await file.read()
+    try:
+        path = await asyncio.to_thread(save_contact_photo, email, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "email": email.strip().lower(),
+        "stored": True,
+        "size": path.stat().st_size,
+    }
+
+
+@app.get("/contacts/{email}/photo")
+async def get_contact_photo(email: str) -> FileResponse:
+    path = find_contact_photo(email)
+    if path is None:
+        raise HTTPException(status_code=404, detail="No photo for this contact")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.delete("/contacts/{email}/photo")
+async def remove_contact_photo(email: str, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    removed = delete_contact_photo(email)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "email": email.strip().lower(),
+        "removed": removed,
     }
 
 
@@ -1734,7 +1839,8 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
     if record.get("missing_variables"):
         raise HTTPException(status_code=422, detail="Variables manquantes détectées avant l'envoi")
 
-    resource = None if settings.dry_run else gmail_resource()
+    campaign_dry_run = effective_dry_run()
+    resource = None if campaign_dry_run else gmail_resource()
     sent, denied, failed = [], [], []
     for index, email in enumerate(record["rendered"]):
         if settings.security_enabled:
@@ -1760,7 +1866,7 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
             failed.append({"email": email["email"], "error": str(exc)})
 
     record["status"] = "sent"
-    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": settings.dry_run}
+    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": campaign_dry_run}
     summary = _campaign_summary(campaign_id, record)
     _pending_campaigns.pop(campaign_id, None)
     return summary
@@ -2091,6 +2197,104 @@ async def update_agent_config(body: dict) -> dict:
     return cfg.model_dump()
 
 
+@app.get("/persona")
+async def get_persona() -> dict:
+    persona = load_persona()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **persona.model_dump(),
+        "compiled": compiled_preview(persona),
+    }
+
+
+@app.put("/persona")
+async def update_persona(request: Request, body: Persona) -> dict:
+    """Save the persona and compile it into the agent behavior texts.
+
+    Compilation rewrites background / triage_instructions / response_preferences
+    in the instance config (the graph consumes those unchanged); an empty
+    persona is saved but leaves the config untouched.
+    """
+    _require_instance_role(request, "owner")
+    save_persona(body)
+    compiled = compiled_preview(body)
+    if not body.is_empty():
+        cfg = load_config()
+        cfg.agent.background = compiled["background"]
+        cfg.agent.triage_instructions = compiled["triage_instructions"]
+        cfg.agent.response_preferences = compiled["response_preferences"]
+        write_instance_text(
+            "config", yaml.safe_dump(cfg.model_dump(), sort_keys=False, allow_unicode=True), DEFAULT_CONFIG_PATH
+        )
+        reload_config()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **body.model_dump(),
+        "compiled": compiled,
+    }
+
+
+@app.post("/persona/suggest")
+async def suggest_persona_endpoint(request: Request) -> dict:
+    """Analyse the mailbox and return persona prefill suggestions.
+
+    Read-only: nothing is saved — the UI fills the form and the owner decides.
+    """
+    _require_instance_role(request, "owner")
+    cfg = load_config()
+    user_id = current_user_id()
+    try:
+        resource = await asyncio.to_thread(gmail_resource)
+        sent_samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        received = await asyncio.to_thread(list_inbox, 25, resource)
+    except Exception as exc:
+        print(f"api: persona suggestion Gmail read unavailable for user {user_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+    if not sent_samples and not received:
+        raise HTTPException(status_code=422, detail="No usable mailbox samples found for persona suggestions")
+    try:
+        suggestion = await asyncio.to_thread(
+            suggest_persona, sent_samples, received, graph_module.llm
+        )
+    except Exception as exc:
+        print(f"api: persona suggestion analysis failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=503, detail="Persona analysis failed with the configured LLM") from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "suggestion": suggestion.model_dump(),
+        "sent_sample_count": len(sent_samples),
+        "received_sample_count": len(received),
+    }
+
+
+@app.get("/send-mode")
+async def get_send_mode_endpoint() -> dict:
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "send_mode": get_send_mode(),
+        "dry_run_lock": settings.dry_run,
+        "effective_dry_run": effective_dry_run(),
+    }
+
+
+@app.put("/send-mode")
+async def update_send_mode(request: Request, body: SendModeInput) -> dict:
+    _require_instance_role(request, "owner")
+    try:
+        mode = set_send_mode(body.send_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "send_mode": mode,
+        "dry_run_lock": settings.dry_run,
+        "effective_dry_run": effective_dry_run(),
+    }
+
+
 @app.get("/signature")
 async def get_signature() -> dict:
     signature = load_signature()
@@ -2103,6 +2307,38 @@ async def update_signature(body: SignatureConfig) -> dict:
     return {"agent_instance_id": current_agent_instance_id(), **body.model_dump()}
 
 
+@app.post("/signature/image")
+async def upload_signature_image(request: Request, file: UploadFile = File(...)) -> dict:
+    _require_instance_role(request, "owner")
+    data = await file.read()
+    try:
+        path = await asyncio.to_thread(save_signature_image, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "stored": True,
+        "filename": path.name,
+        "size": path.stat().st_size,
+    }
+
+
+@app.get("/signature/image")
+async def get_signature_image() -> FileResponse:
+    path = find_signature_image()
+    if path is None:
+        raise HTTPException(status_code=404, detail="No signature image for this instance")
+    media_type = "image/png" if path.suffix == ".png" else "image/jpeg"
+    return FileResponse(path, media_type=media_type)
+
+
+@app.delete("/signature/image")
+async def remove_signature_image(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    removed = delete_signature_image()
+    return {"agent_instance_id": current_agent_instance_id(), "removed": removed}
+
+
 @app.get("/memory")
 async def get_preferences(request: Request) -> dict:
     cfg = load_config()
@@ -2112,6 +2348,51 @@ async def get_preferences(request: Request) -> dict:
     return {
         "triage_preferences": preferences_text(triage.value) if triage else cfg.agent.triage_instructions,
         "response_preferences": preferences_text(response.value) if response else cfg.agent.response_preferences,
+    }
+
+
+async def _memory_kind_text(request: Request, kind: str) -> str:
+    cfg = load_config()
+    store = request.app.state.store
+    item = await store.aget(namespace(kind), "user_preferences")
+    if item:
+        return preferences_text(item.value)
+    defaults = {
+        "triage_preferences": cfg.agent.triage_instructions,
+        "response_preferences": cfg.agent.response_preferences,
+        "writing_style": cfg.agent.writing_style_default,
+    }
+    return defaults.get(kind, "")
+
+
+@app.get("/memory/summary")
+async def memory_summary(request: Request) -> dict:
+    """Readable memory: one deletable French line per learned item, per kind."""
+    summary: dict = {"agent_instance_id": current_agent_instance_id()}
+    for kind in MEMORY_KINDS:
+        text = await _memory_kind_text(request, kind)
+        summary[kind] = await asyncio.to_thread(
+            summarize_kind, kind, text, graph_module.llm
+        )
+    return summary
+
+
+@app.delete("/memory/item")
+async def delete_memory_item(request: Request, kind: str, id: str) -> dict:
+    _require_instance_role(request, "owner")
+    if kind not in MEMORY_KINDS:
+        raise HTTPException(status_code=400, detail=f"kind must be one of {MEMORY_KINDS}")
+    text = await _memory_kind_text(request, kind)
+    updated = remove_item(kind, text, id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="memory item not found")
+    store = request.app.state.store
+    await store.aput(namespace(kind), "user_preferences", wrap_preferences(updated))
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "kind": kind,
+        "removed": id,
+        "remaining": len(memory_items(kind, updated)),
     }
 
 
@@ -2268,6 +2549,33 @@ async def runs(
 async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=100)) -> dict:
     """Process unread Gmail messages now so validation reflects fresh mail."""
     user_id = current_user_id()
+    # Manual sync must respect the Gmail rate-limit cooldown: calling Gmail
+    # during a served ban only extends it. Two signals: the in-process pause
+    # (API-triggered 429s) and the shared sync_status written by the poller
+    # container (its last failure being a fresh unresolved rate-limit error).
+    pause_remaining = gmail_rate_limit_pause_remaining()
+    if pause_remaining <= 0:
+        status_snapshot = get_sync_status()
+        err = (status_snapshot.get("last_error") or "").lower()
+        if "ratelimitexceeded" in err or "rate limit" in err or "too many requests" in err:
+            last_failure = status_snapshot.get("last_failure_at") or ""
+            last_success = status_snapshot.get("last_success_at") or ""
+            if last_failure and last_failure > last_success:
+                try:
+                    failed_at = datetime.fromisoformat(last_failure.replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - failed_at).total_seconds()
+                except ValueError:
+                    age = 0.0
+                if age < 600:
+                    pause_remaining = 600 - age
+    if pause_remaining > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Limite Gmail atteinte côté Google. La synchronisation est en pause et "
+                f"reprendra automatiquement dans environ {int(pause_remaining // 60) + 1} min."
+            ),
+        )
     try:
         resource = await asyncio.to_thread(gmail_resource)
     except Exception as exc:
@@ -2579,20 +2887,16 @@ async def run_stream(request: Request, email: EmailInput) -> StreamingResponse:
     return StreamingResponse(_stream_run_response(response), media_type="text/event-stream")
 
 
-@app.post("/run/{run_id}/approve", response_model=RunResponse)
-async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
-    _require_instance_role(request, "approver")
-    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
-    _require_dept_access(request, record)
-    graph = request.app.state.graph
+async def _approve_run(graph, run_id: str, args) -> RunResponse:
+    """Resume a paused run with an approve decision. Authorization is the caller's job."""
     config = await _require_run(graph, run_id)
     try:
         result = await _invoke_graph(
             graph,
-            Command(resume={"type": "approve", "args": approval.args}), config, reload_runtime_config=False
+            Command(resume={"type": "approve", "args": args}), config, reload_runtime_config=False
         )
     except Exception as exc:
-        response = _execute_pending_action(run_id, approval.args)
+        response = _execute_pending_action(run_id, args)
         if response is not None:
             print(f"api: approve graph resume failed for run {run_id}; used pending action fallback: {exc}")
             return response
@@ -2605,12 +2909,8 @@ async def approve(request: Request, run_id: str, approval: ApprovalInput) -> Run
     return response
 
 
-@app.post("/run/{run_id}/reject", response_model=RunResponse)
-async def reject(request: Request, run_id: str) -> RunResponse:
-    _require_instance_role(request, "approver")
-    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
-    _require_dept_access(request, record)
-    graph = request.app.state.graph
+async def _reject_run(graph, run_id: str) -> RunResponse:
+    """Resume a paused run with a reject decision. Authorization is the caller's job."""
     config = await _require_run(graph, run_id)
     try:
         result = await _invoke_graph(
@@ -2631,6 +2931,60 @@ async def reject(request: Request, run_id: str) -> RunResponse:
     return response
 
 
+@app.post("/run/{run_id}/approve", response_model=RunResponse)
+async def approve(request: Request, run_id: str, approval: ApprovalInput) -> RunResponse:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    return await _approve_run(request.app.state.graph, run_id, approval.args)
+
+
+@app.post("/run/{run_id}/reject", response_model=RunResponse)
+async def reject(request: Request, run_id: str) -> RunResponse:
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    return await _reject_run(request.app.state.graph, run_id)
+
+
+class BulkDecisionInput(BaseModel):
+    run_ids: list[str]
+    decision: str  # "approve" | "reject"
+
+
+@app.post("/runs/bulk")
+async def bulk_decision(request: Request, body: BulkDecisionInput) -> dict:
+    """Approve or reject several pending runs in one call.
+
+    Each run is resumed through the same gated per-run path, so external sends
+    stay individually authorized; a run the caller can't access (dept scope) or
+    that isn't resolvable is skipped with an error entry, others still process.
+    """
+    _require_instance_role(request, "approver")
+    if body.decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be 'approve' or 'reject'")
+    graph = request.app.state.graph
+    results: list[dict] = []
+    for run_id in body.run_ids:
+        record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+        try:
+            _require_dept_access(request, record)
+        except HTTPException as exc:
+            results.append({"run_id": run_id, "status": "denied", "error": str(exc.detail)})
+            continue
+        try:
+            if body.decision == "approve":
+                response = await _approve_run(graph, run_id, None)
+            else:
+                response = await _reject_run(graph, run_id)
+            results.append({"run_id": run_id, "status": response.status, "error": response.error})
+        except HTTPException as exc:
+            results.append({"run_id": run_id, "status": "error", "error": str(exc.detail)})
+        except Exception as exc:
+            results.append({"run_id": run_id, "status": "error", "error": str(exc)})
+    return {"results": results}
+
+
 @app.post("/run/{run_id}/respond", response_model=RunResponse)
 async def respond(request: Request, run_id: str, body: RespondInput) -> RunResponse:
     _require_instance_role(request, "approver")
@@ -2641,7 +2995,7 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     try:
         result = await _invoke_graph(
             graph,
-            Command(resume=[{"type": "response", "args": body.feedback}]), config, reload_runtime_config=False
+            Command(resume=[{"type": "response", "args": body.feedback, "draft": body.draft}]), config, reload_runtime_config=False
         )
     except Exception as exc:
         response = _pending_response_after_decision_error(run_id, exc, "regenerate draft")
@@ -2653,7 +3007,7 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     return response
 
 
-async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str):
+async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str, draft: dict | None = None):
     yield _sse_event("status", {
         "run_id": run_id,
         "message": "L’agent rédige une nouvelle version du brouillon...",
@@ -2661,7 +3015,7 @@ async def _respond_stream_events(graph, config: dict, run_id: str, feedback: str
     try:
         result = await _invoke_graph(
             graph,
-            Command(resume=[{"type": "response", "args": feedback}]), config, reload_runtime_config=False
+            Command(resume=[{"type": "response", "args": feedback, "draft": draft}]), config, reload_runtime_config=False
         )
         response = _format(result, run_id)
         _record_response(response)
@@ -2682,4 +3036,4 @@ async def respond_stream(request: Request, run_id: str, body: RespondInput) -> S
     _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
-    return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback), media_type="text/event-stream")
+    return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback, body.draft), media_type="text/event-stream")

@@ -156,9 +156,8 @@ def test_api_respond_forces_pending_when_model_tries_done(
         tool_sequence=[
             ai_tool_call("write_email", DRAFT, "c1"),
             ai_tool_call("Done", {"done": True}, "c_done"),
-            ai_tool_call("write_email", DRAFT2, "c2"),
-            ai_tool_call("Done", {"done": True}, "c3"),
         ],
+        redraft_sequence=[DRAFT2],
     )
 
     run = client.post("/run", json=respond_email).json()
@@ -218,3 +217,80 @@ def test_reject_can_record_rule_suggestion(fake_llms, respond_email, monkeypatch
         "correction_type": "ignored_draft",
         "details": {"tool": "write_email"},
     }]
+
+
+def test_bulk_approve_two_runs(client, fake_llms, respond_email):
+    # Both runs are created (each draws write_email) before any approval; the
+    # approvals then draw Done. _FakeToolLLM repeats the last entry.
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("write_email", DRAFT, "c2"),
+            ai_tool_call("Done", {"done": True}, "c3"),
+        ],
+    )
+    run_ids = []
+    for _ in range(2):
+        run = client.post("/run", json=respond_email).json()
+        assert run["status"] == "pending_approval"
+        run_ids.append(run["run_id"])
+
+    body = client.post("/runs/bulk", json={"run_ids": run_ids, "decision": "approve"}).json()
+    assert len(body["results"]) == 2
+    assert all(r["status"] == "completed" for r in body["results"])
+
+
+def test_bulk_reject_two_runs(client, fake_llms, respond_email):
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("write_email", DRAFT, "c2"),
+            ai_tool_call("Done", {"done": True}, "c3"),
+        ],
+    )
+    run_ids = []
+    for _ in range(2):
+        run = client.post("/run", json=respond_email).json()
+        run_ids.append(run["run_id"])
+
+    body = client.post("/runs/bulk", json={"run_ids": run_ids, "decision": "reject"}).json()
+    assert len(body["results"]) == 2
+    assert all(r["status"] in ("completed", "rejected") for r in body["results"])
+
+
+def test_bulk_rejects_invalid_decision(client):
+    resp = client.post("/runs/bulk", json={"run_ids": ["x"], "decision": "maybe"})
+    assert resp.status_code == 400
+
+
+def test_bulk_dept_forbidden_run_is_skipped_others_process(client, fake_llms, respond_email, monkeypatch):
+    import src.api as api
+
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", DRAFT, "c1"),
+            ai_tool_call("Done", {"done": True}, "c2"),
+        ],
+    )
+    ok = client.post("/run", json=respond_email).json()["run_id"]
+
+    real_get = api.get_run_record
+
+    def fake_get(run_id, user_id=None, agent_instance_id=None):
+        if run_id == "forbidden":
+            return {"run_id": "forbidden", "status": "pending_approval", "workflow_dept": "Finance"}
+        return real_get(run_id, user_id=user_id, agent_instance_id=agent_instance_id)
+
+    monkeypatch.setattr(api, "get_run_record", fake_get)
+
+    body = client.post(
+        "/runs/bulk",
+        json={"run_ids": ["forbidden", ok], "decision": "approve"},
+        headers={"X-Agora-User-Dept": "RH"},
+    ).json()
+    by_id = {r["run_id"]: r for r in body["results"]}
+    assert by_id["forbidden"]["status"] == "denied"
+    assert by_id[ok]["status"] == "completed"

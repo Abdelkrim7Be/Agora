@@ -95,6 +95,10 @@ public class UserController {
 
     private ResponseEntity<?> setEnabled(Long id, boolean enabled, Authentication auth, String action) {
         return users.findById(id).map(u -> {
+            if (!enabled && auth != null && u.getUsername().equals(auth.getName())) {
+                audit(auth, action, "/users/" + id, "denied");
+                return ResponseEntity.badRequest().body(java.util.Map.of("error", "cannot disable current user"));
+            }
             u.setEnabled(enabled);
             users.save(u);
             audit(auth, action, "/users/" + id, "success");

@@ -7,7 +7,6 @@ from src.config import SERVICE_ROOT
 from src.instance_config import read_instance_text, write_instance_text
 
 DEFAULT_SIGNATURE_PATH = SERVICE_ROOT / "signature.yaml"
-SIGNATURE_MARKER = "<!-- agora-signature -->"
 SIGNATURE_TOOLS = {"write_email", "reply_all", "create_draft"}
 
 
@@ -16,6 +15,41 @@ class SignatureConfig(BaseModel):
     text: str = ""
     image_url: str | None = None
     image_alt: str = "Signature"
+    # Structured fields (§4): when any is filled they compose the signature
+    # block; the legacy free-text `text` keeps working unchanged when they are
+    # all empty.
+    first_name: str = ""
+    last_name: str = ""
+    title: str = ""
+    company: str = ""
+    phone: str = ""
+    website: str = ""
+
+    def has_structured_fields(self) -> bool:
+        return any(
+            value.strip()
+            for value in (
+                self.first_name, self.last_name, self.title,
+                self.company, self.phone, self.website,
+            )
+        )
+
+    def structured_lines(self) -> list[str]:
+        """The signature block composed from structured fields, line by line."""
+        lines: list[str] = []
+        name = " ".join(part for part in (self.first_name.strip(), self.last_name.strip()) if part)
+        if name:
+            lines.append(name)
+        title_company = " — ".join(
+            part for part in (self.title.strip(), self.company.strip()) if part
+        )
+        if title_company:
+            lines.append(title_company)
+        if self.phone.strip():
+            lines.append(f"Tél. : {self.phone.strip()}")
+        if self.website.strip():
+            lines.append(self.website.strip())
+        return lines
 
 
 def load_signature(agent_instance_id: str | None = None) -> SignatureConfig:
@@ -33,25 +67,73 @@ def save_signature(signature: SignatureConfig, agent_instance_id: str | None = N
     )
 
 
+def _signature_block(signature: SignatureConfig) -> str | None:
+    """Compose the RFC-3676-delimited signature block, or None if empty.
+
+    No internal marker is embedded here on purpose: this text is shown
+    verbatim to the human approver and mailed as-is, so it must contain
+    nothing but the actual signature. Idempotency (append/strip) instead
+    compares against this exact composed block.
+    """
+    from src.media import SIGNATURE_CID, find_signature_image
+
+    structured = signature.structured_lines()
+    text = signature.text.strip()
+    image_url = (signature.image_url or "").strip()
+    stored_image = find_signature_image() is not None
+    if not structured and not text and not image_url and not stored_image:
+        return None
+
+    parts = []
+    if structured:
+        # Structured fields compose the block; the free text becomes an
+        # optional extra line under it (e.g. a tagline).
+        parts.extend(structured)
+        if text:
+            parts.append(text)
+    elif text:
+        parts.append(text)
+    alt = (signature.image_alt or "Signature").strip() or "Signature"
+    if stored_image:
+        # Uploaded image is embedded as an inline cid attachment at send time —
+        # no external link that can break or get blocked by the mail client.
+        parts.append(f"![{alt}](cid:{SIGNATURE_CID})")
+    elif image_url:
+        parts.append(f"![{alt}]({image_url})")
+
+    return "-- \n" + "\n".join(parts)
+
+
 def append_signature(content: str, signature: SignatureConfig | None = None) -> str:
     signature = signature or load_signature()
     body = str(content or "")
-    if not signature.enabled or SIGNATURE_MARKER in body:
+    if not signature.enabled:
         return body
 
-    text = signature.text.strip()
-    image_url = (signature.image_url or "").strip()
-    if not text and not image_url:
+    block = _signature_block(signature)
+    if not block or body.rstrip().endswith(block):
         return body
 
-    parts = []
-    if text:
-        parts.append(text)
-    if image_url:
-        alt = (signature.image_alt or "Signature").strip() or "Signature"
-        parts.append(f"![{alt}]({image_url})")
+    return f"{body.rstrip()}\n\n{block}"
 
-    return f"{body.rstrip()}\n\n{SIGNATURE_MARKER}\n-- \n" + "\n".join(parts)
+
+def strip_signature(content: str, signature: SignatureConfig | None = None) -> str:
+    """Remove a previously-appended signature block, if present.
+
+    Used before handing a draft body to an LLM (e.g. for a retouche) so the
+    model edits only the human-authored text and never sees, echoes, or
+    improvises around the signature.
+    """
+    signature = signature or load_signature()
+    body = str(content or "")
+    block = _signature_block(signature)
+    if not block:
+        return body
+
+    stripped = body.rstrip()
+    if stripped.endswith(block):
+        return stripped[: -len(block)].rstrip()
+    return body
 
 
 def apply_signature_to_args(tool_name: str, args: dict, signature: SignatureConfig | None = None) -> dict:

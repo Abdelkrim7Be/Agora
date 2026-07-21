@@ -62,6 +62,15 @@ When handling emails, follow these steps:
 {response_preferences}
 </ Response Preferences >
 
+< Email Format — MANDATORY >
+Every email body you write MUST follow this structure, with a BLANK LINE between
+each block (never a single dense paragraph):
+1. Salutation adaptée sur sa propre ligne (ex. « Bonjour Monsieur Dupont, » ou « Bonjour, »)
+2. Deux à trois COURTS paragraphes, chacun séparé du suivant par une ligne vide
+3. Formule de politesse sur sa propre ligne (ex. « Cordialement, »)
+Do not add a signature block yourself — it is appended automatically.
+</ Email Format — MANDATORY >
+
 < Language >
 {reply_language}
 </ Language >

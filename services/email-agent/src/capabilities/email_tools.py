@@ -4,7 +4,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from src.capabilities import current_email_id, hitl_approved
-from src.config import settings
+from src.config import settings  # noqa: F401 — tests patch dry_run through this module
+from src.send_mode import SIMULATED_NOTE, effective_dry_run
 
 
 def _message_id() -> str:
@@ -26,8 +27,8 @@ def _require_approval(tool_name: str) -> None:
 @tool
 def write_email(to: str, subject: str, content: str) -> str:
     """Write and send an email."""
-    if settings.dry_run:
-        return f"Email sent to {to} with subject '{subject}' [dry run]"
+    if effective_dry_run():
+        return f"Email sent to {to} with subject '{subject}' ({SIMULATED_NOTE})"
     _require_approval("write_email")
     from src.gmail_client import send_message
 
@@ -48,8 +49,8 @@ def forward_email(to: str | list[str], note: str = "") -> str:
     if not recipients:
         return "No recipients provided to forward to."
 
-    if settings.dry_run:
-        return f"Forwarded current email to {', '.join(recipients)} [dry run]"
+    if effective_dry_run():
+        return f"Forwarded current email to {', '.join(recipients)} ({SIMULATED_NOTE})"
     _require_approval("forward_email")
 
     from src.gmail_client import forward_message
@@ -70,8 +71,8 @@ def forward_email(to: str | list[str], note: str = "") -> str:
 def reply_all(content: str) -> str:
     """Reply to all participants on the current email thread."""
     message_id = _message_id()
-    if settings.dry_run:
-        return "Reply-all sent on the current thread [dry run]"
+    if effective_dry_run():
+        return f"Reply-all sent on the current thread ({SIMULATED_NOTE})"
     _require_approval("reply_all")
 
     from src.gmail_client import reply_all_message

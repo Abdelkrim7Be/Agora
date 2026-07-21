@@ -138,6 +138,25 @@ class AuditTest {
     }
 
     @Test
+    void routine_run_polling_is_not_written_to_audit() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/runs"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"runs\":[],\"has_more\":false}")));
+
+        String token = login("owner", "ownerpass");
+
+        mockMvc.perform(get("/api/agent/runs?status=pending_approval")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+
+        assertThat(auditRepository.findAll()).noneMatch(e ->
+                "forwarded".equals(e.getOutcome()) && "/api/agent/runs".equals(e.getPath()));
+    }
+
+
+    @Test
     void login_failure_writes_row() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("username", "owner", "password", "wrongpass"));
         mockMvc.perform(post("/auth/login")

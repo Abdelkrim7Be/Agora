@@ -13,8 +13,19 @@ from src.config import SERVICE_ROOT, settings
 from src.metrics import inc_counter
 
 REQUIRED_LLM_ROLES = ("triage", "draft", "reason", "memory_style")
-DEFAULT_LLM_PROFILE = "dev"
+# Local-first: the platform runs on the host Ollama by default; cloud profiles
+# (dev=groq, prod=litellm) stay available but must be selected explicitly.
+DEFAULT_LLM_PROFILE = "local"
 DEFAULT_LLM_CONFIG_DIR = SERVICE_ROOT / "config"
+
+
+class RoleConfig(BaseModel):
+    """Per-role override: a role may pin its own model params (e.g. a more
+    creative draft role) while inheriting profile defaults for the rest."""
+
+    model: str
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class LlmProfile(BaseModel):
@@ -22,8 +33,17 @@ class LlmProfile(BaseModel):
     temperature: float = 0.0
     max_tokens: int | None = None
     timeout: float | None = None
-    roles: dict[str, str]
+    # A role entry is either a bare model string (legacy) or a RoleConfig mapping.
+    roles: dict[str, str | RoleConfig]
     fallbacks: dict[str, list[str]] = Field(default_factory=dict)
+
+    def role_config(self, role: str) -> RoleConfig | None:
+        entry = self.roles.get(role)
+        if entry is None:
+            return None
+        if isinstance(entry, str):
+            return RoleConfig(model=entry) if entry else None
+        return entry if entry.model else None
 
 
 class FallbackChatModel:
@@ -126,7 +146,7 @@ def load_llm_profile(
 
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     profile = LlmProfile(**data)
-    missing_roles = [role for role in REQUIRED_LLM_ROLES if not profile.roles.get(role)]
+    missing_roles = [role for role in REQUIRED_LLM_ROLES if profile.role_config(role) is None]
     if missing_roles:
         listed = ", ".join(missing_roles)
         raise ValueError(f"LLM profile {path} is missing roles: {listed}")
@@ -144,38 +164,40 @@ def get_llm_model_name(
     config_path: str | Path | None = None,
 ) -> str:
     profile = load_llm_profile(profile_name=profile_name, config_path=config_path)
-    model_name = profile.roles.get(role)
-    if model_name:
-        return model_name
+    role_cfg = profile.role_config(role)
+    if role_cfg:
+        return role_cfg.model
     supported = ", ".join(REQUIRED_LLM_ROLES)
     raise ValueError(f"Unsupported LLM role '{role}'. Expected one of: {supported}")
 
 
-def _model_kwargs(profile: LlmProfile) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"temperature": profile.temperature}
+def _model_kwargs(profile: LlmProfile, role_cfg: RoleConfig | None = None) -> dict[str, Any]:
+    temperature = role_cfg.temperature if role_cfg and role_cfg.temperature is not None else profile.temperature
+    max_tokens = role_cfg.max_tokens if role_cfg and role_cfg.max_tokens is not None else profile.max_tokens
+    kwargs: dict[str, Any] = {"temperature": temperature}
     if profile.endpoint:
         kwargs["base_url"] = profile.endpoint
-    if profile.max_tokens is not None:
+    if max_tokens is not None:
         if profile.endpoint:
             # langchain-openai serializes max_tokens as max_completion_tokens,
             # which OpenAI-compatible backends like Ollama ignore; send the raw
             # field via extra_body so local models are actually capped.
-            kwargs["extra_body"] = {"max_tokens": profile.max_tokens}
+            kwargs["extra_body"] = {"max_tokens": max_tokens}
         else:
-            kwargs["max_tokens"] = profile.max_tokens
+            kwargs["max_tokens"] = max_tokens
     if profile.timeout is not None:
         kwargs["timeout"] = profile.timeout
     return kwargs
 
 
 def _role_models(profile: LlmProfile, role: str) -> list[str]:
-    model_name = profile.roles.get(role)
-    if not model_name:
+    role_cfg = profile.role_config(role)
+    if role_cfg is None:
         supported = ", ".join(REQUIRED_LLM_ROLES)
         raise ValueError(f"Unsupported LLM role '{role}'. Expected one of: {supported}")
     seen: set[str] = set()
     ordered: list[str] = []
-    for item in [model_name, *(profile.fallbacks.get(role) or [])]:
+    for item in [role_cfg.model, *(profile.fallbacks.get(role) or [])]:
         if not item or item in seen:
             continue
         seen.add(item)
@@ -191,7 +213,7 @@ def get_llm(
 ):
     profile = load_llm_profile(profile_name=profile_name, config_path=config_path)
     model_names = _role_models(profile, role)
-    kwargs = _model_kwargs(profile)
+    kwargs = _model_kwargs(profile, profile.role_config(role))
     built = [(model_name, init_chat_model(model_name, **kwargs)) for model_name in model_names]
     if len(built) == 1:
         return built[0][1]
