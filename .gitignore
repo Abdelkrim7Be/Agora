@@ -78,10 +78,11 @@ security-phase3-plan.md
 # Local MCP config
 .mcp.json
 
-# Node / playwright test tooling (local, reinstallable)
+# Node / playwright test tooling (local, reinstallable) — services/ root only;
+# nested package.json/package-lock.json (e.g. services/web-react/) are real source.
 node_modules/
-package.json
-package-lock.json
+/services/package.json
+/services/package-lock.json
 .playwright-mcp/
 .tmp_playwright_ui_check.js
 test-artifacts/
