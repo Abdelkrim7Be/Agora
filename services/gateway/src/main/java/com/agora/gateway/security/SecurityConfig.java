@@ -170,6 +170,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/assign").hasAnyRole("OWNER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/audit").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/audit/verify").hasAnyRole("OWNER", "ADMIN")
                 // Default-deny: anything not explicitly allowed above is rejected, so a future
                 // unenumerated agent route is never reachable by accident.
                 .anyRequest().denyAll())

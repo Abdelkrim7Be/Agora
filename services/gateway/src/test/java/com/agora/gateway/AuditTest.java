@@ -16,6 +16,10 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.Statement;
+import java.util.List;
 import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -61,6 +65,9 @@ class AuditTest {
 
     @Autowired
     private AuditRepository auditRepository;
+
+    @Autowired
+    private DataSource dataSource;
 
     @AfterEach
     void resetWireMock() {
@@ -169,5 +176,69 @@ class AuditTest {
         // verify password not stored — the only string fields are username, role, action, method, path, outcome
         assertThat(e.getRole()).isNull();
         assertThat(e.getUpstreamStatus()).isNull();
+    }
+
+    private void failedLogin(String username) throws Exception {
+        // A distinct never-registered username per call — keeps each attempt in its
+        // own per-username rate-limit bucket instead of sharing "owner"'s across tests.
+        String body = objectMapper.writeValueAsString(Map.of("username", username, "password", "wrongpass"));
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void consecutive_rows_link_by_hash_and_verify_reports_valid() throws Exception {
+        // Two distinct audit-generating actions guarantee at least two linked rows.
+        failedLogin("no-such-user-chain-1");
+        failedLogin("no-such-user-chain-2");
+        String ownerToken = login("owner", "ownerpass");
+
+        List<AuditEvent> rows = auditRepository.findAllByOrderByIdAsc();
+        assertThat(rows.size()).isGreaterThanOrEqualTo(2);
+        for (int i = 1; i < rows.size(); i++) {
+            assertThat(rows.get(i).getPrevHash()).isEqualTo(rows.get(i - 1).getHash());
+        }
+        assertThat(rows).allMatch(row -> row.getHash() != null && row.getHash().length() == 64);
+
+        mockMvc.perform(get("/audit/verify")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.brokenAtId").doesNotExist());
+    }
+
+    @Test
+    void tampered_row_is_detected_by_verify() throws Exception {
+        failedLogin("no-such-user-tamper-target");
+        AuditEvent tampered = auditRepository.findAll().stream()
+                .filter(e -> "login".equals(e.getAction()) && "failure".equals(e.getOutcome())
+                        && "no-such-user-tamper-target".equals(e.getUsername()))
+                .reduce((a, b) -> { throw new AssertionError("more than one matching row"); })
+                .orElseThrow(() -> new AssertionError("no matching row"));
+        String ownerToken = login("owner", "ownerpass");
+
+        // Simulate a direct database edit — the one thing the append-only repository
+        // interface cannot do itself, which is exactly the threat this chain defends against.
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("UPDATE audit_event SET outcome = 'success' WHERE id = " + tampered.getId());
+        }
+
+        mockMvc.perform(get("/audit/verify")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.brokenAtId").value(tampered.getId()));
+    }
+
+    @Test
+    void audit_verify_endpoint_owner_only() throws Exception {
+        String viewerToken = login("viewer", "viewerpass");
+
+        mockMvc.perform(get("/audit/verify")
+                        .header("Authorization", "Bearer " + viewerToken))
+                .andExpect(status().isForbidden());
     }
 }

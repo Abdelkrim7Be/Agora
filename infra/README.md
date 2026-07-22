@@ -147,6 +147,17 @@ curl https://mail.example.com/audit \
   -H "Authorization: Bearer <token>"
 ```
 
+**Verify the audit log has not been tampered with (owner only):**
+```
+curl https://mail.example.com/audit/verify \
+  -H "Authorization: Bearer <token>"
+```
+Each row hash-chains to the previous one (`prevHash`/`hash`, SHA-256). A direct database
+edit changes a row's recomputed hash or breaks the next row's link, so `valid` turns
+`false` and `brokenAtId` names the first row where the chain no longer matches. Rows
+written before this chain existed have no hash and count under `unverifiableLegacyCount`
+instead of breaking the chain.
+
 ## Notes
 
 - In the production profile, only host port `443` is published. The gateway, web server, Ollama, databases, and sidecars have no host port mappings.

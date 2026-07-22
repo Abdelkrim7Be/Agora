@@ -13,9 +13,11 @@ public class AuditController {
     private static final int MAX_LIMIT = 500;
 
     private final AuditRepository auditRepository;
+    private final AuditService auditService;
 
-    public AuditController(AuditRepository auditRepository) {
+    public AuditController(AuditRepository auditRepository, AuditService auditService) {
         this.auditRepository = auditRepository;
+        this.auditService = auditService;
     }
 
     @GetMapping("/audit")
@@ -25,5 +27,10 @@ public class AuditController {
         int clampedLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
         int clampedPage = Math.max(page, 0);
         return auditRepository.findAllByOrderByTimestampDesc(PageRequest.of(clampedPage, clampedLimit));
+    }
+
+    @GetMapping("/audit/verify")
+    public AuditService.ChainVerification verifyAudit() {
+        return auditService.verifyChain();
     }
 }
