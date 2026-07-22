@@ -1,9 +1,9 @@
-# Demo-only overrides (auto-merged by `docker compose`). Not committed-critical:
+# Demo-only overrides. Use explicitly with `-f docker-compose.yml -f docker-compose.demo.yml`:
 #   - mounts the real Gmail OAuth files into the agent so it can send
 #   - enables REAL sends (AGENT_DRY_RUN=false) so an approved reply actually arrives
 #   - 1-minute poll so a live-sent email is picked up fast without tripping
 #     Google's per-user abuse limiter (6s polling earned sliding 30-min bans)
-# Remove this file (or set AGENT_DRY_RUN=true) to go back to safe dry-run mode.
+# Omit this file (or set AGENT_DRY_RUN=true) to stay in safe dry-run mode.
 services:
   # Use the host Ollama systemd service for local GPU inference.
   # Docker GPU passthrough is not configured on this machine.
@@ -30,7 +30,7 @@ services:
   # Host port 3000 is also taken by another project; serve the UI on 3001.
   web:
     ports: !override
-      - "3001:80"
+      - "3001:8080"
 
   email-agent:
     extra_hosts:
@@ -46,7 +46,7 @@ services:
       GMAIL_TOKEN_PATH: /app/data/token.json
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8090/api/agent/connect/gmail/callback
     volumes:
-      - ../services/email-agent/credentials.json:/app/credentials.json
+      - ../services/email-agent/credentials.json:/app/credentials.json:ro
     depends_on: !override
       postgres:
         condition: service_healthy
@@ -59,6 +59,9 @@ services:
     build:
       context: ../services/email-agent
       network: host
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
     command: ["python", "-m", "src.poller"]
     env_file:
       - ../services/email-agent/.env
@@ -105,7 +108,7 @@ services:
       AGENT_STORE_DB: /app/data/store.db
     volumes:
       - agent_data:/app/data
-      - ../services/email-agent/credentials.json:/app/credentials.json
+      - ../services/email-agent/credentials.json:/app/credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy

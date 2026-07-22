@@ -11,6 +11,9 @@
 
 ## Tests
 
+AgentDojo/security-regression result, if this is a security slice: `N/A`
+
+
 - [ ] Existing tests pass (`pytest`)
 - [ ] New tests added for new behaviour
 - [ ] Manually verified in local env

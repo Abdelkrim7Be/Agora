@@ -18,10 +18,16 @@ Required values:
 
 The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). LLM calls are local-first: agents and the security quarantine classifier run on Ollama (`qwen2.5:3b-8k` via the OpenAI-compatible endpoint); no cloud LLM key is required. Cloud providers remain available through the optional `cloud` compose profile (LiteLLM) and the explicit `dev`/`prod` LLM profiles. Compose enables `AGENT_SECURITY_ENABLED=true`, points the agent at `http://security:8001`, stores agent graph/run state in Postgres, and stores security rate limits in Redis.
 
-2. Start the stack:
+2. Start the safe dry-run stack:
 
 ```
 docker compose up --build
+```
+
+Live Gmail sends are opt-in. For the local demo stack that mounts `credentials.json`, uses host Ollama, and starts the poller, run:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
 ```
 
 ## Usage
@@ -79,4 +85,4 @@ curl http://localhost:8080/audit \
 - The `agent_data` volume is still used for per-user Gmail OAuth token files. Set `AGENT_TOKEN_ENCRYPTION_KEY` to store those tokens as Fernet-encrypted blobs at rest.
 - Gmail push notifications can be enabled with `GMAIL_WEBHOOK_ENABLED=true`, `GMAIL_WEBHOOK_TOPIC`, and `GMAIL_WEBHOOK_SECRET`; the gateway route is `POST /api/agent/webhooks/gmail?token=<secret>`. The poller registers (and renews, every `GMAIL_WATCH_RENEW_HOURS`) the Gmail watch and records a per-user historyId baseline; each push is processed incrementally from that baseline, then advances it. Keep `GMAIL_POLLING_FALLBACK_ENABLED=true` until the webhook delivery path is verified.
 - The gateway waits for the agent's `/health` to pass (not just for the container to start) before it comes up.
-- Set `AGENT_DRY_RUN=false` in `services/email-agent/.env` to enable real Gmail sends (requires OAuth credentials).
+- Real Gmail sends require the explicit `docker-compose.demo.yml` overlay or an explicit `AGENT_DRY_RUN=false`; the committed default stack stays in dry-run mode.

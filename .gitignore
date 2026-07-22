@@ -100,3 +100,6 @@ dogfood-output/
 
 # Claude Code local settings (local)
 .claude/
+
+# Local Docker Compose overrides are auto-merged; keep live-send config explicit.
+infra/docker-compose.override.yml
