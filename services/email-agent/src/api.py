@@ -84,6 +84,8 @@ from src.health import aggregate_health
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
 from src.migrate import upgrade_to_head
+from src.postgres import validate_runtime_role
+from src.token_store import validate_token_security
 from src.sync_status import (
     get_status as get_sync_status,
     public_error_message as public_sync_error_message,
@@ -181,7 +183,9 @@ async def _watch_renewal_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_token_security()
     upgrade_to_head()
+    validate_runtime_role()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
