@@ -1,0 +1,24 @@
+# Production security overlay. Use with docker-compose.yml and the production profile.
+services:
+  email-agent:
+    environment:
+      AGENT_TOKEN_STORE_BACKEND: vault
+      AGENT_TOKEN_ENCRYPTION_REQUIRED: "true"
+      AGENT_TOKEN_ENCRYPTION_KEY: ""
+      AGENT_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/agora_token_keys
+      AGENT_TOKEN_WORK_DIR: /tmp/agora-token-work
+      AGENT_TOKEN_VAULT_PATH: ${AGENT_TOKEN_VAULT_PATH:-secret/data/agora/gmail-tokens}
+      AGENT_SECRET_MANAGER_URL: ${AGENT_SECRET_MANAGER_URL}
+      AGENT_SECRET_MANAGER_TOKEN: ""
+      AGENT_SECRET_MANAGER_TOKEN_FILE: /run/secrets/agora_vault_token
+    secrets:
+      - agora_token_keys
+      - agora_vault_token
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev,mode=1777
+
+secrets:
+  agora_token_keys:
+    file: ${AGENT_TOKEN_KEYS_FILE:-./secrets/agent-token-keys}
+  agora_vault_token:
+    file: ${AGENT_VAULT_TOKEN_FILE:-./secrets/agent-vault-token}

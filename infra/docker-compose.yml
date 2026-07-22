@@ -1,4 +1,39 @@
 services:
+  ingress:
+    image: traefik:v3.7.1@sha256:6b9cbca6fac42ab0075f5437d8dc1685cfd188626d8d515839ea94f8b6271c42
+    profiles: ["production"]
+    restart: unless-stopped
+    user: "${TRAEFIK_UID:-1000}:${TRAEFIK_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    command:
+      - --api.dashboard=false
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --entrypoints.websecure.address=:8443
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      - "443:8443"
+    volumes:
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ${AGORA_TLS_CERT_FILE:-./traefik/certs/tls.crt}:/certs/tls.crt:ro
+      - ${AGORA_TLS_KEY_FILE:-./traefik/certs/tls.key}:/certs/tls.key:ro
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    depends_on:
+      web:
+        condition: service_started
+    networks:
+      - agora
+
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -15,6 +50,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - agora
+
+  postgres-agent-role:
+    image: postgres:16
+    restart: "no"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agora}
+      POSTGRES_USER: ${POSTGRES_USER:-agora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AGENT_POSTGRES_PASSWORD: ${AGENT_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+    command: ["/bin/sh", "/scripts/ensure-agent-role.sh"]
+    volumes:
+      - ./postgres/ensure-agent-role.sh:/scripts/ensure-agent-role.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - agora
 
@@ -74,8 +126,6 @@ services:
     restart: unless-stopped
     mem_limit: 8g
     cpus: 4.0
-    ports:
-      - "11434:11434"
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: 24h
@@ -125,6 +175,23 @@ services:
     networks:
       - agora
 
+  email-agent-migrate:
+    build:
+      context: ../services/email-agent
+      network: host
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_RUN_MIGRATIONS: "true"
+      AGENT_RUN_REGISTRY_BACKEND: postgres
+      AGENT_COST_BACKEND: postgres
+    command: ["true"]
+    depends_on:
+      postgres-agent-role:
+        condition: service_completed_successfully
+    networks:
+      - agora
+
   email-agent:
     build:
       context: ../services/email-agent
@@ -135,7 +202,8 @@ services:
     env_file:
       - ../services/email-agent/.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agora}
+      DATABASE_URL: postgresql://agora_email_agent:${AGENT_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_RUN_MIGRATIONS: "false"
       AGENT_SECRET_MANAGER_BACKEND: ${AGENT_SECRET_MANAGER_BACKEND:-disabled}
       AGENT_SECRET_MANAGER_REQUIRED: ${AGENT_SECRET_MANAGER_REQUIRED:-false}
       AGENT_SECRET_BUNDLE_PATH: ${AGENT_SECRET_BUNDLE_PATH:-}
@@ -168,7 +236,7 @@ services:
       # Browser Gmail OAuth onboarding. Demo/live compose mounts credentials.json explicitly.
       # Redirect URI points at the gateway — the browser cannot reach email-agent directly.
       GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH:-credentials.json}
-      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8080/api/agent/connect/gmail/callback
+      GMAIL_OAUTH_REDIRECT_URI: ${GMAIL_OAUTH_REDIRECT_URI:-https://localhost/api/agent/connect/gmail/callback}
       GMAIL_OAUTH_STATE_SECRET: ${GMAIL_OAUTH_STATE_SECRET:-${AGENT_TOKEN_ENCRYPTION_KEY}}
     volumes:
       - agent_data:/app/data
@@ -181,6 +249,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      email-agent-migrate:
+        condition: service_completed_successfully
       security:
         condition: service_healthy
       ollama-init:
@@ -196,11 +266,12 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     cpus: 1.0
-    ports:
-      - "8080:8080"
     environment:
       GATEWAY_SECRET_DIR: ${GATEWAY_SECRET_DIR:-/run/secrets/agora-gateway/}
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
+      GATEWAY_JWT_TTL_MINUTES: ${GATEWAY_JWT_TTL_MINUTES:-15}
+      GATEWAY_JWT_REFRESH_TTL_DAYS: ${GATEWAY_JWT_REFRESH_TTL_DAYS:-7}
+      GATEWAY_JWT_SECURE_COOKIES: ${GATEWAY_JWT_SECURE_COOKIES:-true}
       GATEWAY_OWNER_USERNAME: ${GATEWAY_OWNER_USERNAME}
       GATEWAY_OWNER_PASSWORD: ${GATEWAY_OWNER_PASSWORD}
       GATEWAY_VIEWER_USERNAME: ${GATEWAY_VIEWER_USERNAME}
@@ -209,7 +280,11 @@ services:
       GATEWAY_ADMIN_PASSWORD: ${GATEWAY_ADMIN_PASSWORD}
       GATEWAY_UPSTREAM_EMAIL_AGENT_URL: http://email-agent:8000
       # Allow the browser control panel (served by the web service) to call the gateway.
-      GATEWAY_CORS_ALLOWED_ORIGINS: ${GATEWAY_CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      GATEWAY_CORS_ALLOWED_ORIGINS: ${GATEWAY_CORS_ALLOWED_ORIGINS:-https://localhost}
+      GATEWAY_LOGIN_RATELIMIT_ENABLED: ${GATEWAY_LOGIN_RATELIMIT_ENABLED:-true}
+      GATEWAY_LOGIN_RATELIMIT_WINDOW_SECONDS: ${GATEWAY_LOGIN_RATELIMIT_WINDOW_SECONDS:-900}
+      GATEWAY_LOGIN_RATELIMIT_MAX_FAILURES: ${GATEWAY_LOGIN_RATELIMIT_MAX_FAILURES:-5}
+      GATEWAY_LOGIN_RATELIMIT_GLOBAL_MAX_FAILURES: ${GATEWAY_LOGIN_RATELIMIT_GLOBAL_MAX_FAILURES:-100}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-agora}
@@ -230,8 +305,6 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     cpus: 0.5
-    ports:
-      - "3000:8080"
     depends_on:
       - gateway
     networks:
