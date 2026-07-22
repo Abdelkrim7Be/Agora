@@ -85,3 +85,32 @@ def authorize_action(
             return resp.json()
     except Exception:
         return {"decision": "deny", "reason": "security_service_unreachable"}
+
+
+def audit_output(action: str, to: str, subject: str, content: str, run_id: str) -> dict:
+    """POST outbound content to the security service /audit-output endpoint.
+
+    This runs right before a send-type tool actually executes — after /authorize
+    and any HITL approval/edit — so it catches leaked injected instructions in
+    whatever content is truly about to leave the system, LLM-drafted or human-edited.
+    Fail closed: any failure flags the send so a security-service outage never
+    becomes an unaudited external send.
+    """
+    payload = {
+        "action": action,
+        "to": to,
+        "subject": subject,
+        "content": content,
+        "context": {"run_id": run_id},
+    }
+    try:
+        with httpx.Client(timeout=settings.security_timeout) as client:
+            resp = client.post(f"{settings.security_url}/audit-output", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return {
+            "flagged": True,
+            "reasons": ["security_service_unreachable"],
+            "classifier_unavailable": True,
+        }
