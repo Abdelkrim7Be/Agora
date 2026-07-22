@@ -23,6 +23,11 @@ class Settings:
     sanitize_endpoint: str = os.getenv("SECURITY_SANITIZE_ENDPOINT", "http://localhost:11434/v1")
     sanitize_always_llm: bool = os.getenv("SECURITY_SANITIZE_ALWAYS_LLM", "false").lower() == "true"
     sanitize_max_chars: int = int(os.getenv("SECURITY_SANITIZE_MAX_CHARS", "6000"))
+    sanitize_timeout: float | None = (
+        float(os.getenv("SECURITY_SANITIZE_TIMEOUT"))
+        if os.getenv("SECURITY_SANITIZE_TIMEOUT")
+        else None
+    )
 
     policy_path: str = os.getenv("SECURITY_POLICY_PATH", "policy.yaml")
 

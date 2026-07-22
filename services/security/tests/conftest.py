@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from src.models import QuarantineVerdict
+from src.models import QuarantineVerdict, TrustClassificationVerdict
+
+
+@pytest.fixture(autouse=True)
+def _offline_trust_classifier(monkeypatch):
+    import src.classify as classification
+
+    monkeypatch.setattr(classification, "trust_classifier", _FakeTrustLLM())
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +26,16 @@ class _FakeQuarantineLLM:
 
     def invoke(self, _messages):
         return self._v
+
+
+class _FakeTrustLLM:
+    def __init__(self, trust: str = "TRUSTED", reasons: list[str] | None = None):
+        self._verdict = TrustClassificationVerdict(
+            trust=trust, reasons=reasons or []
+        )
+
+    def invoke(self, _messages):
+        return self._verdict
 
 
 class _BoomLLM:

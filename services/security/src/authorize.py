@@ -48,6 +48,23 @@ def _check_recipients(to: str, recipients) -> str | None:
     return None
 
 
+def _check_flow(arg_trust: dict, tool) -> str | None:
+    """Return a deny reason if any argument carries disallowed trust."""
+    if not tool.args:
+        return None
+    for arg_name, rule in tool.args.items():
+        allowed = rule.allow_trust
+        if not allowed:
+            continue
+        actual = arg_trust.get(arg_name)
+        if actual and actual not in allowed:
+            return (
+                f"argument {arg_name!r} carries trust {actual!r}, "
+                f"policy allows only {allowed} here"
+            )
+    return None
+
+
 def authorize(
     req: AuthorizeRequest,
     policy: PolicyConfig | None = None,
@@ -61,6 +78,11 @@ def authorize(
             decision=policy.default,
             reason=f"no policy rule for action '{req.action}'",
         )
+
+    flow_deny = _check_flow(req.arg_trust, tool)
+    if flow_deny:
+        inc_counter("agora_security_authorize_total", decision="deny", action=req.action)
+        return AuthorizeResponse(decision="deny", reason=flow_deny)
 
     # Recipient check — fires only when the policy block exists and 'to' arg is present.
     if tool.recipients is not None:

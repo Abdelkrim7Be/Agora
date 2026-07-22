@@ -6,9 +6,17 @@ from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 
 from src.authorize import authorize
+from src.classify import classify_source
 from src.config import settings
 from src.metrics import render_metrics
-from src.models import AuthorizeRequest, AuthorizeResponse, SanitizeRequest, SanitizeResponse
+from src.models import (
+    AuthorizeRequest,
+    AuthorizeResponse,
+    ClassifySourceRequest,
+    ClassifySourceResponse,
+    SanitizeRequest,
+    SanitizeResponse,
+)
 from src.policy import SERVICE_ROOT
 from src.sanitize import sanitize
 
@@ -37,6 +45,11 @@ def get_policy() -> dict:
 @app.post("/sanitize", response_model=SanitizeResponse)
 def sanitize_endpoint(req: SanitizeRequest) -> SanitizeResponse:
     return sanitize(req)
+
+
+@app.post("/classify", response_model=ClassifySourceResponse)
+def classify_source_endpoint(req: ClassifySourceRequest) -> ClassifySourceResponse:
+    return classify_source(req)
 
 
 @app.post("/authorize", response_model=AuthorizeResponse)
