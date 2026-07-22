@@ -58,6 +58,10 @@ class Settings:
     poll_interval_minutes: float = float(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     poll_max_retries: int = int(os.getenv("AGENT_POLL_MAX_RETRIES", "3"))
     poll_backoff_base_seconds: float = float(os.getenv("AGENT_POLL_BACKOFF_BASE_SECONDS", "2"))
+    # /events SSE: how often the stream re-checks the run registry for changes.
+    # The API and poller are separate processes sharing the same store, so this is
+    # a server-side change-detection loop, not a client-visible poll.
+    events_poll_interval_seconds: float = float(os.getenv("AGENT_EVENTS_POLL_INTERVAL_SECONDS", "2"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
