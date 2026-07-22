@@ -72,3 +72,34 @@ def fake_quarantine(monkeypatch):
             )
 
     return _install
+
+
+@pytest.fixture
+def fake_output_quarantine(monkeypatch):
+    """Patch output_audit.quarantine_llm for offline deterministic tests."""
+    def _install(
+        injection: bool = False,
+        spam: bool = False,
+        reasons: list[str] | None = None,
+        sanitized: str = "clean text",
+        raises: bool = False,
+    ):
+        import src.output_audit as oa
+
+        if raises:
+            monkeypatch.setattr(oa, "quarantine_llm", _BoomLLM())
+        else:
+            monkeypatch.setattr(
+                oa,
+                "quarantine_llm",
+                _FakeQuarantineLLM(
+                    QuarantineVerdict(
+                        injection=injection,
+                        spam=spam,
+                        reasons=reasons or [],
+                        sanitized=sanitized,
+                    )
+                ),
+            )
+
+    return _install
