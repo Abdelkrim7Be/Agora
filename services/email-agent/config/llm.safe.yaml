@@ -6,6 +6,7 @@ max_tokens: 400
 timeout: 120
 roles:
   triage: "openai:qwen2.5:3b-8k"
+  quarantine: "openai:qwen2.5:3b-8k"
   draft: "openai:qwen2.5:3b-8k"
   reason: "openai:qwen2.5:3b-8k"
   memory_style: "openai:qwen2.5:3b-8k"
