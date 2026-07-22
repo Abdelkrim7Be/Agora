@@ -27,6 +27,12 @@ async def sanitize_email(sender: str, subject: str, content: str) -> dict:
             "reasons": ["security_service_unreachable"],
             "cleaned_text": content,
             "classifier_unavailable": True,
+            "source_trust": "UNTRUSTED",
+            "fields": {
+                "sender": {"value": sender, "trust": "UNTRUSTED"},
+                "subject": {"value": subject, "trust": "UNTRUSTED"},
+                "body": {"value": content, "trust": "UNTRUSTED"},
+            },
         }
 
 
@@ -45,7 +51,13 @@ async def fetch_policy() -> dict:
         return {"policy_yaml": "", "error": "security_service_unreachable"}
 
 
-def authorize_action(action: str, args: dict, run_id: str, action_id: str = "") -> dict:
+def authorize_action(
+    action: str,
+    args: dict,
+    run_id: str,
+    action_id: str = "",
+    arg_trust: dict | None = None,
+) -> dict:
     """POST a proposed tool action to the security service /authorize endpoint.
 
     Fail closed: any failure denies the action so a security-service outage never
@@ -60,7 +72,12 @@ def authorize_action(action: str, args: dict, run_id: str, action_id: str = "") 
     }
     if action_id:
         context["action_id"] = action_id
-    payload = {"action": action, "args": args, "context": context}
+    payload = {
+        "action": action,
+        "args": args,
+        "context": context,
+        "arg_trust": arg_trust or {},
+    }
     try:
         with httpx.Client(timeout=settings.security_timeout) as client:
             resp = client.post(f"{settings.security_url}/authorize", json=payload)

@@ -12,6 +12,12 @@ BENIGN_VERDICT = {
     "reasons": [],
     "cleaned_text": "Hello, just checking in!",
     "classifier_unavailable": False,
+    "source_trust": "UNTRUSTED",
+    "fields": {
+        "sender": {"value": "alice@example.com", "trust": "UNTRUSTED"},
+        "subject": {"value": "Hello", "trust": "UNTRUSTED"},
+        "body": {"value": "Hello, just checking in!", "trust": "UNTRUSTED"},
+    },
 }
 
 

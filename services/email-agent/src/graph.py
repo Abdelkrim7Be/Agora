@@ -769,10 +769,64 @@ def _auto_organize_message() -> AIMessage:
 # long-lived poller process can't grow it without limit (insertion-ordered dict).
 _AUTHORIZATION_CACHE_MAX = 512
 _authorization_cache: dict[tuple[str, str, str], dict] = {}
+_ARG_ADDR_RE = _re.compile(r"[\w.+-]+@[\w.-]+")
+_ARG_TRUST_ORDER = {"TRUSTED": 0, "INTERNAL": 1, "UNTRUSTED": 2, "HOSTILE": 3}
+
+
+def _max_arg_trust(a: str, b: str) -> str:
+    return a if _ARG_TRUST_ORDER[a] >= _ARG_TRUST_ORDER[b] else b
+
+
+def _derive_arg_trust(args: dict, security: dict | None) -> dict:
+    """Map args to the worst trust of any sanitized field containing their value."""
+    fields = (security or {}).get("fields") or {}
+    if not fields:
+        return {}
+    out = {}
+    for arg_name, arg_value in args.items():
+        if not isinstance(arg_value, str) or not arg_value.strip():
+            out[arg_name] = "TRUSTED"
+            continue
+        needles = _ARG_ADDR_RE.findall(arg_value) or [arg_value.strip()]
+        worst = "TRUSTED"
+        for needle in needles:
+            needle_lower = needle.lower()
+            for field in fields.values():
+                field_value = str((field or {}).get("value") or "").lower()
+                if needle_lower in field_value:
+                    worst = _max_arg_trust(worst, (field or {}).get("trust", "UNTRUSTED"))
+        out[arg_name] = worst
+    return out
 
 
 def _authorization_cache_key(run_id: str, name: str, tool_call: dict) -> tuple[str, str, str]:
     return (run_id, name, tool_call.get("id", ""))
+
+
+def _call_authorize_action(
+    name: str,
+    args: dict,
+    run_id: str,
+    action_id: str,
+    arg_trust: dict | None,
+) -> dict:
+    try:
+        signature = inspect.signature(authorize_action)
+        params = signature.parameters.values()
+        supports_arg_trust = "arg_trust" in signature.parameters or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params
+        )
+    except (TypeError, ValueError):
+        supports_arg_trust = True
+    if supports_arg_trust:
+        return authorize_action(
+            name,
+            args,
+            run_id,
+            action_id,
+            arg_trust=arg_trust,
+        )
+    return authorize_action(name, args, run_id, action_id)
 
 
 def _authorize_tool_action(
@@ -781,10 +835,17 @@ def _authorize_tool_action(
     run_id: str,
     tool_call: dict,
     refresh: bool = False,
+    arg_trust: dict | None = None,
 ) -> dict:
     key = _authorization_cache_key(run_id, name, tool_call)
     if refresh or key not in _authorization_cache:
-        authz = authorize_action(name, args, run_id, tool_call.get("id", ""))
+        authz = _call_authorize_action(
+            name,
+            args,
+            run_id,
+            tool_call.get("id", ""),
+            arg_trust,
+        )
         decision = authz.get("decision", "deny")
         reason = authz.get("reason", "no reason provided")
         if decision not in ("allow", "deny", "hitl"):
@@ -851,9 +912,10 @@ def tool_node(state: State, store: BaseStore, config=None):
             raw_args = {**raw_args, "content": ensure_email_paragraphs(raw_args["content"])}
         args = _normalize_recipient_args(apply_signature_to_args(name, raw_args))
         authorization_decision = "hitl" if name in approval_set else "allow"
+        arg_trust = _derive_arg_trust(args, state["email_input"].get("security"))
 
         if settings.security_enabled:
-            authz = _authorize_tool_action(name, args, run_id, tool_call)
+            authz = _authorize_tool_action(name, args, run_id, tool_call, arg_trust=arg_trust)
             authorization_decision = authz["decision"]
             if authorization_decision == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
@@ -974,7 +1036,14 @@ def tool_node(state: State, store: BaseStore, config=None):
             # accept and edit fall through to tool execution below
 
         if settings.security_enabled and authorization_decision == "hitl" and args != tool_call["args"]:
-            authz = _authorize_tool_action(name, args, run_id, tool_call, refresh=True)
+            authz = _authorize_tool_action(
+                name,
+                args,
+                run_id,
+                tool_call,
+                refresh=True,
+                arg_trust=_derive_arg_trust(args, state["email_input"].get("security")),
+            )
             if authz["decision"] == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
