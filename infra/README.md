@@ -92,6 +92,16 @@ CI and local scans use the same pinned Trivy generation. From the repo root, run
 
 The script runs `aquasec/trivy:0.70.0` through Docker, scans dependency manifests, builds the first-party service images, and fails on fixable `HIGH` or `CRITICAL` CVEs. Override with `TRIVY_VERSION=<version>` only when updating CI at the same time. The local DB cache lives in ignored `.trivy-cache/`.
 
+## Secret scanning
+
+CI and local scans use the same pinned Gitleaks generation, scanning the full git history rather than the working tree (so gitignored local artifacts like `token.json` never produce noise). From the repo root, run:
+
+```
+./infra/scan-secrets.sh
+```
+
+The script runs `zricethezav/gitleaks:v8.30.1` through Docker against `.gitleaks.toml` and fails on any finding. Override with `GITLEAKS_VERSION=<version>` only when updating CI at the same time. Add allowlist exceptions to `.gitleaks.toml` with a comment explaining why, never by disabling the job.
+
 ## Usage
 
 **Check gateway health:**
