@@ -49,6 +49,11 @@ class Settings:
     token_encryption_key_file: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY_FILE", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     token_encryption_required: bool = _env_bool("AGENT_TOKEN_ENCRYPTION_REQUIRED", "false")
+    token_store_backend: str = os.getenv("AGENT_TOKEN_STORE_BACKEND", "file").strip().lower()
+    token_work_dir: str = os.getenv("AGENT_TOKEN_WORK_DIR", "/tmp/agora-token-work")
+    token_vault_path: str = os.getenv(
+        "AGENT_TOKEN_VAULT_PATH", "secret/data/agora/gmail-tokens"
+    ).strip()
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
     poll_interval_minutes: float = float(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     poll_max_retries: int = int(os.getenv("AGENT_POLL_MAX_RETRIES", "3"))
