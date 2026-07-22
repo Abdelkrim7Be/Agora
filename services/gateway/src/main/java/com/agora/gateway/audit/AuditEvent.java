@@ -5,12 +5,25 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
 
 @Entity
-@Table(name = "audit_event")
+@Table(
+        name = "audit_event",
+        indexes = {
+                @Index(
+                        name = "idx_audit_login_account_window",
+                        columnList = "username,action,outcome,timestamp"
+                ),
+                @Index(
+                        name = "idx_audit_login_global_window",
+                        columnList = "action,outcome,timestamp"
+                )
+        }
+)
 public class AuditEvent {
 
     @Id
