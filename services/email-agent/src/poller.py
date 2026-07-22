@@ -112,6 +112,7 @@ from src.categories import classify_category, load_categories
 from src.junk_gate import is_junk
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
+from src.postgres import validate_runtime_role
 from src.notifications import notify_overdue_approval, notify_pending_approval
 from src.dlq import record_dead_letter, setup_dlq
 from src.metrics import inc_counter
@@ -129,7 +130,7 @@ from src.run_registry import (
     upsert_run,
 )
 from src.storage import open_graph_storage
-from src.token_store import has_stored_token
+from src.token_store import has_stored_token, validate_token_security
 from src.tenant import (
     agent_instance_context,
     current_agent_instance_id,
@@ -517,6 +518,8 @@ async def process_message(
                 "injection_detected": verdict["injection_detected"],
                 "classification": verdict["classification"],
                 "classifier_unavailable": verdict["classifier_unavailable"],
+                "source_trust": verdict.get("source_trust", "UNTRUSTED"),
+                "fields": verdict.get("fields", {}),
             },
         }
 
@@ -664,9 +667,9 @@ def active_email_agent_instance_ids() -> list[str]:
     if not settings.database_url:
         return [default]
     try:
-        import psycopg
+        from src.postgres import tenant_connection
 
-        with psycopg.connect(settings.database_url) as conn:
+        with tenant_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id FROM agent_instance "
@@ -839,6 +842,7 @@ async def sweep_active_instances_once(
 
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
+    validate_token_security()
     # With push webhooks on, polling is only a safety net — run it slowly.
     interval_minutes = (
         settings.webhook_fallback_poll_minutes
@@ -847,6 +851,7 @@ async def run_forever() -> None:
     )
     interval = interval_minutes * 60
     upgrade_to_head()
+    validate_runtime_role()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
