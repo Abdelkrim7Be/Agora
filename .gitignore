@@ -85,6 +85,8 @@ package-lock.json
 .playwright-mcp/
 .tmp_playwright_ui_check.js
 test-artifacts/
+.trivy-cache/
+infra/backups/
 
 # Design tool exports / UI screenshots (local)
 stitch-export/
