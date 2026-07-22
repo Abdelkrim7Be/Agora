@@ -41,7 +41,14 @@ gateway:
       icon: mail
   jwt:
     secret: ${GATEWAY_JWT_SECRET:}
-    ttl-minutes: ${GATEWAY_JWT_TTL_MINUTES:60}
+    ttl-minutes: ${GATEWAY_JWT_TTL_MINUTES:15}
+    refresh-ttl-days: ${GATEWAY_JWT_REFRESH_TTL_DAYS:7}
+    secure-cookies: ${GATEWAY_JWT_SECURE_COOKIES:true}
+  login-rate-limit:
+    enabled: ${GATEWAY_LOGIN_RATELIMIT_ENABLED:true}
+    window-seconds: ${GATEWAY_LOGIN_RATELIMIT_WINDOW_SECONDS:900}
+    max-failures: ${GATEWAY_LOGIN_RATELIMIT_MAX_FAILURES:5}
+    global-max-failures: ${GATEWAY_LOGIN_RATELIMIT_GLOBAL_MAX_FAILURES:100}
   owner:
     username: ${GATEWAY_OWNER_USERNAME:}
     password: ${GATEWAY_OWNER_PASSWORD:}

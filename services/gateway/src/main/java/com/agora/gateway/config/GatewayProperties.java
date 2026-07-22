@@ -12,6 +12,7 @@ public class GatewayProperties {
     private String defaultAgentInstance = "default-email-agent";
     private List<AgentType> agentTypes = new ArrayList<>(List.of(AgentType.defaultEmailAgent()));
     private Jwt jwt = new Jwt();
+    private LoginRateLimit loginRateLimit = new LoginRateLimit();
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
     private Credentials admin = new Credentials();
@@ -27,6 +28,9 @@ public class GatewayProperties {
 
     public Jwt getJwt() { return jwt; }
     public void setJwt(Jwt jwt) { this.jwt = jwt; }
+
+    public LoginRateLimit getLoginRateLimit() { return loginRateLimit; }
+    public void setLoginRateLimit(LoginRateLimit loginRateLimit) { this.loginRateLimit = loginRateLimit; }
 
     public Credentials getOwner() { return owner; }
     public void setOwner(Credentials owner) { this.owner = owner; }
@@ -92,15 +96,42 @@ public class GatewayProperties {
         public void setIcon(String icon) { this.icon = icon; }
     }
 
+    public static class LoginRateLimit {
+        private boolean enabled = true;
+        private long windowSeconds = 900;
+        private long maxFailures = 5;
+        private long globalMaxFailures = 100;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+        public long getWindowSeconds() { return windowSeconds; }
+        public void setWindowSeconds(long windowSeconds) { this.windowSeconds = windowSeconds; }
+
+        public long getMaxFailures() { return maxFailures; }
+        public void setMaxFailures(long maxFailures) { this.maxFailures = maxFailures; }
+
+        public long getGlobalMaxFailures() { return globalMaxFailures; }
+        public void setGlobalMaxFailures(long globalMaxFailures) { this.globalMaxFailures = globalMaxFailures; }
+    }
+
     public static class Jwt {
         private String secret = "";
-        private long ttlMinutes = 60;
+        private long ttlMinutes = 15;
+        private long refreshTtlDays = 7;
+        private boolean secureCookies = true;
 
         public String getSecret() { return secret; }
         public void setSecret(String secret) { this.secret = secret; }
 
         public long getTtlMinutes() { return ttlMinutes; }
         public void setTtlMinutes(long ttlMinutes) { this.ttlMinutes = ttlMinutes; }
+
+        public long getRefreshTtlDays() { return refreshTtlDays; }
+        public void setRefreshTtlDays(long refreshTtlDays) { this.refreshTtlDays = refreshTtlDays; }
+
+        public boolean isSecureCookies() { return secureCookies; }
+        public void setSecureCookies(boolean secureCookies) { this.secureCookies = secureCookies; }
     }
 
     public static class Credentials {
