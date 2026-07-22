@@ -28,6 +28,8 @@ class Settings:
         if os.getenv("SECURITY_SANITIZE_TIMEOUT")
         else None
     )
+    # Same quarantine LLM as /sanitize, reused for the /audit-output escalation path.
+    output_audit_always_llm: bool = os.getenv("SECURITY_OUTPUT_AUDIT_ALWAYS_LLM", "false").lower() == "true"
 
     policy_path: str = os.getenv("SECURITY_POLICY_PATH", "policy.yaml")
 

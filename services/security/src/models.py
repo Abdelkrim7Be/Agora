@@ -52,6 +52,20 @@ class SanitizeResponse(BaseModel):
     fields: dict[str, TrustField] = Field(default_factory=dict)
 
 
+class AuditOutputRequest(BaseModel):
+    action: str = ""
+    to: str = ""
+    subject: str = ""
+    content: str
+    context: dict = Field(default_factory=dict)
+
+
+class AuditOutputResponse(BaseModel):
+    flagged: bool
+    reasons: list[str] = Field(default_factory=list)
+    classifier_unavailable: bool = False
+
+
 class AuthorizeRequest(BaseModel):
     action: str
     args: dict = Field(default_factory=dict)

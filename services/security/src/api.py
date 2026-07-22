@@ -10,6 +10,8 @@ from src.classify import classify_source
 from src.config import settings
 from src.metrics import render_metrics
 from src.models import (
+    AuditOutputRequest,
+    AuditOutputResponse,
     AuthorizeRequest,
     AuthorizeResponse,
     ClassifySourceRequest,
@@ -17,6 +19,7 @@ from src.models import (
     SanitizeRequest,
     SanitizeResponse,
 )
+from src.output_audit import audit_output
 from src.policy import SERVICE_ROOT
 from src.sanitize import sanitize
 
@@ -55,3 +58,8 @@ def classify_source_endpoint(req: ClassifySourceRequest) -> ClassifySourceRespon
 @app.post("/authorize", response_model=AuthorizeResponse)
 def authorize_endpoint(req: AuthorizeRequest) -> AuthorizeResponse:
     return authorize(req)
+
+
+@app.post("/audit-output", response_model=AuditOutputResponse)
+def audit_output_endpoint(req: AuditOutputRequest) -> AuditOutputResponse:
+    return audit_output(req)
