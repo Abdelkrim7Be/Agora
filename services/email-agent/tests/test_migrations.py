@@ -157,7 +157,9 @@ def test_entrypoints_apply_migrations_before_setup() -> None:
     api_src = (SERVICE_ROOT / "src" / "api.py").read_text(encoding="utf-8")
     poller_src = (SERVICE_ROOT / "src" / "poller.py").read_text(encoding="utf-8")
     for src in (api_src, poller_src):
+        assert "validate_token_security()" in src
         assert "upgrade_to_head()" in src
+        assert src.index("validate_token_security()") < src.index("upgrade_to_head()")
         assert src.index("upgrade_to_head()") < src.index("setup_run_registry()")
 
 
