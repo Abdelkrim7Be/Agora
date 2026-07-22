@@ -9,9 +9,12 @@ import org.springframework.stereotype.Service;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 
 @Service
 public class JwtService {
+
+    private static final String ISSUER = "agora-gateway";
 
     private final SecretKey key;
     private final long ttlMillis;
@@ -27,13 +30,19 @@ public class JwtService {
         }
         this.key = Keys.hmacShaKeyFor(bytes);
         this.ttlMillis = props.getJwt().getTtlMinutes() * 60_000L;
+        if (ttlMillis <= 0) {
+            throw new IllegalStateException("GATEWAY_JWT_TTL_MINUTES must be positive");
+        }
     }
 
     public String generate(String username, String role) {
         Date now = new Date();
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .issuer(ISSUER)
                 .subject(username)
                 .claim("role", role)
+                .claim("type", "access")
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + ttlMillis))
                 .signWith(key)
@@ -43,8 +52,14 @@ public class JwtService {
     public Claims parse(String token) {
         return Jwts.parser()
                 .verifyWith(key)
+                .requireIssuer(ISSUER)
+                .require("type", "access")
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
+    }
+
+    public long getTtlSeconds() {
+        return ttlMillis / 1_000L;
     }
 }

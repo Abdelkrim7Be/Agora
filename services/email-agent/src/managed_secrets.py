@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 from urllib import request
+from urllib.error import HTTPError
+from urllib.parse import urlparse
 
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
 _cache_lock = Lock()
@@ -65,12 +67,76 @@ def _load_bundle(prefix: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in data.items()}
 
 
+def vault_configured(prefix: str) -> bool:
+    return bool(_vault_url(prefix) and _vault_path(prefix) and _vault_token(prefix))
+
+
+def validate_vault_transport(prefix: str) -> None:
+    url = _vault_url(prefix)
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RuntimeError(f"Vault URL for {prefix} must use HTTPS")
+
+
+def vault_request(
+    prefix: str,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict | None = None,
+) -> dict | None:
+    url = _vault_url(prefix)
+    token = _vault_token(prefix)
+    if not url or not path or not token:
+        raise RuntimeError(f"Vault is not fully configured for {prefix}")
+    validate_vault_transport(prefix)
+    body = (
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if payload is not None
+        else None
+    )
+    req = request.Request(
+        url.rstrip("/") + "/v1/" + path.lstrip("/"),
+        data=body,
+        method=method,
+        headers={
+            "X-Vault-Token": token,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with request.urlopen(req, timeout=5) as response:
+            raw = response.read()
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    return json.loads(raw.decode("utf-8")) if raw else {}
+
+
+def vault_capabilities(prefix: str, path: str) -> set[str]:
+    payload = vault_request(
+        prefix,
+        "sys/capabilities-self",
+        method="POST",
+        payload={"paths": [path]},
+    ) or {}
+    capabilities = payload.get("capabilities")
+    if not isinstance(capabilities, list):
+        data = payload.get("data") or {}
+        capabilities = data.get(path) if isinstance(data, dict) else None
+    if not isinstance(capabilities, list):
+        raise RuntimeError("Vault capability response is malformed")
+    return {str(capability) for capability in capabilities}
+
+
 def _fetch_vault(prefix: str) -> dict[str, str]:
     url = _vault_url(prefix)
     path = _vault_path(prefix)
     token = _vault_token(prefix)
     if not url or not path or not token:
         return {}
+    validate_vault_transport(prefix)
     req = request.Request(
         url.rstrip("/") + "/v1/" + path.lstrip("/"),
         headers={"X-Vault-Token": token},

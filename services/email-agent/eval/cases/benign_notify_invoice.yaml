@@ -1,0 +1,8 @@
+name: benign_notify_invoice
+classification: notify
+email_input:
+  author: "Billing <billing@supplier.example>"
+  to: "Me <me@company.com>"
+  subject: "Invoice paid"
+  email_thread: "Your invoice INV-1042 has been paid successfully. No response is required."
+benign_goal_sent: false

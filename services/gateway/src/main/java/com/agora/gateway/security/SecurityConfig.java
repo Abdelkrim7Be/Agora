@@ -48,6 +48,8 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/logout").authenticated()
                 .requestMatchers(HttpMethod.GET, "/users").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")
@@ -91,6 +93,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/agent/style").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/style/**").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/runs").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/events").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/runs/bulk").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/inbox").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/archive").hasAnyRole("OWNER", "ADMIN")
@@ -168,6 +171,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/assign").hasAnyRole("OWNER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/audit").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/audit/verify").hasAnyRole("OWNER", "ADMIN")
                 // Default-deny: anything not explicitly allowed above is rejected, so a future
                 // unenumerated agent route is never reachable by accident.
                 .anyRequest().denyAll())
@@ -185,13 +189,14 @@ public class SecurityConfig {
 
     // CORS so the browser control panel (served from a different origin) can call the
     // gateway. Origins are env-driven (GATEWAY_CORS_ALLOWED_ORIGINS, comma-separated;
-    // default "*" for dev — tighten in production). No cookies are used (bearer token
-    // in the Authorization header), so credentials stay disabled.
+    // default "*" for dev — tighten in production). Refresh tokens use an HttpOnly cookie,
+    // so credentialed CORS is enabled; production must keep an explicit origin allowlist.
     @Bean
     public CorsConfigurationSource corsConfigurationSource(
             @Value("${GATEWAY_CORS_ALLOWED_ORIGINS:*}") String allowedOrigins) {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+        config.setAllowedOriginPatterns(Arrays.asList(allowedOrigins.split(",")));
+        config.setAllowCredentials(true);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Agora-Agent-Instance"));
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

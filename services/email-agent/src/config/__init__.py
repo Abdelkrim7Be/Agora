@@ -49,10 +49,19 @@ class Settings:
     token_encryption_key_file: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY_FILE", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     token_encryption_required: bool = _env_bool("AGENT_TOKEN_ENCRYPTION_REQUIRED", "false")
+    token_store_backend: str = os.getenv("AGENT_TOKEN_STORE_BACKEND", "file").strip().lower()
+    token_work_dir: str = os.getenv("AGENT_TOKEN_WORK_DIR", "/tmp/agora-token-work")
+    token_vault_path: str = os.getenv(
+        "AGENT_TOKEN_VAULT_PATH", "secret/data/agora/gmail-tokens"
+    ).strip()
     max_emails_per_run: int = int(os.getenv("AGENT_MAX_EMAILS_PER_RUN", "20"))
     poll_interval_minutes: float = float(os.getenv("AGENT_POLL_INTERVAL_MIN", "5"))
     poll_max_retries: int = int(os.getenv("AGENT_POLL_MAX_RETRIES", "3"))
     poll_backoff_base_seconds: float = float(os.getenv("AGENT_POLL_BACKOFF_BASE_SECONDS", "2"))
+    # /events SSE: how often the stream re-checks the run registry for changes.
+    # The API and poller are separate processes sharing the same store, so this is
+    # a server-side change-detection loop, not a client-visible poll.
+    events_poll_interval_seconds: float = float(os.getenv("AGENT_EVENTS_POLL_INTERVAL_SECONDS", "2"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
@@ -79,6 +88,8 @@ class Settings:
 
     # Phase 4 platform mode. Empty DATABASE_URL keeps the current SQLite dev backend.
     database_url: str = get_secret("AGENT", "DATABASE_URL")
+    migration_database_url: str = get_secret("AGENT", "MIGRATION_DATABASE_URL") or database_url
+    run_migrations: bool = _env_bool("AGENT_RUN_MIGRATIONS", "true")
     redis_url: str = get_secret("AGENT", "REDIS_URL")
     storage_backend: str = os.getenv("AGENT_STORAGE_BACKEND", "postgres" if database_url else "sqlite")
     run_registry_backend: str = os.getenv("AGENT_RUN_REGISTRY_BACKEND", "postgres" if database_url else "json")

@@ -2,6 +2,7 @@ endpoint: "http://litellm:4000/v1"
 temperature: 0.0
 roles:
   triage: "openai:agora-triage"
+  quarantine: "openai:agora-quarantine"
   draft: "openai:agora-draft"
   reason: "openai:agora-reason"
   memory_style: "openai:agora-memory-style"
@@ -9,6 +10,8 @@ fallbacks:
   triage:
     - "openai:agora-triage-backup"
     - "anthropic:agora-triage-anthropic-backup"
+  quarantine:
+    - "openai:agora-quarantine-backup"
   draft:
     - "openai:agora-draft-backup"
     - "anthropic:agora-draft-anthropic-backup"

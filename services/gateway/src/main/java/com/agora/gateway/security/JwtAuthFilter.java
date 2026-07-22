@@ -1,5 +1,6 @@
 package com.agora.gateway.security;
 
+import com.agora.gateway.auth.TokenSessionService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -18,9 +19,11 @@ import java.util.List;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final TokenSessionService tokenSessions;
 
-    public JwtAuthFilter(JwtService jwtService) {
+    public JwtAuthFilter(JwtService jwtService, TokenSessionService tokenSessions) {
         this.jwtService = jwtService;
+        this.tokenSessions = tokenSessions;
     }
 
     @Override
@@ -32,6 +35,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             String token = header.substring(7);
             try {
                 Claims claims = jwtService.parse(token);
+                if (tokenSessions.isAccessRevoked(claims.getId())) {
+                    filterChain.doFilter(request, response);
+                    return;
+                }
                 String username = claims.getSubject();
                 String role = claims.get("role", String.class);
                 var auth = new UsernamePasswordAuthenticationToken(

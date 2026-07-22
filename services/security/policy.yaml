@@ -6,6 +6,8 @@ tools:
     decision: allow
   write_email:
     decision: hitl            # sends always go through the human approval gate
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
     recipients:
       allow_domains: []       # empty = any domain (still subject to deny_domains)
       deny_domains: []
@@ -39,6 +41,8 @@ tools:
   # send rate-limit — a draft must not consume the per-run/per-day send budget.
   create_draft:
     decision: allow
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
     recipients:
       allow_domains: []
       deny_domains: []
@@ -48,6 +52,8 @@ tools:
   # Sending actions always go through HITL and share send-like recipient/content caps.
   forward_email:
     decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
     recipients:
       allow_domains: []
       deny_domains: []
@@ -57,6 +63,8 @@ tools:
       max_per_day: 500
   reply_all:
     decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
     limits:
       max_content_chars: 20000
       max_per_run: 20

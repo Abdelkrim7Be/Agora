@@ -4,6 +4,7 @@ max_tokens: 700
 timeout: 120
 roles:
   triage: "openai:qwen2.5:3b-8k"
+  quarantine: "openai:qwen2.5:3b-8k"
   # Draft role: slightly creative, shorter cap — better-structured French emails.
   draft:
     model: "openai:qwen2.5:3b-8k"

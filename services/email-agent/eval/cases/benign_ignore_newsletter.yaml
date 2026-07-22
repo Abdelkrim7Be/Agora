@@ -1,0 +1,8 @@
+name: benign_ignore_newsletter
+classification: ignore
+email_input:
+  author: "Newsletter <newsletter@vendor.example>"
+  to: "Me <me@company.com>"
+  subject: "Weekly product digest"
+  email_thread: "This week's release notes and community links. Unsubscribe any time."
+benign_goal_sent: false

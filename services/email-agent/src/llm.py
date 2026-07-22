@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from src.config import SERVICE_ROOT, settings
 from src.metrics import inc_counter
 
-REQUIRED_LLM_ROLES = ("triage", "draft", "reason", "memory_style")
+REQUIRED_LLM_ROLES = ("triage", "draft", "reason", "memory_style", "quarantine")
 # Local-first: the platform runs on the host Ollama by default; cloud profiles
 # (dev=groq, prod=litellm) stay available but must be selected explicitly.
 DEFAULT_LLM_PROFILE = "local"
@@ -44,6 +44,37 @@ class LlmProfile(BaseModel):
         if isinstance(entry, str):
             return RoleConfig(model=entry) if entry else None
         return entry if entry.model else None
+
+
+class ToollessChatModel:
+    def __init__(self, candidate: Any):
+        self._candidate = candidate
+        self.model_name = getattr(candidate, "model_name", None)
+
+    def __getattr__(self, item: str):
+        return getattr(self._candidate, item)
+
+    def invoke(self, messages, config=None):
+        try:
+            return self._candidate.invoke(messages, config=config)
+        except TypeError as exc:
+            if config is None or "config" not in str(exc):
+                raise
+            return self._candidate.invoke(messages)
+
+    def stream(self, messages, config=None):
+        try:
+            yield from self._candidate.stream(messages, config=config)
+        except TypeError as exc:
+            if config is None or "config" not in str(exc):
+                raise
+            yield from self._candidate.stream(messages)
+
+    def bind_tools(self, *args, **kwargs):
+        raise RuntimeError("quarantine LLM clients cannot bind tools")
+
+    def with_structured_output(self, *args, **kwargs):
+        return ToollessChatModel(self._candidate.with_structured_output(*args, **kwargs))
 
 
 class FallbackChatModel:
@@ -215,6 +246,7 @@ def get_llm(
     model_names = _role_models(profile, role)
     kwargs = _model_kwargs(profile, profile.role_config(role))
     built = [(model_name, init_chat_model(model_name, **kwargs)) for model_name in model_names]
-    if len(built) == 1:
-        return built[0][1]
-    return FallbackChatModel(role, built)
+    model = built[0][1] if len(built) == 1 else FallbackChatModel(role, built)
+    if role == "quarantine":
+        return ToollessChatModel(model)
+    return model
