@@ -38,7 +38,7 @@ from src.gmail_client import format_attachments
 from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.roles import resolve_role
-from src.security_client import authorize_action
+from src.security_client import audit_output, authorize_action
 from src.signature import apply_signature_to_args, strip_signature
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
@@ -735,6 +735,30 @@ def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
     }
 
 
+# Tools that actually leave the system (as opposed to reversible inbox actions like
+# apply_label/archive_email, or create_draft which never sends). These are the ones
+# output-audited right before execution, after HITL approval/edit has resolved.
+SEND_TOOL_NAMES = {"write_email", "forward_email", "reply_all"}
+
+
+def _send_content(args: dict) -> str:
+    return args.get("content") or args.get("body") or args.get("note") or ""
+
+
+def _output_audit_reason(name: str, args: dict, run_id: str) -> str | None:
+    """Return a deny reason if the content about to be sent is flagged, else None.
+
+    Runs after /authorize and any HITL approval/edit — the last gate before a real
+    external send — so it catches leaked injected instructions in whatever content
+    is truly about to leave the system, whether LLM-drafted or human-edited.
+    """
+    audit = audit_output(name, args.get("to", ""), args.get("subject", ""), _send_content(args), run_id)
+    if audit.get("flagged"):
+        reasons = ", ".join(audit.get("reasons") or []) or "flagged content"
+        return f"output audit blocked before send: {reasons}"
+    return None
+
+
 def _can_auto_organize() -> bool:
     return (
         config.auto_organize.enabled
@@ -1056,6 +1080,12 @@ def tool_node(state: State, store: BaseStore, config=None):
                 "tool_call_id": tool_call["id"],
             })
             continue
+
+        if settings.security_enabled and name in SEND_TOOL_NAMES:
+            deny_reason = _output_audit_reason(name, args, run_id)
+            if deny_reason:
+                result.append(_blocked_tool_message(name, deny_reason, tool_call["id"]))
+                continue
 
         email_id_token = current_email_id.set(state["email_input"].get("email_id"))
         thread_id_token = current_gmail_thread_id.set(
