@@ -31,6 +31,7 @@ public class ProxyController {
 
     private static final String PREFIX = "/api/agent";
     private static final String USER_HEADER = "X-Agora-User";
+    private static final String USER_DEPT_HEADER = "X-Agora-User-Dept";
     private static final String AGENT_INSTANCE_HEADER = "X-Agora-Agent-Instance";
     private static final String INSTANCE_ROLE_HEADER = "X-Agora-Instance-Role";
     private static final Pattern VERB_PATTERN = Pattern.compile("^/api/agent/run/[^/]+/([^/]+)$");
@@ -38,7 +39,7 @@ public class ProxyController {
     private static final Set<String> HOP_BY_HOP = Set.of(
             "host", "connection", "content-length", "transfer-encoding",
             "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
-            USER_HEADER.toLowerCase(), AGENT_INSTANCE_HEADER.toLowerCase(),
+            USER_HEADER.toLowerCase(), USER_DEPT_HEADER.toLowerCase(), AGENT_INSTANCE_HEADER.toLowerCase(),
             INSTANCE_ROLE_HEADER.toLowerCase()
     );
 
