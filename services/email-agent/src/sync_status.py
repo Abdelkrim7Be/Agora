@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.config import SERVICE_ROOT, settings
+from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
     current_agent_instance_id,
@@ -32,11 +33,7 @@ def _is_auth_error(error: str) -> bool:
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError("Postgres sync status requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def setup_sync_status() -> None:

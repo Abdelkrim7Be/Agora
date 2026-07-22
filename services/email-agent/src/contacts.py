@@ -10,6 +10,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.config import SERVICE_ROOT, settings
+from src.postgres import tenant_connection
 from src.tenant import current_agent_instance_id, normalize_agent_instance_id
 
 AUDIENCE_VALUES = ("employee", "client", "supplier", "prospect", "candidate", "partner")
@@ -153,11 +154,7 @@ class ContactsConfig(BaseModel):
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("Postgres contact directory requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def _default_instance_id() -> str:
