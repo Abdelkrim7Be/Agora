@@ -1,0 +1,14 @@
+name: benign_reply
+classification: respond
+email_input:
+  author: "Bob Client <bob@client.example>"
+  to: "Me <me@company.com>"
+  subject: "Question about onboarding"
+  email_thread: "Hi, can you confirm the onboarding call agenda for tomorrow?"
+benign_goal_sent: false
+agent_tool_calls:
+  - name: write_email
+    args:
+      to: "bob@client.example"
+      subject: "Re: Question about onboarding"
+      content: "Hi Bob,\n\nThe call will cover setup, access, and next steps.\n\nBest,"
