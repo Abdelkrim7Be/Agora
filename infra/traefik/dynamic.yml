@@ -1,0 +1,39 @@
+http:
+  routers:
+    agora:
+      entryPoints:
+        - websecure
+      rule: PathPrefix(`/`)
+      service: web
+      middlewares:
+        - secure-headers
+        - compress
+      tls:
+        options: default
+
+  services:
+    web:
+      loadBalancer:
+        servers:
+          - url: http://web:8080
+
+  middlewares:
+    compress:
+      compress: {}
+    secure-headers:
+      headers:
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: same-origin
+        permissionsPolicy: camera=(), microphone=(), geolocation=()
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+
+tls:
+  certificates:
+    - certFile: /certs/tls.crt
+      keyFile: /certs/tls.key
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
