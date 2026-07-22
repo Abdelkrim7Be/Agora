@@ -79,6 +79,8 @@ class Settings:
 
     # Phase 4 platform mode. Empty DATABASE_URL keeps the current SQLite dev backend.
     database_url: str = get_secret("AGENT", "DATABASE_URL")
+    migration_database_url: str = get_secret("AGENT", "MIGRATION_DATABASE_URL") or database_url
+    run_migrations: bool = _env_bool("AGENT_RUN_MIGRATIONS", "true")
     redis_url: str = get_secret("AGENT", "REDIS_URL")
     storage_backend: str = os.getenv("AGENT_STORAGE_BACKEND", "postgres" if database_url else "sqlite")
     run_registry_backend: str = os.getenv("AGENT_RUN_REGISTRY_BACKEND", "postgres" if database_url else "json")

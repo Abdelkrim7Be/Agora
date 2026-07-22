@@ -7,6 +7,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from src.config import SERVICE_ROOT, settings
+from src.postgres import tenant_connection
 from src.tenant import current_agent_instance_id, normalize_agent_instance_id
 
 _roles_path = Path(settings.roles_path)
@@ -115,11 +116,7 @@ def dump_roles(config: RolesConfig) -> str:
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:  # pragma: no cover - exercised only with Postgres installed
-        raise RuntimeError("Postgres role directory requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def _default_instance_id() -> str:

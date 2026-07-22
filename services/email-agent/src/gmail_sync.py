@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from src.config import SERVICE_ROOT, settings
+from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
     current_agent_instance_id,
@@ -35,11 +36,7 @@ def history_id_is_newer(candidate: str, existing: str | None) -> bool:
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError("Postgres gmail sync state requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def setup_gmail_sync() -> None:

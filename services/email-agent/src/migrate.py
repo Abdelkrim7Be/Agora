@@ -31,7 +31,7 @@ def upgrade_to_head() -> None:
     poller startup is safe. This replaces the hand-rolled ``setup_*`` DDL, which
     now defers to migrations.
     """
-    if not postgres_schema_selected():
+    if not settings.run_migrations or not postgres_schema_selected():
         return
 
     from alembic import command
@@ -39,6 +39,6 @@ def upgrade_to_head() -> None:
 
     cfg = Config(str(SERVICE_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(SERVICE_ROOT / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    cfg.set_main_option("sqlalchemy.url", settings.migration_database_url or settings.database_url)
     logger.info("Applying Alembic migrations to head")
     command.upgrade(cfg, "head")
