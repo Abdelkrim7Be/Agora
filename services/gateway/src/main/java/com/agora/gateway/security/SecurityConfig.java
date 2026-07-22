@@ -93,6 +93,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/agent/style").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/style/**").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/runs").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/events").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/runs/bulk").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/inbox").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/archive").hasAnyRole("OWNER", "ADMIN")
