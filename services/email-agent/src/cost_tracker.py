@@ -13,6 +13,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from src.config import SERVICE_ROOT, settings
 from src.llm import active_profile_name, load_llm_profile
+from src.postgres import tenant_connection
 from src.tenant import (
     current_agent_instance_id,
     current_user_id,
@@ -99,11 +100,7 @@ def selected_cost_backend(path: str | Path | None = None) -> str:
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError("Postgres cost tracking requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def setup_cost_tracker() -> None:

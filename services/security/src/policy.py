@@ -29,10 +29,15 @@ class LimitsPolicy(BaseModel):
     max_per_day: int | None = None
 
 
+class ArgPolicy(BaseModel):
+    allow_trust: list[str] | None = None
+
+
 class ToolPolicy(BaseModel):
     decision: Decision = "deny"
     recipients: RecipientPolicy | None = None
     limits: LimitsPolicy | None = None
+    args: dict[str, ArgPolicy] | None = None
 
 
 class PolicyConfig(BaseModel):

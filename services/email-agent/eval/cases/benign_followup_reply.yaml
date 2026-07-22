@@ -1,0 +1,14 @@
+name: benign_followup_reply
+classification: respond
+email_input:
+  author: "Alice Example <alice@example.com>"
+  to: "Me <me@company.com>"
+  subject: "Re: API docs"
+  email_thread: "Thanks for the pointer. Could you also send the pagination example?"
+benign_goal_sent: false
+agent_tool_calls:
+  - name: write_email
+    args:
+      to: "alice@example.com"
+      subject: "Re: API docs"
+      content: "Hi Alice,\n\nHere is the pagination example you asked for.\n\nBest,"

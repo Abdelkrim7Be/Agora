@@ -54,7 +54,7 @@ def test_loads_local_ollama_profile_mapping(monkeypatch):
 
     assert profile.endpoint == "http://localhost:11434/v1"
     assert profile.roles["triage"] == "openai:qwen2.5:3b-8k"
-    assert set(profile.roles) == {"triage", "draft", "reason", "memory_style"}
+    assert set(profile.roles) == {"triage", "draft", "reason", "memory_style", "quarantine"}
     assert profile.fallbacks == {}
     assert get_llm_model_name("draft") == "openai:qwen2.5:3b-8k"
 
@@ -69,6 +69,7 @@ def test_prod_fallback_uses_backup_model(monkeypatch, tmp_path):
         "  draft: openai:primary-draft\n"
         "  reason: openai:primary-reason\n"
         "  memory_style: openai:primary-memory\n"
+        "  quarantine: openai:primary-quarantine\n"
         "fallbacks:\n"
         "  draft:\n"
         "    - openai:backup-draft\n",
@@ -136,6 +137,7 @@ def test_profile_backed_price_alias_keeps_known_rate(monkeypatch):
                 "draft": "custom:llama-3.3-70b-versatile",
                 "reason": "custom:llama-3.3-70b-versatile",
                 "memory_style": "custom:llama-3.3-70b-versatile",
+                "quarantine": "custom:llama-3.3-70b-versatile",
             }
         ),
     )
@@ -150,3 +152,49 @@ def test_prod_profile_includes_multi_provider_fallbacks(monkeypatch):
     monkeypatch.setenv("AGENT_LLM_PROFILE", "prod")
     profile = load_llm_profile()
     assert profile.fallbacks["draft"][-1] == "anthropic:agora-draft-anthropic-backup"
+
+
+def test_quarantine_role_resolves_independently_from_draft(monkeypatch):
+    monkeypatch.setenv("AGENT_LLM_PROFILE", "prod")
+
+    profile = load_llm_profile()
+
+    assert profile.roles["quarantine"] == "openai:agora-quarantine"
+    assert profile.roles["quarantine"] != profile.roles["draft"]
+    assert get_llm_model_name("quarantine") == "openai:agora-quarantine"
+
+
+def test_quarantine_llm_cannot_bind_tools(monkeypatch, tmp_path):
+    path = tmp_path / "llm.quarantine.yaml"
+    path.write_text(
+        "temperature: 0.0\n"
+        "roles:\n"
+        "  triage: openai:triage\n"
+        "  draft: openai:draft\n"
+        "  reason: openai:reason\n"
+        "  memory_style: openai:memory\n"
+        "  quarantine: openai:quarantine\n",
+        encoding="utf-8",
+    )
+
+    class FakeModel:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+
+        def invoke(self, _messages, config=None):
+            return {"model": self.model_name}
+
+        def bind_tools(self, *_args, **_kwargs):
+            return "bound"
+
+        def with_structured_output(self, *_args, **_kwargs):
+            return self
+
+    monkeypatch.setattr("src.llm.init_chat_model", lambda model_name, **_kwargs: FakeModel(model_name))
+
+    llm = get_llm("quarantine", config_path=path)
+
+    assert llm.model_name == "openai:quarantine"
+    with pytest.raises(RuntimeError, match="cannot bind tools"):
+        llm.bind_tools([])
+    assert llm.with_structured_output(object).invoke([]) == {"model": "openai:quarantine"}

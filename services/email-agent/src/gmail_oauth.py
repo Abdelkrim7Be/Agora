@@ -13,7 +13,12 @@ from typing import Any
 
 from src.config import SERVICE_ROOT, settings
 from src.gmail_client import GMAIL_SCOPES
-from src.token_store import active_master_key_secret, delete_token, prepared_token_file
+from src.token_store import (
+    active_master_key_secret,
+    delete_token,
+    has_stored_token,
+    prepared_token_file,
+)
 from src.tenant import normalize_agent_instance_id, normalize_user_id
 
 try:  # pragma: no cover - exercised through monkeypatched fakes in unit tests.
@@ -197,11 +202,7 @@ def revoke_gmail_token(
     """
     # Read the token value before deleting, using the prepared_token_file context
     # to transparently handle at-rest encryption.
-    from src.token_store import token_file_for_user
-
-    target = token_file_for_user(user_id, agent_instance_id)
-    enc_path = target.with_name(target.name + ".enc")
-    if not target.is_file() and not enc_path.is_file():
+    if not has_stored_token(agent_instance_id):
         return False
 
     revoke_value: str | None = None

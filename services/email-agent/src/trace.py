@@ -7,6 +7,7 @@ from typing import Any
 import uuid
 
 from src.config import SERVICE_ROOT, settings
+from src.postgres import tenant_connection
 from src.tenant import (
     current_agent_instance_id,
     current_user_id,
@@ -36,11 +37,7 @@ def selected_trace_backend(path: str | Path | None = None) -> str:
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError("Postgres trace tracking requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def setup_trace_store() -> None:

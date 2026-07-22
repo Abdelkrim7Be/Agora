@@ -7,6 +7,7 @@ from threading import Lock
 from typing import Any
 
 from src.config import SERVICE_ROOT, settings
+from src.postgres import tenant_connection
 from src.tenant import (
     current_agent_instance_id,
     current_user_id,
@@ -192,11 +193,7 @@ def _json_get(
 
 
 def _connect():
-    try:
-        import psycopg
-    except ImportError as exc:
-        raise RuntimeError("Postgres run registry requires psycopg.") from exc
-    return psycopg.connect(settings.database_url)
+    return tenant_connection()
 
 
 def setup_run_registry() -> None:

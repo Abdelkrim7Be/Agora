@@ -38,8 +38,8 @@ class EmailInput(TypedDict):
     list_unsubscribe: NotRequired[bool]
     precedence_bulk: NotRequired[bool]
     automation: NotRequired[dict]
-    # Verdict from the security service /sanitize, attached by the poller when
-    # AGENT_SECURITY_ENABLED=true. Absent on the manual /run path. triage_router reads it.
+    # Verdict and SEC7/SEC9 field trust from the security service, attached by
+    # the poller when enabled. Absent on the manual /run path.
     security: NotRequired[dict]
     # Platform scoping — set by the poller and API from context variables so every
     # run record carries explicit instance identity without relying solely on context lookups.

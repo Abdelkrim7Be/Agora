@@ -66,6 +66,18 @@ Default policy decisions:
 
 The security service remains default-deny: adding a new tool also requires adding an explicit `policy.yaml` rule.
 
+### Output audit before send
+
+`write_email`, `forward_email`, and `reply_all` get one more check beyond `/authorize`:
+right after HITL approval/edit resolves — the last moment before the real Gmail
+send — the security service's `/audit-output` scans the actual outbound content for
+leaked prompt-injection artifacts (leftover instruction-override phrasing, role
+hijack, an obvious secret/credential, or literal `/sanitize` fence markers). This
+catches content that survived inbound sanitization and got echoed into the draft,
+whether by the LLM or a careless human edit during review. A flagged draft is
+blocked outright, even if `/authorize` already allowed the action. Fail-closed: a
+security-service outage blocks the send rather than letting it through unaudited.
+
 ## Dry Run
 
 `AGENT_DRY_RUN=true` is the default. Agent-proposed Gmail mutations return dry-run results instead of changing the mailbox or sending mail.

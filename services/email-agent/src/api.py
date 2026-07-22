@@ -84,6 +84,8 @@ from src.health import aggregate_health
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
 from src.migrate import upgrade_to_head
+from src.postgres import validate_runtime_role
+from src.token_store import validate_token_security
 from src.sync_status import (
     get_status as get_sync_status,
     public_error_message as public_sync_error_message,
@@ -181,7 +183,9 @@ async def _watch_renewal_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_token_security()
     upgrade_to_head()
+    validate_runtime_role()
     setup_run_registry()
     setup_gmail_sync()
     setup_sync_status()
@@ -2543,6 +2547,80 @@ async def runs(
     ]
     has_more = len(page) > limit
     return {"runs": page[:limit], "limit": limit, "offset": offset, "has_more": has_more}
+
+
+async def _events_generator(request: Request, agent_instance_id: str, user_dept: str | None):
+    """Server-side change-detection loop over the run registry, streamed as SSE.
+
+    The API and poller are separate processes sharing the same store (SQLite file
+    or Postgres), so this is not a client-visible poll: the browser opens one
+    long-lived connection and gets pushed a 'run_updated' event the moment this
+    loop next notices a run changed, instead of re-polling /runs on a timer.
+    Diffs full (run_id -> updated_at) snapshots rather than filtering by timestamp
+    cursor — updated_at has only second precision, so a naive ">" cursor comparison
+    could miss a second update landing within the same wall-clock second.
+    """
+    last_state: dict[str, str] = {}
+    first_tick = True
+    try:
+        while True:
+            if await request.is_disconnected():
+                break
+            all_runs = await asyncio.to_thread(
+                list_runs,
+                user_id=None,
+                agent_instance_id=agent_instance_id,
+                limit=5000,
+            )
+            if user_dept:
+                all_runs = [
+                    r for r in all_runs
+                    if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept
+                ]
+            current_state = {r["run_id"]: r.get("updated_at") or "" for r in all_runs}
+
+            if first_tick:
+                # Baseline only — a fresh connection must not replay run history.
+                last_state = current_state
+                first_tick = False
+            else:
+                changed_ids = {
+                    run_id for run_id, updated_at in current_state.items()
+                    if last_state.get(run_id) != updated_at
+                }
+                if changed_ids:
+                    categories_cfg = load_categories(agent_instance_id=agent_instance_id)
+                    escalation_state = load_escalation_state()
+                    for record in all_runs:
+                        if record["run_id"] in changed_ids:
+                            annotated = _annotate_run_record(
+                                record, categories_cfg=categories_cfg, escalation_state=escalation_state
+                            )
+                            yield _sse_event("run_updated", annotated)
+                    last_state = current_state
+                else:
+                    yield _sse_event(
+                        "heartbeat", {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                    )
+            await asyncio.sleep(settings.events_poll_interval_seconds)
+    except asyncio.CancelledError:
+        pass
+
+
+@app.get("/events")
+async def events_stream(request: Request) -> StreamingResponse:
+    """Push run changes (new/updated pending approvals, completions) as SSE.
+
+    Same visibility scope as GET /runs: current agent instance, department-filtered
+    for non-owner/admin roles. Gateway gates this the same as GET /api/agent/runs
+    (owner/viewer/admin).
+    """
+    agent_instance_id = current_agent_instance_id()
+    user_dept = _request_user_dept(request)
+    return StreamingResponse(
+        _events_generator(request, agent_instance_id, user_dept),
+        media_type="text/event-stream",
+    )
 
 
 @app.post("/sync")

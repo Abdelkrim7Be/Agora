@@ -17,6 +17,7 @@ def test_alembic_scaffold_and_scripts_exist() -> None:
     assert (SERVICE_ROOT / "migrations" / "versions" / "0004_segments.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0007_trace_retention.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0008_dlq.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0009_tenant_rls.py").is_file()
     assert (SERVICE_ROOT / "scripts" / "backup.sh").is_file()
     assert (SERVICE_ROOT / "scripts" / "restore.sh").is_file()
     assert (SERVICE_ROOT / "docs" / "backup-restore.md").is_file()
@@ -156,7 +157,9 @@ def test_entrypoints_apply_migrations_before_setup() -> None:
     api_src = (SERVICE_ROOT / "src" / "api.py").read_text(encoding="utf-8")
     poller_src = (SERVICE_ROOT / "src" / "poller.py").read_text(encoding="utf-8")
     for src in (api_src, poller_src):
+        assert "validate_token_security()" in src
         assert "upgrade_to_head()" in src
+        assert src.index("validate_token_security()") < src.index("upgrade_to_head()")
         assert src.index("upgrade_to_head()") < src.index("setup_run_registry()")
 
 
@@ -168,5 +171,26 @@ def test_dlq_migration_covers_dead_letter_table() -> None:
         '"requeue_token"',
         '"payload"',
         'email_agent_dlq_instance_status_timestamp_idx',
+    ):
+        assert marker in text
+
+
+def test_tenant_rls_migration_forces_policies_on_all_business_tables() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0009_tenant_rls.py").read_text(encoding="utf-8")
+    for marker in (
+        'down_revision = "0008_dlq"',
+        "FORCE ROW LEVEL SECURITY",
+        "agora_tenant_isolation",
+        "current_setting('agora.user_id', true)",
+        "current_setting('agora.agent_instance_id', true)",
+        '"agent_runs"',
+        '"email_agent_sync"',
+        '"llm_costs"',
+        '"llm_traces"',
+        '"email_agent_dlq"',
+        '"email_agent_instance_config"',
+        '"email_agent_roles"',
+        '"email_agent_contacts"',
+        '"email_agent_segments"',
     ):
         assert marker in text
