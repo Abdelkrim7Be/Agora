@@ -1,0 +1,161 @@
+{
+  "nav": {
+    "instances": "Instances d'agents",
+    "agentTypes": "Types d'agents",
+    "health": "Santé système",
+    "audit": "Journaux d'audit",
+    "users": "Utilisateurs",
+    "account": "Compte"
+  },
+  "view": {
+    "instances": {
+      "title": "Instances d'agents",
+      "kicker": "Plateforme multi-agents",
+      "description": "Activez, ouvrez et supervisez les instances d'agents IA hébergées sur la plateforme."
+    },
+    "agentTypes": {
+      "title": "Types d'agents",
+      "kicker": "Registre",
+      "description": "Examinez les services d'agents disponibles et les capacités que chaque type expose."
+    },
+    "account": {
+      "title": "Compte",
+      "kicker": "Session",
+      "description": "Gérez la session actuelle de la passerelle et le contexte de l'espace de travail sélectionné."
+    },
+    "gmail": {
+      "title": "Connexion Gmail & Synchronisation",
+      "kicker": "Connexion boîte mail",
+      "description": "Inspectez l'état de la connexion de la boîte mail et les signaux de synchronisation pour cette instance d'agent e-mail."
+    },
+    "permissions": {
+      "title": "Permissions",
+      "kicker": "Délégation",
+      "description": "Consultez les rôles d'accès à l'instance et la délégation d'approbation pour cet espace de travail."
+    },
+    "validation": {
+      "title": "Boîte de validation",
+      "kicker": "Supervision humaine",
+      "description": "Passez en revue les actions en attente avant qu'elles n'affectent les systèmes connectés."
+    },
+    "drafts": {
+      "title": "Brouillons",
+      "kicker": "File d'approbation",
+      "description": "Passez en revue les brouillons d'e-mails en attente groupés par catégorie et priorité."
+    },
+    "inbox": {
+      "title": "Messages",
+      "kicker": "Contexte de l'agent",
+      "description": "Inspectez les messages ou événements récents et ouvrez l'exécution attachée."
+    },
+    "run-detail": {
+      "title": "Détail de l'exécution",
+      "kicker": "Analyse",
+      "description": "Tracez une décision de l'agent à travers les verdicts de sécurité, les appels d'outils et les messages de chronologie."
+    },
+    "audit": {
+      "title": "Journaux d'audit",
+      "kicker": "Conformité",
+      "description": "Consultez les événements d'accès à la passerelle et à l'agent avec filtrage, pagination et exportation CSV."
+    },
+    "users": {
+      "title": "Utilisateurs",
+      "kicker": "Administration",
+      "description": "Créez, désactivez et attribuez un rôle + département pour les comptes du personnel. Admin uniquement."
+    },
+    "health": {
+      "title": "Santé système",
+      "kicker": "Exploitation",
+      "description": "Agent, poller, sécurité, base de données, Redis, file d'attente, et notifications — vue instantanée."
+    },
+    "costs": {
+      "title": "Coûts LLM",
+      "kicker": "Observabilité des tokens",
+      "description": "Suivez les appels de modèle, le volume de tokens et l'estimation des dépenses en EUR pour l'instance d'agent sélectionnée."
+    },
+    "style": {
+      "title": "Style de rédaction",
+      "kicker": "Voix de la boîte mail",
+      "description": "Examinez et actualisez le profil de voix de l'instance d'agent sélectionnée."
+    },
+    "signature": {
+      "title": "Signature d'e-mail",
+      "kicker": "Identité de réponse",
+      "description": "Gérez la signature ajoutée aux e-mails rédigés par l'instance sélectionnée."
+    },
+    "memory": {
+      "title": "Préférences de mémoire",
+      "kicker": "Personnalisation",
+      "description": "Réglez le triage durable et les préférences de réponse utilisés par l'instance sélectionnée."
+    },
+    "config": {
+      "title": "Configuration du Persona",
+      "kicker": "Voix de l'agent",
+      "description": "Maintenez le contexte, les instructions de triage et le comportement de réponse pour l'agent."
+    },
+    "capabilities": {
+      "title": "Capacités & Politique de Sécurité",
+      "kicker": "Plan de contrôle",
+      "description": "Basculez les capacités en direct de l'agent et inspectez la politique de sécurité appliquée en amont."
+    },
+    "categories": {
+      "title": "Workflows",
+      "kicker": "Playbooks métier",
+      "description": "Définissez comment l'instance reconnaît les cas métiers, rédige des réponses, achemine le travail et applique les règles d'approbation."
+    },
+    "roles": {
+      "title": "Annuaire des rôles",
+      "kicker": "Routage métier",
+      "description": "Mappez les rôles métiers aux destinations réelles, avec aperçu du routage principal avant sauvegarde."
+    },
+    "contacts": {
+      "title": "Répertoire des contacts",
+      "kicker": "Source unique",
+      "description": "Gérez les personnes une seule fois, puis réutilisez-les dans les segments et campagnes."
+    },
+    "segments": {
+      "title": "Segments",
+      "kicker": "Vues métier",
+      "description": "Créez des vues dynamiques ou explicites au-dessus du répertoire de contacts."
+    },
+    "rules": {
+      "title": "Règles de l'agent",
+      "kicker": "Automatisation",
+      "description": "Éditez rules.yaml et prévisualisez l'automatisation, les synthèses, les mises en veille, les suivis et l'état d'apprentissage."
+    },
+    "analytics": {
+      "title": "Tableau de bord",
+      "kicker": "Pilotage",
+      "description": "Suivez le volume traité, les workflows les plus chargés, le délai d’approbation et la charge par département pour l’instance sélectionnée."
+    },
+    "campaigns": {
+      "title": "Campagnes",
+      "kicker": "Activation e-mail",
+      "description": "Préparez des campagnes contrôlées avec segments, modèles et validation humaine avant envoi."
+    },
+    "dlq": {
+      "title": "File d’erreurs",
+      "kicker": "Exploitation",
+      "description": "Inspectez les actions bloquées ou en échec et relancez uniquement ce qui peut l’être."
+    }
+  },
+  "global": {
+    "search": "Rechercher la vue courante",
+    "searchAudit": "Rechercher logs, actions ou chemins",
+    "signIn": "Se connecter",
+    "signOut": "Se déconnecter",
+    "ready": "Prêt.",
+    "gatewayIdle": "Passerelle inactive",
+    "signInToControl": "Connectez-vous pour contrôler la plateforme"
+  },
+  "actions": {
+    "reply_draft": "Brouillon de réponse",
+    "reply_all": "Réponse à tous",
+    "draft": "Brouillon",
+    "forward": "Transfert",
+    "notify": "Alerte",
+    "campaign": "Campagne",
+    "organize": "Classement",
+    "unknown": "Inconnu"
+  }
+}
