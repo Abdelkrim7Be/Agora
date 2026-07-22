@@ -1,0 +1,5 @@
+[extend]
+useDefault = true
+
+# No exceptions yet. Add path/rule allowlist entries here (with a comment
+# explaining why) if the default ruleset ever flags a committed non-secret.

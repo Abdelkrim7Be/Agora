@@ -9,6 +9,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
 SCAN_JOB = WORKFLOW["jobs"]["dependency-image-scan"]
+SECRET_SCAN_JOB = WORKFLOW["jobs"]["secret-scan"]
 
 
 class CiScanningTest(unittest.TestCase):
@@ -66,6 +67,28 @@ class CiScanningTest(unittest.TestCase):
         self.assertIn("--exit-code 1", script)
         for image in ("email-agent", "security", "gateway", "web", "web-react"):
             self.assertIn(f"scan_image {image} {image}", script)
+
+    def test_secret_scan_covers_full_git_history_and_blocks_findings(self):
+        checkout = next(
+            step for step in SECRET_SCAN_JOB["steps"] if step.get("uses", "").startswith("actions/checkout")
+        )
+        scan_step = next(
+            step for step in SECRET_SCAN_JOB["steps"] if step.get("name") == "Scan git history for secrets"
+        )
+
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        self.assertIn("zricethezav/gitleaks:v8.30.1", scan_step["run"])
+        self.assertIn("detect --source /repo", scan_step["run"])
+        self.assertIn("--config /repo/.gitleaks.toml", scan_step["run"])
+        self.assertIn("--exit-code 1", scan_step["run"])
+
+    def test_local_secret_scanner_matches_ci_gitleaks_version(self):
+        script = (ROOT / "infra" / "scan-secrets.sh").read_text()
+
+        self.assertIn('GITLEAKS_VERSION="${GITLEAKS_VERSION:-8.30.1}"', script)
+        self.assertIn('GITLEAKS_IMAGE="zricethezav/gitleaks:v${GITLEAKS_VERSION}"', script)
+        self.assertIn("--config /repo/.gitleaks.toml", script)
+        self.assertIn("--exit-code 1", script)
 
     def test_runtime_images_refresh_vulnerable_base_packages(self):
         dockerfiles = {
