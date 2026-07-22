@@ -9,7 +9,10 @@ import pytest
 from src.config import settings
 from src.run_lock import try_claim_message
 
-APP_URL = os.getenv("RLS_TEST_APP_URL", "")
+# Advisory locks don't need the restricted agora_email_agent role (that role is
+# created by test_tenant_rls_postgres.py, which may not have run yet in this
+# order) — any authenticated connection to the same database works.
+PG_URL = os.getenv("RLS_TEST_ADMIN_URL", "")
 
 
 def test_file_backend_rejects_concurrent_claim(tmp_path, monkeypatch):
@@ -68,9 +71,9 @@ def test_file_backend_serializes_racing_threads(tmp_path, monkeypatch):
     assert claims.count(True) == 1
 
 
-@pytest.mark.skipif(not APP_URL, reason="RLS_TEST_APP_URL is required")
+@pytest.mark.skipif(not PG_URL, reason="RLS_TEST_ADMIN_URL is required")
 def test_postgres_backend_rejects_concurrent_claim(monkeypatch):
-    monkeypatch.setattr(settings, "database_url", APP_URL)
+    monkeypatch.setattr(settings, "database_url", PG_URL)
 
     with try_claim_message("agent-a", "msg-pg-1") as first:
         assert first is True
