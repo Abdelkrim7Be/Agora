@@ -1,6 +1,9 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agora}
       POSTGRES_USER: ${POSTGRES_USER:-agora}
@@ -17,6 +20,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
     volumes:
       - redis_data:/data
     healthcheck:
@@ -31,6 +37,9 @@ services:
     build:
       context: ../services/security
       network: host
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
     environment:
       # Local-first quarantine classifier (Ollama, OpenAI-compatible endpoint).
       SECURITY_SANITIZE_MODEL: ${SECURITY_SANITIZE_MODEL:-openai:qwen2.5:3b-8k}
@@ -61,7 +70,10 @@ services:
       - agora
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.32.1
+    restart: unless-stopped
+    mem_limit: 8g
+    cpus: 4.0
     ports:
       - "11434:11434"
     environment:
@@ -82,24 +94,28 @@ services:
       - agora
 
   ollama-init:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.32.1
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command: ["pull", "qwen2.5:3b"]
+    command: ["sh", "-c", "ollama pull qwen2.5:3b && ollama create qwen2.5:3b-8k -f /models/qwen2.5-3b-8k.Modelfile"]
     depends_on:
       ollama:
         condition: service_healthy
     volumes:
       - ollama_data:/root/.ollama
+      - ./ollama/qwen2.5-3b-8k.Modelfile:/models/qwen2.5-3b-8k.Modelfile:ro
     networks:
       - agora
     restart: "no"
 
   litellm:
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
     # Cloud LLM proxy — only needed by the explicit `prod` LLM profile. The
     # platform is local-first (Ollama), so this stays out of the default stack.
     profiles: ["cloud"]
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm:v1.86.2
     command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -113,6 +129,9 @@ services:
     build:
       context: ../services/email-agent
       network: host
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
     env_file:
       - ../services/email-agent/.env
     environment:
@@ -142,18 +161,17 @@ services:
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
-      AGENT_DRY_RUN: "false"         # real sends/mutations enabled — every send still passes HITL + security /authorize
+      AGENT_DRY_RUN: ${AGENT_DRY_RUN:-true}
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_SECURITY_TIMEOUT: 10
-      # Browser Gmail OAuth onboarding. Credentials mounted read-only (secret, not baked in the image).
+      # Browser Gmail OAuth onboarding. Demo/live compose mounts credentials.json explicitly.
       # Redirect URI points at the gateway — the browser cannot reach email-agent directly.
-      GMAIL_CREDENTIALS_PATH: credentials.json
+      GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH:-credentials.json}
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8080/api/agent/connect/gmail/callback
       GMAIL_OAUTH_STATE_SECRET: ${GMAIL_OAUTH_STATE_SECRET:-${AGENT_TOKEN_ENCRYPTION_KEY}}
     volumes:
       - agent_data:/app/data
-      - ../services/email-agent/credentials.json:/app/credentials.json:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -173,8 +191,11 @@ services:
   gateway:
     build:
       context: ../services/gateway
-      dockerfile: Dockerfile.runtime
+      dockerfile: Dockerfile
       network: host
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
     ports:
       - "8080:8080"
     environment:
@@ -206,8 +227,11 @@ services:
     build:
       context: ../services/web
       network: host
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
     ports:
-      - "3000:80"
+      - "3000:8080"
     depends_on:
       - gateway
     networks:
