@@ -141,6 +141,19 @@ curl -X POST https://mail.example.com/api/agent/run/<run_id>/approve \
   -d '{"decision": "accept"}'
 ```
 
+**Stream run changes in real time (owner, viewer, or admin):**
+```
+curl -N https://mail.example.com/api/agent/events \
+  -H "Authorization: Bearer <token>"
+```
+Server-sent events: a `run_updated` event with the full annotated run record the
+moment a run changes (new pending approval, status change, completion), or a
+`heartbeat` on every idle tick (`AGENT_EVENTS_POLL_INTERVAL_SECONDS`, default 2s).
+The web UI uses this to replace its badge/validation-queue polling; the existing
+timers stay as a slow fallback only. The API and poller are separate processes
+sharing the same store, so this is a server-side change-detection loop, not a
+client-visible poll.
+
 **View audit log (owner only):**
 ```
 curl https://mail.example.com/audit \
