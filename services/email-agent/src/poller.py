@@ -113,6 +113,7 @@ from src.junk_gate import is_junk
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
+from src.run_lock import try_claim_message
 from src.notifications import notify_overdue_approval, notify_pending_approval
 from src.dlq import record_dead_letter, setup_dlq
 from src.metrics import inc_counter
@@ -401,6 +402,24 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
 
 
 async def process_message(
+    graph,
+    msg_id: str,
+    resource,
+    rules_config: RulesConfig,
+    message: dict | None = None,
+) -> tuple:
+    # A webhook push and the polling fallback can both reach this message at
+    # nearly the same instant; without exclusion both would pass the
+    # find_run_by_email check below and create duplicate runs (a duplicate send,
+    # for an auto-approved workflow). A non-owner skips outright — the owner's
+    # run becomes visible on the next status check.
+    with try_claim_message(current_agent_instance_id(), msg_id) as claimed:
+        if not claimed:
+            return (msg_id, "skipped", "")
+        return await _process_message_locked(graph, msg_id, resource, rules_config, message)
+
+
+async def _process_message_locked(
     graph,
     msg_id: str,
     resource,
