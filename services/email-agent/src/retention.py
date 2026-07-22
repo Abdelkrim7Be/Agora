@@ -10,6 +10,7 @@ import yaml
 from src.config import SERVICE_ROOT, settings
 from src.cost_tracker import count_costs_for_runs, delete_costs_for_runs
 from src.instance_config import read_instance_text, write_instance_text
+from src.postgres import tenant_connection
 from src.run_registry import delete_runs, list_runs_before
 from src.storage import selected_storage_backend
 from src.tenant import current_agent_instance_id
@@ -86,9 +87,7 @@ def _sqlite_delete(table: str, run_ids: list[str]) -> int:
 
 
 def _postgres_count(table: str, run_ids: list[str]) -> int:
-    import psycopg
-
-    with psycopg.connect(settings.database_url) as conn:
+    with tenant_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT COUNT(*) FROM {table} WHERE thread_id = ANY(%s)",
@@ -99,9 +98,7 @@ def _postgres_count(table: str, run_ids: list[str]) -> int:
 
 
 def _postgres_delete(table: str, run_ids: list[str]) -> int:
-    import psycopg
-
-    with psycopg.connect(settings.database_url) as conn:
+    with tenant_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"DELETE FROM {table} WHERE thread_id = ANY(%s)",
