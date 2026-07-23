@@ -1004,3 +1004,26 @@ export function useRejectCampaign() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaigns-pending', instanceId] }),
   });
 }
+
+// --- DLQ ---
+
+export function useDlqQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['dlq', instanceId],
+    queryFn: () => api('/api/agent/dlq'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useRequeueDlqEntry() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (entryId) => api(`/api/agent/dlq/${encodeURIComponent(entryId)}/requeue`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dlq', instanceId] }),
+  });
+}
