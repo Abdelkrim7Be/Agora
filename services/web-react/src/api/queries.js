@@ -734,3 +734,178 @@ export function useRemoveGrant() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['grants', instanceId] }),
   });
 }
+
+// --- Categories (workflow builder) ---
+
+export function useCategoriesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['categories', instanceId],
+    queryFn: () => api('/api/agent/categories'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveCategoriesYaml() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (categoriesYaml) => api('/api/agent/categories', { method: 'PUT', body: JSON.stringify({ categories_yaml: categoriesYaml }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories', instanceId] }),
+  });
+}
+
+export function useSaveCategoryEdit() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ name, payload }) => api(`/api/agent/categories/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories', instanceId] }),
+  });
+}
+
+export function useDuplicateCategory() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (name) => api(`/api/agent/categories/${encodeURIComponent(name)}/duplicate`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories', instanceId] }),
+  });
+}
+
+export function useDeleteCategory() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (name) => api(`/api/agent/categories/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories', instanceId] }),
+  });
+}
+
+export function useTestCategoryMatch() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ author, subject }) => api('/api/agent/categories/test-match', {
+      method: 'POST',
+      body: JSON.stringify({ author, subject, email_thread: '' }),
+    }),
+  });
+}
+
+// --- Rules ---
+
+export function useRulesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['rules', instanceId],
+    queryFn: () => api('/api/agent/rules'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useRuleSuggestionsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['rule-suggestions', instanceId],
+    queryFn: () => api('/api/agent/rules/suggestions'),
+    enabled: Boolean(token),
+  });
+}
+
+function invalidateRules(queryClient, instanceId) {
+  queryClient.invalidateQueries({ queryKey: ['rules', instanceId] });
+}
+
+export function useSaveRulesYaml() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (rulesYaml) => api('/api/agent/rules', { method: 'PUT', body: JSON.stringify({ rules_yaml: rulesYaml }) }),
+    onSuccess: () => invalidateRules(queryClient, instanceId),
+  });
+}
+
+export function useSaveRule() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/rules/rule', { method: 'POST', body: JSON.stringify(payload) }),
+    onSuccess: () => invalidateRules(queryClient, instanceId),
+  });
+}
+
+export function useDeleteRule() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (name) => api('/api/agent/rules/rule-delete', { method: 'POST', body: JSON.stringify({ name }) }),
+    onSuccess: () => invalidateRules(queryClient, instanceId),
+  });
+}
+
+export function useToggleRule() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ name, enabled }) => api('/api/agent/rules/rule-toggle', { method: 'POST', body: JSON.stringify({ name, enabled }) }),
+    onSuccess: () => invalidateRules(queryClient, instanceId),
+  });
+}
+
+export function useSaveSectionConfig() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ section, config }) => api('/api/agent/rules/section-config', { method: 'PUT', body: JSON.stringify({ section, config }) }),
+    onSuccess: () => invalidateRules(queryClient, instanceId),
+  });
+}
+
+export function useToggleSection() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ section, enabled }) => api('/api/agent/rules/section-toggle', { method: 'POST', body: JSON.stringify({ section, enabled }) }),
+    onSuccess: () => invalidateRules(queryClient, instanceId),
+  });
+}
+
+export function usePromoteSuggestion() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (index) => api(`/api/agent/rules/suggestions/${encodeURIComponent(index)}/promote`, { method: 'POST' }),
+    onSuccess: () => {
+      invalidateRules(queryClient, instanceId);
+      queryClient.invalidateQueries({ queryKey: ['rule-suggestions', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['categories', instanceId] });
+    },
+  });
+}
+
+export function useDismissSuggestion() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (index) => api(`/api/agent/rules/suggestions/${encodeURIComponent(index)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rule-suggestions', instanceId] }),
+  });
+}

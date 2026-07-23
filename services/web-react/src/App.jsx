@@ -32,13 +32,13 @@ import RolesPage from './pages/workspace/RolesPage';
 import ContactsPage from './pages/workspace/ContactsPage';
 import SegmentsPage from './pages/workspace/SegmentsPage';
 import PermissionsPage from './pages/workspace/PermissionsPage';
+import CategoriesPage from './pages/workspace/CategoriesPage';
+import RulesPage from './pages/workspace/RulesPage';
 
 const queryClient = new QueryClient();
 
 // Placeholder pages — real content lands tab by tab in later slices.
-const CategoriesPage = () => <div>Workflows</div>;
 const CampaignsPage = () => <div>Campagnes</div>;
-const RulesPage = () => <div>Règles</div>;
 const DlqPage = () => <div>DLQ</div>;
 
 function ProtectedRoute({ children }) {
