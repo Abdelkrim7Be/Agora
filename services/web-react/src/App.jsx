@@ -21,22 +21,22 @@ import DraftsPage from './pages/workspace/DraftsPage';
 import InboxPage from './pages/workspace/InboxPage';
 import RunDetailPage from './pages/workspace/RunDetailPage';
 import GmailPage from './pages/workspace/GmailPage';
+import PersonaPage from './pages/workspace/PersonaPage';
+import StylePage from './pages/workspace/StylePage';
+import SignaturePage from './pages/workspace/SignaturePage';
+import MemoryPage from './pages/workspace/MemoryPage';
+import CapabilitiesPage from './pages/workspace/CapabilitiesPage';
 
 const queryClient = new QueryClient();
 
 // Placeholder pages — real content lands tab by tab in later slices.
 const DashboardPage = () => <div>Tableau de bord</div>;
-const ConfigPage = () => <div>Persona</div>;
-const StylePage = () => <div>Style</div>;
-const SignaturePage = () => <div>Signature</div>;
 const CategoriesPage = () => <div>Workflows</div>;
 const RolesPage = () => <div>Annuaire des rôles</div>;
 const ContactsPage = () => <div>Contacts</div>;
 const SegmentsPage = () => <div>Segments</div>;
 const CampaignsPage = () => <div>Campagnes</div>;
-const MemoryPage = () => <div>Mémoire</div>;
 const RulesPage = () => <div>Règles</div>;
-const CapabilitiesPage = () => <div>Capacités</div>;
 const PermissionsPage = () => <div>Permissions</div>;
 const DlqPage = () => <div>DLQ</div>;
 const CostsPage = () => <div>Coûts</div>;
@@ -103,7 +103,7 @@ export default function App() {
                         <Route path="inbox" element={<InboxPage />} />
                         <Route path="run/:runId" element={<RunDetailPage />} />
                         <Route path="gmail" element={<GmailPage />} />
-                        <Route path="config" element={<ConfigPage />} />
+                        <Route path="config" element={<PersonaPage />} />
                         <Route path="style" element={<StylePage />} />
                         <Route path="signature" element={<SignaturePage />} />
                         <Route path="categories" element={<CategoriesPage />} />

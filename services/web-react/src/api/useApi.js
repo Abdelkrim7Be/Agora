@@ -1,6 +1,6 @@
 import { useAuth } from '../contexts/AuthContext';
 import { useInstance } from '../contexts/InstanceContext';
-import { api, streamApi } from './client';
+import { api, streamApi, apiUpload, apiBlob } from './client';
 
 // A wrapper hook to inject auth context automatically
 export function useApi() {
@@ -15,5 +15,13 @@ export function useApi() {
     return streamApi(gatewayBase, token, instanceId, signOut, path, options, onEvent);
   };
 
-  return { api: fetchApi, streamApi: fetchStreamApi };
+  const fetchUpload = (path, file) => {
+    return apiUpload(gatewayBase, token, instanceId, signOut, path, file);
+  };
+
+  const fetchBlob = (path) => {
+    return apiBlob(gatewayBase, token, instanceId, signOut, path);
+  };
+
+  return { api: fetchApi, streamApi: fetchStreamApi, apiUpload: fetchUpload, apiBlob: fetchBlob };
 }
