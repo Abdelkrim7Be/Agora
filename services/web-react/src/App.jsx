@@ -17,14 +17,15 @@ import AuditPage from './pages/platform/AuditPage';
 import UsersPage from './pages/platform/UsersPage';
 import AccountPage from './pages/platform/AccountPage';
 import ValidationPage from './pages/workspace/ValidationPage';
+import DraftsPage from './pages/workspace/DraftsPage';
+import InboxPage from './pages/workspace/InboxPage';
+import RunDetailPage from './pages/workspace/RunDetailPage';
+import GmailPage from './pages/workspace/GmailPage';
 
 const queryClient = new QueryClient();
 
 // Placeholder pages — real content lands tab by tab in later slices.
 const DashboardPage = () => <div>Tableau de bord</div>;
-const DraftsPage = () => <div>Brouillons</div>;
-const InboxPage = () => <div>Messages</div>;
-const GmailPage = () => <div>Synchronisation Gmail</div>;
 const ConfigPage = () => <div>Persona</div>;
 const StylePage = () => <div>Style</div>;
 const SignaturePage = () => <div>Signature</div>;
@@ -100,6 +101,7 @@ export default function App() {
                         <Route path="validation" element={<ValidationPage />} />
                         <Route path="drafts" element={<DraftsPage />} />
                         <Route path="inbox" element={<InboxPage />} />
+                        <Route path="run/:runId" element={<RunDetailPage />} />
                         <Route path="gmail" element={<GmailPage />} />
                         <Route path="config" element={<ConfigPage />} />
                         <Route path="style" element={<StylePage />} />
