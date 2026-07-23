@@ -42,6 +42,27 @@ export async function api(gatewayBase, token, instanceId, signOut, path, options
   return contentType.includes('application/json') ? response.json() : response.text();
 }
 
+// Multipart uploads (images) can't go through api()'s JSON-only Content-Type
+// default — build the FormData/headers by hand.
+export async function apiUpload(gatewayBase, token, instanceId, signOut, path, file) {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  const headers = { Authorization: `Bearer ${token}` };
+  if (path.startsWith('/api/agent') && instanceId) headers['X-Agora-Agent-Instance'] = instanceId;
+  const response = await fetch(gatewayUrl(gatewayBase, path), { method: 'POST', headers, body: formData });
+  if (!response.ok) throw await responseError(response, signOut);
+  return response.json();
+}
+
+// <img src> can't carry the Authorization header, so authenticated images
+// (the stored signature) are fetched as a blob and shown via an object URL.
+export async function apiBlob(gatewayBase, token, instanceId, signOut, path) {
+  const headers = requestHeaders(token, instanceId, path);
+  const response = await fetch(gatewayUrl(gatewayBase, path), { headers });
+  if (!response.ok) return null;
+  return response.blob();
+}
+
 export async function streamApi(gatewayBase, token, instanceId, signOut, path, options = {}, onEvent = () => {}) {
   const headers = requestHeaders(token, instanceId, path, options);
   const response = await fetch(gatewayUrl(gatewayBase, path), { ...options, headers });

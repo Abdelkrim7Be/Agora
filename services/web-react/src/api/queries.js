@@ -310,3 +310,227 @@ export function useGmailDisconnect() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
   });
 }
+
+// --- Persona ---
+
+export function usePersonaQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['persona', instanceId],
+    queryFn: () => api('/api/agent/persona'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSavePersona() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (persona) => api('/api/agent/persona', { method: 'PUT', body: JSON.stringify(persona) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config', instanceId] }),
+  });
+}
+
+export function useSuggestPersona() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: () => api('/api/agent/persona/suggest', { method: 'POST' }),
+  });
+}
+
+// --- Config (advanced raw instruction textareas) ---
+
+export function useConfigQuery(enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['config', instanceId],
+    queryFn: () => api('/api/agent/config'),
+    enabled: Boolean(token) && enabled,
+  });
+}
+
+export function useSaveConfig() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (config) => api('/api/agent/config', { method: 'PUT', body: JSON.stringify(config) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config', instanceId] }),
+  });
+}
+
+// --- Style ---
+
+export function useStyleQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['style', instanceId],
+    queryFn: () => api('/api/agent/style'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveStyle() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (writing_style) => api('/api/agent/style', { method: 'PUT', body: JSON.stringify({ writing_style }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['style', instanceId] }),
+  });
+}
+
+export function useLearnStyle() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/style/learn', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['style', instanceId] }),
+  });
+}
+
+export function useClearStyle() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/style', { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['style', instanceId] }),
+  });
+}
+
+// --- Signature ---
+
+export function useSignatureQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['signature', instanceId],
+    queryFn: () => api('/api/agent/signature'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveSignature() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/signature', { method: 'PUT', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['signature', instanceId] }),
+  });
+}
+
+export function useUploadSignatureImage() {
+  const { apiUpload } = useApi();
+  return useMutation({
+    mutationFn: (file) => apiUpload('/api/agent/signature/image', file),
+  });
+}
+
+export function useDeleteSignatureImage() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: () => api('/api/agent/signature/image', { method: 'DELETE' }),
+  });
+}
+
+// --- Memory ---
+
+export function useMemorySummaryQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['memory-summary', instanceId],
+    queryFn: () => api('/api/agent/memory/summary'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useMemoryQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['memory', instanceId],
+    queryFn: () => api('/api/agent/memory'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveMemory() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (body) => api('/api/agent/memory', { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['memory', instanceId] }),
+  });
+}
+
+export function useDeleteMemoryItem() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ kind, id }) => api(`/api/agent/memory/item?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['memory-summary', instanceId] }),
+  });
+}
+
+export function useClearMemory() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/memory', { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['memory-summary', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['memory', instanceId] });
+    },
+  });
+}
+
+// --- Capabilities + policy ---
+
+export function useCapabilitiesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['capabilities', instanceId],
+    queryFn: () => api('/api/agent/capabilities'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveCapabilities() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (capabilities) => api('/api/agent/capabilities', { method: 'PUT', body: JSON.stringify({ capabilities }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['capabilities', instanceId] }),
+  });
+}
+
+export function usePolicyQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['policy', instanceId],
+    queryFn: () => api('/api/agent/policy'),
+    enabled: Boolean(token),
+  });
+}

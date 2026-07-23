@@ -225,6 +225,12 @@ export function summarizeTraceError(error) {
   return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
 }
 
+export function compactText(value, max = 96) {
+  const text = String(value || '').trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 export function friendlySyncError(message) {
   const raw = String(message || '');
   const lower = raw.toLowerCase();
