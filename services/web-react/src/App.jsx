@@ -26,11 +26,12 @@ import StylePage from './pages/workspace/StylePage';
 import SignaturePage from './pages/workspace/SignaturePage';
 import MemoryPage from './pages/workspace/MemoryPage';
 import CapabilitiesPage from './pages/workspace/CapabilitiesPage';
+import DashboardPage from './pages/workspace/DashboardPage';
+import CostsPage from './pages/workspace/CostsPage';
 
 const queryClient = new QueryClient();
 
 // Placeholder pages — real content lands tab by tab in later slices.
-const DashboardPage = () => <div>Tableau de bord</div>;
 const CategoriesPage = () => <div>Workflows</div>;
 const RolesPage = () => <div>Annuaire des rôles</div>;
 const ContactsPage = () => <div>Contacts</div>;
@@ -39,7 +40,6 @@ const CampaignsPage = () => <div>Campagnes</div>;
 const RulesPage = () => <div>Règles</div>;
 const PermissionsPage = () => <div>Permissions</div>;
 const DlqPage = () => <div>DLQ</div>;
-const CostsPage = () => <div>Coûts</div>;
 
 function ProtectedRoute({ children }) {
   const { token } = useAuth();

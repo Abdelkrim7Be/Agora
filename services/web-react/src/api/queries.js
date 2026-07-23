@@ -534,3 +534,35 @@ export function usePolicyQuery() {
     enabled: Boolean(token),
   });
 }
+
+// --- Analytics (dashboard) ---
+
+export function useAnalyticsQuery(period) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['analytics', instanceId, period],
+    queryFn: () => api(`/api/agent/analytics?period=${encodeURIComponent(period)}`),
+    enabled: Boolean(token),
+  });
+}
+
+// --- Costs ---
+
+export function useCostsQuery(period) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['costs', instanceId, period],
+    queryFn: async () => {
+      const [summary, raw] = await Promise.all([
+        api(`/api/agent/costs/summary?period=${encodeURIComponent(period)}`),
+        api('/api/agent/costs?limit=100'),
+      ]);
+      return { summary, entries: raw.costs || [] };
+    },
+    enabled: Boolean(token),
+  });
+}
