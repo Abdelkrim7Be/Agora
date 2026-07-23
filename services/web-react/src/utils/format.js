@@ -125,3 +125,65 @@ export function instanceSummaryFields(instance, summary) {
     ['Exécution', statusLabelFr(summary.sync_status || health)],
   ];
 }
+
+export function formatDateTimeFr(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('fr-FR');
+}
+
+const CONFIDENCE_CLASS = { 'élevée': 'high', moyenne: 'medium', faible: 'low' };
+
+export function confidenceClass(band) {
+  return CONFIDENCE_CLASS[band] || 'medium';
+}
+
+export const ACTION_ARG_LABELS_FR = {
+  to: 'Destinataire',
+  cc: 'Cc',
+  bcc: 'Cci',
+  subject: 'Objet',
+  content: 'Message',
+  note: 'Note',
+  body: 'Message',
+  label: 'Libellé',
+  name: 'Nom',
+};
+
+export const ACTION_ARG_HIDDEN = new Set(['email_id', 'gmail_thread_id', 'run_id', 'action_id']);
+
+export function actionArgLabel(key) {
+  if (ACTION_ARG_LABELS_FR[key]) return ACTION_ARG_LABELS_FR[key];
+  const normalized = String(key).replace(/[-_]+/g, ' ');
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+export function formatEditableValue(value) {
+  if (value && typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value ?? '');
+}
+
+export function coerceEditedValue(original, value) {
+  if (original && typeof original === 'object') {
+    try {
+      return JSON.parse(value);
+    } catch (_error) {
+      return value;
+    }
+  }
+  return value;
+}
+
+export function actionRequest(run) {
+  return run.pending_action?.[0]?.action_request || {};
+}
+
+export function actionArgs(run) {
+  return actionRequest(run).args || {};
+}
+
+export function redraftCapable(run) {
+  const request = actionRequest(run);
+  const args = actionArgs(run);
+  return ['write_email', 'reply_all', 'create_draft'].includes(request.action) && Object.prototype.hasOwnProperty.call(args, 'content');
+}
