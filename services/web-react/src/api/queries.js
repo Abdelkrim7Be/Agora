@@ -909,3 +909,98 @@ export function useDismissSuggestion() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rule-suggestions', instanceId] }),
   });
 }
+
+// --- Campaigns ---
+
+export function useCampaignTemplatesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['campaign-templates', instanceId],
+    queryFn: () => api('/api/agent/campaigns/templates'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveCampaignTemplate() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/campaigns/templates', { method: 'POST', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaign-templates', instanceId] }),
+  });
+}
+
+export function useDeleteCampaignTemplate() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (name) => api(`/api/agent/campaigns/templates/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaign-templates', instanceId] }),
+  });
+}
+
+export function usePendingCampaignsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['campaigns-pending', instanceId],
+    queryFn: () => api('/api/agent/campaigns'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useCampaignPreviewQuery(segmentId, templateName) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['campaign-preview', instanceId, segmentId, templateName],
+    queryFn: () => api('/api/agent/campaigns/preview', {
+      method: 'POST',
+      body: JSON.stringify({ segment_id: segmentId, template_name: templateName }),
+    }),
+    enabled: Boolean(token) && Boolean(segmentId) && Boolean(templateName),
+    retry: false,
+  });
+}
+
+export function usePrepareCampaign() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ segmentId, templateName }) => api('/api/agent/campaigns/prepare', {
+      method: 'POST',
+      body: JSON.stringify({ segment_id: segmentId, template_name: templateName }),
+    }),
+    onSuccess: (result, { segmentId, templateName }) => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns-pending', instanceId] });
+      queryClient.setQueryData(['campaign-preview', instanceId, segmentId, templateName], result);
+    },
+  });
+}
+
+export function useApproveCampaign() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (campaignId) => api(`/api/agent/campaigns/${encodeURIComponent(campaignId)}/approve`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaigns-pending', instanceId] }),
+  });
+}
+
+export function useRejectCampaign() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (campaignId) => api(`/api/agent/campaigns/${encodeURIComponent(campaignId)}/reject`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaigns-pending', instanceId] }),
+  });
+}
