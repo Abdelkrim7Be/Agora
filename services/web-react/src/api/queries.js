@@ -566,3 +566,171 @@ export function useCostsQuery(period) {
     enabled: Boolean(token),
   });
 }
+
+// --- Roles directory ---
+
+export function useRolesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['roles', instanceId],
+    queryFn: () => api('/api/agent/roles'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveRole() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ roleKey, payload }) => (roleKey
+      ? api(`/api/agent/roles/${encodeURIComponent(roleKey)}`, { method: 'PUT', body: JSON.stringify({ ...payload, role_key: roleKey }) })
+      : api('/api/agent/roles', { method: 'POST', body: JSON.stringify(payload) })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['roles', instanceId] }),
+  });
+}
+
+export function useDeleteRole() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (roleKey) => api(`/api/agent/roles/${encodeURIComponent(roleKey)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['roles', instanceId] }),
+  });
+}
+
+// --- Contacts directory ---
+
+export function useContactsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['contacts', instanceId],
+    queryFn: () => api('/api/agent/contacts'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveContact() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ email, payload }) => (email
+      ? api(`/api/agent/contacts/${encodeURIComponent(email)}`, { method: 'PUT', body: JSON.stringify({ ...payload, email }) })
+      : api('/api/agent/contacts', { method: 'POST', body: JSON.stringify(payload) })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
+  });
+}
+
+export function useDeleteContact() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (email) => api(`/api/agent/contacts/${encodeURIComponent(email)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
+  });
+}
+
+export function useImportContacts() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ csvText, audienceDefault }) => api('/api/agent/contacts/import', {
+      method: 'POST',
+      body: JSON.stringify({ csv_text: csvText, audience_default: audienceDefault }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
+  });
+}
+
+export function useUploadContactPhoto() {
+  const { apiUpload } = useApi();
+  return useMutation({
+    mutationFn: ({ email, file }) => apiUpload(`/api/agent/contacts/${encodeURIComponent(email)}/photo`, file),
+  });
+}
+
+export function useDeleteContactPhoto() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: (email) => api(`/api/agent/contacts/${encodeURIComponent(email)}/photo`, { method: 'DELETE' }),
+  });
+}
+
+// --- Segments ---
+
+export function useSegmentsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['segments', instanceId],
+    queryFn: () => api('/api/agent/segments'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveSegment() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ id, payload }) => (id
+      ? api(`/api/agent/segments/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ ...payload, id }) })
+      : api('/api/agent/segments', { method: 'POST', body: JSON.stringify(payload) })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['segments', instanceId] }),
+  });
+}
+
+export function useDeleteSegment() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (id) => api(`/api/agent/segments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['segments', instanceId] }),
+  });
+}
+
+// --- Permissions (per-instance grants) ---
+
+export function useGrantsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['grants', instanceId],
+    queryFn: () => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`),
+    enabled: Boolean(token) && Boolean(instanceId),
+  });
+}
+
+export function useAddGrant() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ userId, role }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, role }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['grants', instanceId] }),
+  });
+}
+
+export function useRemoveGrant() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (userId) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['grants', instanceId] }),
+  });
+}
