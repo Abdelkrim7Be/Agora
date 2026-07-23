@@ -13,7 +13,7 @@ import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -147,10 +147,10 @@ from src.style_learning import analyze_style, build_style_text
 from src.media import (
     delete_contact_photo,
     delete_signature_image,
-    find_contact_photo,
-    find_signature_image,
+    read_contact_photo,
     save_contact_photo,
     save_signature_image,
+    signature_image_inline,
 )
 from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
@@ -886,6 +886,20 @@ async def _require_run(graph, run_id: str) -> dict:
     return config
 
 
+def _require_pending(run_id: str) -> None:
+    """Guard against a second concurrent decision resuming an already-decided run.
+
+    Two racing approve/reject/respond calls on the same run_id both pass
+    `_require_run` (the thread still has state either way); without this check
+    the second would resume a graph that already finished, an undefined
+    operation for LangGraph. A fresh registry read here is the cheapest correct
+    fence — no new lock primitive needed for the single-replica deployment.
+    """
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    if record is not None and record.get("status") != "pending_approval":
+        raise HTTPException(status_code=409, detail="This run already received a decision.")
+
+
 def _message_summary(message) -> dict:
     if isinstance(message, dict):
         role = message.get("role", message.get("type", "message"))
@@ -1478,23 +1492,23 @@ async def upload_contact_photo(email: str, request: Request, file: UploadFile = 
     _require_instance_role(request, "owner")
     data = await file.read()
     try:
-        path = await asyncio.to_thread(save_contact_photo, email, data)
+        stored = await asyncio.to_thread(save_contact_photo, email, data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "agent_instance_id": current_agent_instance_id(),
         "email": email.strip().lower(),
         "stored": True,
-        "size": path.stat().st_size,
+        "size": stored.size,
     }
 
 
 @app.get("/contacts/{email}/photo")
-async def get_contact_photo(email: str) -> FileResponse:
-    path = find_contact_photo(email)
-    if path is None:
+async def get_contact_photo(email: str) -> Response:
+    data = await asyncio.to_thread(read_contact_photo, email)
+    if data is None:
         raise HTTPException(status_code=404, detail="No photo for this contact")
-    return FileResponse(path, media_type="image/jpeg")
+    return Response(content=data, media_type="image/jpeg")
 
 
 @app.delete("/contacts/{email}/photo")
@@ -2317,24 +2331,24 @@ async def upload_signature_image(request: Request, file: UploadFile = File(...))
     _require_instance_role(request, "owner")
     data = await file.read()
     try:
-        path = await asyncio.to_thread(save_signature_image, data)
+        stored = await asyncio.to_thread(save_signature_image, data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "agent_instance_id": current_agent_instance_id(),
         "stored": True,
-        "filename": path.name,
-        "size": path.stat().st_size,
+        "filename": stored.key.rsplit("/", 1)[-1],
+        "size": stored.size,
     }
 
 
 @app.get("/signature/image")
-async def get_signature_image() -> FileResponse:
-    path = find_signature_image()
-    if path is None:
+async def get_signature_image() -> Response:
+    found = await asyncio.to_thread(signature_image_inline)
+    if found is None:
         raise HTTPException(status_code=404, detail="No signature image for this instance")
-    media_type = "image/png" if path.suffix == ".png" else "image/jpeg"
-    return FileResponse(path, media_type=media_type)
+    data, subtype = found
+    return Response(content=data, media_type=f"image/{subtype}")
 
 
 @app.delete("/signature/image")
@@ -2969,6 +2983,7 @@ async def run_stream(request: Request, email: EmailInput) -> StreamingResponse:
 async def _approve_run(graph, run_id: str, args) -> RunResponse:
     """Resume a paused run with an approve decision. Authorization is the caller's job."""
     config = await _require_run(graph, run_id)
+    _require_pending(run_id)
     try:
         result = await _invoke_graph(
             graph,
@@ -2991,6 +3006,7 @@ async def _approve_run(graph, run_id: str, args) -> RunResponse:
 async def _reject_run(graph, run_id: str) -> RunResponse:
     """Resume a paused run with a reject decision. Authorization is the caller's job."""
     config = await _require_run(graph, run_id)
+    _require_pending(run_id)
     try:
         result = await _invoke_graph(
             graph,
@@ -3071,6 +3087,7 @@ async def respond(request: Request, run_id: str, body: RespondInput) -> RunRespo
     _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
+    _require_pending(run_id)
     try:
         result = await _invoke_graph(
             graph,
@@ -3115,6 +3132,7 @@ async def respond_stream(request: Request, run_id: str, body: RespondInput) -> S
     _require_dept_access(request, record)
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
+    _require_pending(run_id)
     return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback, body.draft), media_type="text/event-stream")
 
 
