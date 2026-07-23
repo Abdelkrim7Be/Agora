@@ -6,9 +6,9 @@ import { useI18n } from '../../contexts/I18nContext';
 const NAV_ITEMS = [
   { to: '/', end: true, icon: 'hub', key: 'nav.instances' },
   { to: '/agent-types', icon: 'deployed_code', key: 'nav.agentTypes' },
-  { to: '/health', icon: 'monitor_heart', key: 'nav.health' },
-  { to: '/audit', icon: 'receipt_long', key: 'nav.audit' },
-  { to: '/users', icon: 'manage_accounts', key: 'nav.users' },
+  { to: '/system-health', icon: 'monitor_heart', key: 'nav.health' },
+  { to: '/access-log', icon: 'receipt_long', key: 'nav.audit' },
+  { to: '/team', icon: 'manage_accounts', key: 'nav.users' },
   { to: '/account', icon: 'account_circle', key: 'nav.account' },
 ];
 
