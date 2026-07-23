@@ -201,3 +201,112 @@ export function useSyncGmail() {
     onSuccess: () => invalidatePendingRuns(queryClient),
   });
 }
+
+// --- Drafts ---
+
+export function useDraftsQuery(category, priority) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  const params = new URLSearchParams({ limit: '100' });
+  if (category) params.set('category', category);
+  if (priority) params.set('priority', priority);
+  return useQuery({
+    queryKey: ['drafts', instanceId, category, priority],
+    queryFn: async () => (await api(`/api/agent/drafts?${params.toString()}`)).drafts || [],
+    enabled: Boolean(token),
+  });
+}
+
+// --- Inbox ---
+
+export function useInboxQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['inbox', instanceId],
+    queryFn: () => api(`/api/agent/inbox?limit=${INBOX_PAGE_SIZE}`),
+    enabled: Boolean(token),
+  });
+}
+
+const INBOX_PAGE_SIZE = 25;
+
+export function useInboxAction() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ msgId, command }) => api(`/api/agent/inbox/${msgId}/${command}`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] }),
+  });
+}
+
+// --- Run Detail ---
+
+export function useRunDetailQuery(runId) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['run-detail', runId],
+    queryFn: () => api(`/api/agent/run/${runId}/detail`),
+    enabled: Boolean(token && runId),
+  });
+}
+
+// --- Gmail ---
+
+export function useGmailStatusQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['gmail-status', instanceId],
+    queryFn: () => api('/api/agent/sync/status'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useGmailSyncNow() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/sync?limit=20', { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
+    },
+  });
+}
+
+export function useGmailPause() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/sync/pause', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}
+
+export function useGmailResume() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/sync/resume', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}
+
+export function useGmailDisconnect() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/disconnect/gmail', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}

@@ -2,17 +2,14 @@ import { useState } from 'react';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useI18n } from '../../contexts/I18nContext';
 import { useSummarizeRun } from '../../api/queries';
+import ActionArgsEditor from './ActionArgsEditor';
+import FeedbackChat from './FeedbackChat';
 import {
-  actionRequest,
   actionArgs,
   redraftCapable,
   formatDateTimeFr,
   formatDurationFr,
   confidenceClass,
-  actionArgLabel,
-  formatEditableValue,
-  coerceEditedValue,
-  ACTION_ARG_HIDDEN,
 } from '../../utils/format';
 
 const TONES = [
@@ -55,9 +52,7 @@ export default function ValidationCard({
   const [summarizing, setSummarizing] = useState(false);
   const summarizeRun = useSummarizeRun();
 
-  const request = actionRequest(run);
   const args = actionArgs(run);
-  const fields = Object.entries(args).filter(([key]) => !ACTION_ARG_HIDDEN.has(key));
   const toneField = ['content', 'body', 'note'].find((key) => key in args);
   const badgeKey = run.action_type || 'unknown';
   const canRedraft = redraftCapable(run);
@@ -75,12 +70,6 @@ export default function ValidationCard({
     }
   };
 
-  const handleFeedbackSubmit = (event) => {
-    event.preventDefault();
-    if (!feedbackDraft.trim()) return;
-    onDecision('respond', { feedback: feedbackDraft });
-  };
-
   return (
     <article className={`card${isActive ? ' active-run' : ''}${busy ? ' card-resolving' : ''}`} data-card={run.run_id}>
       <div className="card-header">
@@ -93,6 +82,7 @@ export default function ValidationCard({
           <h2>{run.subject || 'E-mail sans objet'}</h2>
           <div className="meta">
             <span>{run.author || 'Expéditeur inconnu'}</span>
+            <button className="link-button" type="button" onClick={() => onDecision('detail')}>Voir le détail</button>
             <span>{run.updated_at || ''}</span>
             {run.assignee ? <span className="assignee-badge">👤 {run.assignee}</span> : null}
             <SlaBadges run={run} />
@@ -108,57 +98,19 @@ export default function ValidationCard({
 
       {run.review_reason ? <p className="review-reason"><strong>Pourquoi une validation ?</strong> {run.review_reason}</p> : null}
 
-      <div className="action-preview">
-        {request.action === 'forward_email' ? (
-          <div className="route-preview">
-            <strong>Transférer cet e-mail à {args.to || 'destinataire'}</strong>
-            <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du workflow'}</span>
-          </div>
-        ) : null}
-        {fields.length ? fields.map(([key, value]) => (
-          <label className="action-row" key={key}>
-            <strong>{actionArgLabel(key)}</strong>
-            <textarea
-              value={editedFields[key] !== undefined ? editedFields[key] : formatEditableValue(value)}
-              onChange={(event) => onFieldChange(run.run_id, key, coerceEditedValue(value, event.target.value))}
-            />
-          </label>
-        )) : <div className="empty">Aucun argument modifiable pour cette action.</div>}
-      </div>
+      <ActionArgsEditor run={run} editedFields={editedFields} onFieldChange={onFieldChange} />
 
       {summary !== null && <div className="ai-summary">{summary}</div>}
 
       {canRedraft && (
-        <form className="feedback-chat" aria-label="Fil de retouche du brouillon" onSubmit={handleFeedbackSubmit}>
-          <div className="feedback-chat-header">
-            <span className="material-symbols-outlined" aria-hidden="true">forum</span>
-            <div>
-              <strong>Retouches du brouillon</strong>
-              <span>Décrivez le changement attendu, l’agent mettra à jour le brouillon dans cette carte.</span>
-            </div>
-          </div>
-          <div className="feedback-log" aria-live="polite">
-            {feedbackMessages.length ? feedbackMessages.map((message) => (
-              <div key={message.id} className={`feedback-message ${message.role === 'user' ? 'user' : 'agent'}${message.live ? ' live' : ''}`} aria-busy={message.live || undefined}>
-                <strong>{message.role === 'user' ? 'Vous' : 'Agent'}{message.at ? <time> {formatDateTimeFr(message.at)}</time> : null}</strong>
-                <span>{message.content}</span>
-                {message.live ? <span className="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span> : null}
-              </div>
-            )) : <div className="feedback-empty">Aucun retour envoyé. Écrivez ce que vous voulez modifier dans le brouillon.</div>}
-          </div>
-          <div className="feedback-compose">
-            <textarea
-              data-testid={`feedback-input-${run.run_id}`}
-              rows={2}
-              placeholder="Ex. Rends le ton plus direct et ajoute la signature"
-              value={feedbackDraft}
-              onChange={(event) => onFeedbackDraftChange(run.run_id, event.target.value)}
-            />
-            <button className="feedback-send" type="submit" title="Envoyer le retour" disabled={busy}>
-              <span className="material-symbols-outlined" aria-hidden="true">send</span>
-            </button>
-          </div>
-        </form>
+        <FeedbackChat
+          run={run}
+          messages={feedbackMessages}
+          draft={feedbackDraft}
+          onDraftChange={onFeedbackDraftChange}
+          onSubmit={(feedback) => onDecision('respond', { feedback })}
+          busy={busy}
+        />
       )}
 
       <div className="actions ai-actions">

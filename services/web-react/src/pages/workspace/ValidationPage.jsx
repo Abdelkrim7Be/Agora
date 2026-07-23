@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Pager } from '../../components/ui/Pager';
@@ -31,6 +32,7 @@ export default function ValidationPage() {
   const { confirmDialog, promptDialog } = useDialog();
   const { api, streamApi } = useApi();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const canApprove = hasRole('approver');
 
   const [page, setPage] = useState(0);
@@ -115,6 +117,11 @@ export default function ValidationPage() {
   const handleDecision = async (command, runId, options = {}) => {
     const run = runs.find((item) => item.run_id === runId);
     if (!run) return;
+
+    if (command === 'detail') {
+      navigate(`../run/${runId}`);
+      return;
+    }
 
     if (command === 'tone') {
       setStatus('Reformulation en cours...');
