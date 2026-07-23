@@ -26,15 +26,17 @@ def media_tmp(monkeypatch, tmp_path):
 
 
 def test_save_signature_image_resizes_to_max_width(media_tmp):
-    path = save_signature_image(_png_bytes(width=600, height=300))
-    with Image.open(path) as stored:
+    save_signature_image(_png_bytes(width=600, height=300))
+    data, _ = media.signature_image_inline()
+    with Image.open(io.BytesIO(data)) as stored:
         assert stored.width == 300
         assert stored.height == 150
 
 
 def test_save_signature_image_keeps_small_images(media_tmp):
-    path = save_signature_image(_png_bytes(width=120, height=40))
-    with Image.open(path) as stored:
+    save_signature_image(_png_bytes(width=120, height=40))
+    data, _ = media.signature_image_inline()
+    with Image.open(io.BytesIO(data)) as stored:
         assert stored.size == (120, 40)
 
 
