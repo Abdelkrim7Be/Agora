@@ -187,3 +187,58 @@ export function redraftCapable(run) {
   const args = actionArgs(run);
   return ['write_email', 'reply_all', 'create_draft'].includes(request.action) && Object.prototype.hasOwnProperty.call(args, 'content');
 }
+
+export function priorityClass(priority) {
+  if (priority === 'urgent') return 'error';
+  if (priority === 'low') return '';
+  return 'warn';
+}
+
+export function workflowLabelFr(row) {
+  const name = String(row.display_name || '').trim();
+  if (name && name !== 'uncategorized') return name;
+  const category = String(row.category || '').trim();
+  return (!category || category === 'uncategorized') ? 'Sans workflow' : category;
+}
+
+// Run Detail's trace table uses plain (non-locale) formatting, distinct from
+// the locale-aware formatCountFr/formatCostEur used elsewhere.
+export function formatCount(value) {
+  return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+export function formatCost(value) {
+  return `EUR ${Number(value || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 6,
+    maximumFractionDigits: 6,
+  })}`;
+}
+
+export function summarizeTraceError(error) {
+  const raw = String(error || '').trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower.includes('interrupt') || lower.includes('action_request') || lower.includes('pending_action')) {
+    return 'Interruption de validation humaine: détails du brouillon masqués.';
+  }
+  const compact = raw.replace(/\s+/g, ' ');
+  return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
+}
+
+export function friendlySyncError(message) {
+  const raw = String(message || '');
+  const lower = raw.toLowerCase();
+  if (lower.includes('gmail.googleapis.com') || lower.includes('user-rate limit') || lower.includes('ratelimitexceeded') || lower.includes('gmail rate limit')) {
+    return 'Limite Gmail atteinte côté Google. La synchronisation est en pause et reprendra automatiquement.';
+  }
+  if (lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('429')) {
+    return 'AI provider rate limit reached. Wait a few minutes and try again.';
+  }
+  if (lower.includes('invalid_grant') || lower.includes('expired or revoked') || lower.includes('token has been expired')) {
+    return 'L’autorisation Gmail a expiré ou a été révoquée. Reconnectez Gmail.';
+  }
+  if (lower.includes('could not locate runnable browser') || lower.includes('oauth') || lower.includes('credentials')) {
+    return 'Gmail sync is unavailable. Check the Gmail connection settings.';
+  }
+  return raw && raw.length < 140 && !raw.includes('{') ? raw : 'Gmail sync failed. Check service logs for details.';
+}
