@@ -28,17 +28,17 @@ import MemoryPage from './pages/workspace/MemoryPage';
 import CapabilitiesPage from './pages/workspace/CapabilitiesPage';
 import DashboardPage from './pages/workspace/DashboardPage';
 import CostsPage from './pages/workspace/CostsPage';
+import RolesPage from './pages/workspace/RolesPage';
+import ContactsPage from './pages/workspace/ContactsPage';
+import SegmentsPage from './pages/workspace/SegmentsPage';
+import PermissionsPage from './pages/workspace/PermissionsPage';
 
 const queryClient = new QueryClient();
 
 // Placeholder pages — real content lands tab by tab in later slices.
 const CategoriesPage = () => <div>Workflows</div>;
-const RolesPage = () => <div>Annuaire des rôles</div>;
-const ContactsPage = () => <div>Contacts</div>;
-const SegmentsPage = () => <div>Segments</div>;
 const CampaignsPage = () => <div>Campagnes</div>;
 const RulesPage = () => <div>Règles</div>;
-const PermissionsPage = () => <div>Permissions</div>;
 const DlqPage = () => <div>DLQ</div>;
 
 function ProtectedRoute({ children }) {
