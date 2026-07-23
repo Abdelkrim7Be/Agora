@@ -152,6 +152,7 @@ from src.media import (
     save_contact_photo,
     save_signature_image,
 )
+from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
@@ -3115,3 +3116,44 @@ async def respond_stream(request: Request, run_id: str, body: RespondInput) -> S
     graph = request.app.state.graph
     config = await _require_run(graph, run_id)
     return StreamingResponse(_respond_stream_events(graph, config, run_id, body.feedback, body.draft), media_type="text/event-stream")
+
+
+@app.post("/run/{run_id}/summarize")
+async def summarize_run(request: Request, run_id: str) -> dict:
+    """TL;DR of the email thread behind this run — read-only, no state change."""
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    graph = request.app.state.graph
+    config = await _require_run(graph, run_id)
+    state = await graph.aget_state(config)
+    thread = state.values.get("email_input", {}).get("email_thread", "")
+    summary = await asyncio.to_thread(summarize_thread, thread, graph_module.llm)
+    return {"run_id": run_id, "summary": summary}
+
+
+class ToneInput(BaseModel):
+    tone: str
+
+
+@app.post("/run/{run_id}/tone")
+async def tone_adjust(request: Request, run_id: str, body: ToneInput) -> dict:
+    """Suggests a tone-adjusted rewrite of the pending draft — does not apply it.
+
+    The caller re-submits the rewritten text as an edit through the normal
+    approve args-override path, same as any other manual draft edit.
+    """
+    if body.tone not in TONES:
+        raise HTTPException(status_code=400, detail=f"tone must be one of {TONES}")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    if record is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    _require_dept_access(request, record)
+    pending = _pending_action(record)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="No pending draft for this run")
+    _, args = pending
+    field = next((key for key in ("content", "body", "note") if args.get(key)), None)
+    if field is None:
+        raise HTTPException(status_code=400, detail="Pending action has no rewritable text field")
+    rewritten = await asyncio.to_thread(adjust_tone, args[field], body.tone, graph_module.llm)
+    return {"run_id": run_id, "field": field, "content": rewritten}
