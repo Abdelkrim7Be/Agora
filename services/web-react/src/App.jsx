@@ -35,11 +35,11 @@ import PermissionsPage from './pages/workspace/PermissionsPage';
 import CategoriesPage from './pages/workspace/CategoriesPage';
 import RulesPage from './pages/workspace/RulesPage';
 import CampaignsPage from './pages/workspace/CampaignsPage';
+import DlqPage from './pages/workspace/DlqPage';
 
 const queryClient = new QueryClient();
 
 // Placeholder pages — real content lands tab by tab in later slices.
-const DlqPage = () => <div>DLQ</div>;
 
 function ProtectedRoute({ children }) {
   const { token } = useAuth();
