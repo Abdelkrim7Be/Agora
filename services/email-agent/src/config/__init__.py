@@ -115,6 +115,11 @@ class Settings:
     gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
     # Uploaded media (signature images, contact photos) — compose mounts /app/data/media.
     media_dir: str = os.getenv("AGENT_MEDIA_DIR", "logs/instances")
+    # local (default, dev/single-VPS) | s3 (OVH Object Storage / any S3-compatible bucket in prod).
+    media_backend: str = os.getenv("AGENT_MEDIA_BACKEND", "local")
+    media_s3_bucket: str = os.getenv("AGENT_MEDIA_S3_BUCKET", "")
+    media_s3_endpoint_url: str = os.getenv("AGENT_MEDIA_S3_ENDPOINT_URL", "")
+    media_s3_region: str = os.getenv("AGENT_MEDIA_S3_REGION", "")
     # Soft per-instance hourly Gmail API call budget (health display + 80% alert).
     gmail_hourly_call_budget: int = int(os.getenv("GMAIL_HOURLY_CALL_BUDGET", "1000"))
     # Gmail watches expire after 7 days; re-register well inside that window.

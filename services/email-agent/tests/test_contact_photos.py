@@ -13,6 +13,7 @@ from src.media import (
     contact_photo_path,
     delete_contact_photo,
     find_contact_photo,
+    read_contact_photo,
     save_contact_photo,
 )
 
@@ -30,9 +31,10 @@ def media_tmp(monkeypatch, tmp_path):
 
 
 def test_save_contact_photo_produces_square_jpeg(media_tmp):
-    path = save_contact_photo("Alice@Example.com", _png_bytes(400, 200))
-    assert path.suffix == ".jpg"
-    with Image.open(path) as stored:
+    stored_media = save_contact_photo("Alice@Example.com", _png_bytes(400, 200))
+    assert stored_media.extension == "jpg"
+    data = read_contact_photo("Alice@Example.com")
+    with Image.open(io.BytesIO(data)) as stored:
         assert stored.size == (CONTACT_PHOTO_SIZE, CONTACT_PHOTO_SIZE)
         assert stored.format == "JPEG"
 
