@@ -137,6 +137,73 @@ class RbacTest {
     }
 
     @Test
+    void owner_can_summarize() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/run/abc/summarize"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_id\":\"abc\",\"summary\":\"tl;dr\"}")));
+
+        mockMvc.perform(post("/api/agent/run/abc/summarize")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary").value("tl;dr"));
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/run/abc/summarize")));
+    }
+
+    @Test
+    void viewer_without_grant_cannot_summarize_403() throws Exception {
+        // Same approve-tier gate as /approve, /reject, /respond: a plain viewer JWT
+        // role without a per-instance approver grant is denied at the proxy, same as
+        // viewer_cannot_approve_403 above.
+        mockMvc.perform(post("/api/agent/run/abc/summarize")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/summarize")));
+    }
+
+    @Test
+    void anonymous_cannot_summarize_401() throws Exception {
+        mockMvc.perform(post("/api/agent/run/abc/summarize"))
+                .andExpect(status().isUnauthorized());
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/summarize")));
+    }
+
+    @Test
+    void owner_can_request_tone_adjust() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/run/abc/tone"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_id\":\"abc\",\"field\":\"content\",\"content\":\"reformulé\"}")));
+
+        mockMvc.perform(post("/api/agent/run/abc/tone")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tone\":\"formel\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").value("reformulé"));
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/run/abc/tone")));
+    }
+
+    @Test
+    void viewer_without_grant_cannot_request_tone_adjust_403() throws Exception {
+        mockMvc.perform(post("/api/agent/run/abc/tone")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tone\":\"formel\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/run/abc/tone")));
+    }
+
+    @Test
     void viewer_cannot_trigger_403() throws Exception {
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass"))

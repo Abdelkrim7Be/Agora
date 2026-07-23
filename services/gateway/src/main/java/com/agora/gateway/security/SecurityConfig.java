@@ -83,6 +83,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond/stream").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                // Read-only AI helpers (thread summary, tone-adjust preview) — same access
+                // as the rest of the approval surface; neither mutates run state.
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/summarize").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/tone").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/sync/status").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync/pause").hasAnyRole("OWNER", "ADMIN")
