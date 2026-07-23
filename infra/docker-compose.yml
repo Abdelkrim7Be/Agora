@@ -300,7 +300,7 @@ services:
 
   web:
     build:
-      context: ../services/web
+      context: ../services/web-react
       network: host
     restart: unless-stopped
     mem_limit: 256m
