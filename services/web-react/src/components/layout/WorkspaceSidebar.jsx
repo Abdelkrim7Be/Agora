@@ -1,0 +1,106 @@
+import { NavLink, useParams } from 'react-router-dom';
+import { useInstance } from '../../contexts/InstanceContext';
+import { agentTypeLabel } from '../../utils/format';
+import { useAgentTypesQuery, usePendingRunsQuery } from '../../api/queries';
+
+const TAB_GROUPS = [
+  {
+    label: 'Travail',
+    tabs: [
+      { to: '', end: true, icon: 'dashboard', label: 'Tableau de bord' },
+      { to: 'validation', icon: 'inbox', label: 'Validation' },
+      { to: 'drafts', icon: 'drafts', label: 'Brouillons' },
+      { to: 'inbox', icon: 'mail', label: 'Messages' },
+    ],
+  },
+  {
+    label: 'Connecteurs',
+    tabs: [
+      { to: 'gmail', icon: 'sync', label: 'Synchronisation Gmail' },
+    ],
+  },
+  {
+    label: 'Configuration',
+    tabs: [
+      { to: 'config', icon: 'person', label: 'Persona' },
+      { to: 'style', icon: 'edit_note', label: 'Style' },
+      { to: 'signature', icon: 'draw', label: 'Signature' },
+      { to: 'categories', icon: 'category', label: 'Workflows' },
+      { to: 'roles', icon: 'groups', label: 'Annuaire des rôles' },
+      { to: 'contacts', icon: 'contact_mail', label: 'Contacts' },
+      { to: 'segments', icon: 'group_work', label: 'Segments' },
+      { to: 'campaigns', icon: 'campaign', label: 'Campagnes', minRole: 'owner' },
+      { to: 'memory', icon: 'psychology', label: 'Mémoire' },
+      { to: 'rules', icon: 'rule', label: 'Règles' },
+    ],
+  },
+  {
+    label: 'Contrôle',
+    tabs: [
+      { to: 'capabilities', icon: 'shield', label: 'Capacités' },
+      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minRole: 'owner' },
+      { to: 'dlq', icon: 'warning', label: 'DLQ' },
+      { to: 'costs', icon: 'monitoring', label: 'Coûts' },
+    ],
+  },
+];
+
+export default function WorkspaceSidebar() {
+  const { instanceId, currentInstance, hasRole } = useInstance();
+  const params = useParams();
+  const typesQuery = useAgentTypesQuery();
+  const pendingQuery = usePendingRunsQuery(0);
+  const id = params.instanceId || instanceId;
+  const typeLabel = agentTypeLabel(currentInstance?.agent_type, typesQuery.data || []);
+  const pendingCount = pendingQuery.data?.runs?.length ?? 0;
+
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <div className="brand-mark">B</div>
+        <div>
+          <strong>Agora AI</strong>
+          <span>Panneau de contrôle</span>
+        </div>
+      </div>
+
+      <div id="workspace-sidebar-context">
+        <NavLink to="/" end className="nav-item workspace-back">
+          <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>
+          <span>Retour plateforme</span>
+        </NavLink>
+        <div className="workspace-sidebar-agent">
+          <span>Espace agent</span>
+          <strong>{currentInstance?.display_name || id}</strong>
+          <small>{typeLabel}</small>
+        </div>
+      </div>
+
+      <nav className="workspace-tabs" aria-label="Onglets de l'espace de travail">
+        {TAB_GROUPS.map((group) => {
+          const tabs = group.tabs.filter((tab) => !tab.minRole || hasRole(tab.minRole));
+          if (!tabs.length) return null;
+          return (
+            <div className="tab-group" key={group.label}>
+              <span className="tab-group-label">{group.label}</span>
+              <div className="tab-group-items">
+                {tabs.map((tab) => (
+                  <NavLink
+                    key={tab.to || 'index'}
+                    to={tab.to}
+                    end={tab.end}
+                    className={({ isActive }) => `workspace-tab nav-item${isActive ? ' active' : ''}`}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">{tab.icon}</span>
+                    <span>{tab.label}</span>
+                    {tab.to === 'validation' ? <strong>{pendingCount}</strong> : null}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
