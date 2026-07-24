@@ -180,3 +180,52 @@ def test_authorize_action_non_2xx_denies_closed(monkeypatch):
 
     assert result["decision"] == "deny"
     assert result["reason"] == "security_service_unreachable"
+
+
+def test_sanitize_memory_write_200_returns_verdict_and_sends_namespace(monkeypatch):
+    from src.security_client import sanitize_memory_write
+
+    calls = []
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: _FakeSyncClient(response=_FakeResponse(BENIGN_VERDICT), calls=calls, **kw),
+    )
+
+    result = sanitize_memory_write("email_agent/default/response_preferences", "Prefers short replies.")
+
+    assert result == BENIGN_VERDICT
+    assert calls[0]["url"].endswith("/sanitize")
+    assert calls[0]["json"]["subject"] == "memory:email_agent/default/response_preferences"
+    assert calls[0]["json"]["content"] == "Prefers short replies."
+
+
+def test_sanitize_memory_write_failure_blocks_closed(monkeypatch):
+    from src.security_client import sanitize_memory_write
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: _FakeSyncClient(raises=httpx.ConnectError("refused"), **kw),
+    )
+
+    result = sanitize_memory_write("email_agent/default/response_preferences", "some text")
+
+    assert result["injection_detected"] is True
+    assert result["classification"] == "malicious"
+    assert result["reasons"] == ["security_service_unreachable"]
+
+
+def test_sanitize_memory_write_non_2xx_blocks_closed(monkeypatch):
+    from src.security_client import sanitize_memory_write
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: _FakeSyncClient(response=_FakeResponse({}, raise_on_status=True), **kw),
+    )
+
+    result = sanitize_memory_write("email_agent/default/response_preferences", "some text")
+
+    assert result["injection_detected"] is True
+    assert result["classification"] == "malicious"

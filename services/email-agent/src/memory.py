@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from src.config import settings
 from src.prompts import MEMORY_UPDATE_INSTRUCTIONS
+from src.security_client import sanitize_memory_write
 from src.tenant import (
     current_agent_instance_id,
     current_user_id,
@@ -121,4 +123,14 @@ def update_memory(
             f"({len(updated)} chars) would collapse the current one ({len(current)} chars)"
         )
         return
+    if settings.security_enabled:
+        namespace_label = "/".join(str(part) for part in ns)
+        verdict = sanitize_memory_write(namespace_label, updated)
+        if verdict.get("injection_detected") or verdict.get("classification") == "malicious":
+            print(
+                f"memory: preference update rejected for {ns}: sanitize flagged "
+                f"synthesized text ({verdict.get('reasons')})"
+            )
+            return
+        updated = verdict.get("cleaned_text") or updated
     store.put(ns, "user_preferences", wrap_preferences(updated))
