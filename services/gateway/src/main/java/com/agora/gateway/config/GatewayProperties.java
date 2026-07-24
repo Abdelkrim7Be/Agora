@@ -12,6 +12,7 @@ public class GatewayProperties {
     private String defaultAgentInstance = "default-email-agent";
     private List<AgentType> agentTypes = new ArrayList<>(List.of(AgentType.defaultEmailAgent()));
     private Jwt jwt = new Jwt();
+    private Mfa mfa = new Mfa();
     private LoginRateLimit loginRateLimit = new LoginRateLimit();
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
@@ -28,6 +29,9 @@ public class GatewayProperties {
 
     public Jwt getJwt() { return jwt; }
     public void setJwt(Jwt jwt) { this.jwt = jwt; }
+
+    public Mfa getMfa() { return mfa; }
+    public void setMfa(Mfa mfa) { this.mfa = mfa; }
 
     public LoginRateLimit getLoginRateLimit() { return loginRateLimit; }
     public void setLoginRateLimit(LoginRateLimit loginRateLimit) { this.loginRateLimit = loginRateLimit; }
@@ -132,6 +136,17 @@ public class GatewayProperties {
 
         public boolean isSecureCookies() { return secureCookies; }
         public void setSecureCookies(boolean secureCookies) { this.secureCookies = secureCookies; }
+    }
+
+    public static class Mfa {
+        private long challengeTtlMinutes = 5;
+        private int recoveryCodeCount = 8;
+
+        public long getChallengeTtlMinutes() { return challengeTtlMinutes; }
+        public void setChallengeTtlMinutes(long challengeTtlMinutes) { this.challengeTtlMinutes = challengeTtlMinutes; }
+
+        public int getRecoveryCodeCount() { return recoveryCodeCount; }
+        public void setRecoveryCodeCount(int recoveryCodeCount) { this.recoveryCodeCount = recoveryCodeCount; }
     }
 
     public static class Credentials {

@@ -50,6 +50,13 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/logout").authenticated()
+                // /auth/mfa/verify is the second leg of login: the caller holds only the
+                // short-lived challenge token from /auth/login (in the body, not a Bearer
+                // header — JwtAuthFilter never even looks at it), not a real access token yet.
+                .requestMatchers(HttpMethod.POST, "/auth/mfa/verify").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/mfa/setup").authenticated()
+                .requestMatchers(HttpMethod.POST, "/auth/mfa/confirm").authenticated()
+                .requestMatchers(HttpMethod.POST, "/auth/mfa/disable").authenticated()
                 .requestMatchers(HttpMethod.GET, "/users").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")

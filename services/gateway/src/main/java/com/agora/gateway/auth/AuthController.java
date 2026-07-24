@@ -12,7 +12,6 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.CookieValue;
@@ -21,14 +20,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 
 @RestController
 public class AuthController {
-
-    static final String REFRESH_COOKIE = "agora_refresh";
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
@@ -36,7 +32,8 @@ public class AuthController {
     private final AuditService auditService;
     private final LoginRateLimiter loginRateLimiter;
     private final TokenSessionService tokenSessions;
-    private final boolean secureCookies;
+    private final AuthCookies authCookies;
+    private final long mfaChallengeTtlSeconds;
 
     public AuthController(
             UserRepository users,
@@ -45,6 +42,7 @@ public class AuthController {
             AuditService auditService,
             LoginRateLimiter loginRateLimiter,
             TokenSessionService tokenSessions,
+            AuthCookies authCookies,
             GatewayProperties properties
     ) {
         this.users = users;
@@ -53,7 +51,8 @@ public class AuthController {
         this.auditService = auditService;
         this.loginRateLimiter = loginRateLimiter;
         this.tokenSessions = tokenSessions;
-        this.secureCookies = properties.getJwt().isSecureCookies();
+        this.authCookies = authCookies;
+        this.mfaChallengeTtlSeconds = properties.getMfa().getChallengeTtlMinutes() * 60L;
     }
 
     record LoginRequest(
@@ -61,12 +60,10 @@ public class AuthController {
             @NotBlank @Size(max = 1024) String password
     ) {}
 
-    record TokenResponse(
-            String token,
-            @JsonProperty("access_token") String accessToken,
-            @JsonProperty("token_type") String tokenType,
-            @JsonProperty("expires_in") long expiresIn,
-            @JsonProperty("refresh_expires_in") long refreshExpiresIn
+    record MfaChallengeResponse(
+            @JsonProperty("mfa_required") boolean mfaRequired,
+            @JsonProperty("challenge_token") String challengeToken,
+            @JsonProperty("expires_in") long expiresIn
     ) {}
 
     @PostMapping("/auth/login")
@@ -98,6 +95,20 @@ public class AuthController {
         }
 
         AppUser authenticated = user.get();
+        if (authenticated.isMfaEnabled()) {
+            auditService.record(
+                    authenticated.getUsername(),
+                    authenticated.getRole(),
+                    "login",
+                    "POST",
+                    "/auth/login",
+                    null,
+                    "password_ok_mfa_pending"
+            );
+            String challenge = jwtService.generateMfaChallenge(authenticated.getUsername());
+            return ResponseEntity.ok(new MfaChallengeResponse(true, challenge, mfaChallengeTtlSeconds));
+        }
+
         auditService.record(
                 authenticated.getUsername(),
                 authenticated.getRole(),
@@ -107,7 +118,7 @@ public class AuthController {
                 null,
                 "success"
         );
-        return tokenResponse(tokenSessions.issue(
+        return authCookies.tokenResponse(tokenSessions.issue(
                 authenticated.getUsername(),
                 authenticated.getRole()
         ));
@@ -115,7 +126,7 @@ public class AuthController {
 
     @PostMapping("/auth/refresh")
     public ResponseEntity<?> refresh(
-            @CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken
+            @CookieValue(name = AuthCookies.REFRESH_COOKIE, required = false) String refreshToken
     ) {
         TokenSessionService.RotationResult result = tokenSessions.rotate(refreshToken);
         if (result.status() == TokenSessionService.RotationStatus.SUCCESS) {
@@ -129,7 +140,7 @@ public class AuthController {
                     null,
                     "success"
             );
-            return tokenResponse(result.tokens());
+            return authCookies.tokenResponse(result.tokens());
         }
 
         String outcome = result.status() == TokenSessionService.RotationStatus.REPLAYED
@@ -137,14 +148,14 @@ public class AuthController {
                 : "failure";
         auditService.record(null, null, "token_refresh", "POST", "/auth/refresh", null, outcome);
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .header(HttpHeaders.SET_COOKIE, clearRefreshCookie().toString())
+                .header(HttpHeaders.SET_COOKIE, authCookies.clearRefreshCookie().toString())
                 .body(Map.of("error", "invalid refresh token"));
     }
 
     @PostMapping("/auth/logout")
     public ResponseEntity<Void> logout(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
-            @CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken
+            @CookieValue(name = AuthCookies.REFRESH_COOKIE, required = false) String refreshToken
     ) {
         Claims claims = jwtService.parse(authorization.substring("Bearer ".length()));
         tokenSessions.logout(claims, refreshToken);
@@ -158,40 +169,7 @@ public class AuthController {
                 "success"
         );
         return ResponseEntity.noContent()
-                .header(HttpHeaders.SET_COOKIE, clearRefreshCookie().toString())
-                .build();
-    }
-
-    private ResponseEntity<TokenResponse> tokenResponse(TokenSessionService.TokenPair pair) {
-        TokenResponse response = new TokenResponse(
-                pair.accessToken(),
-                pair.accessToken(),
-                "Bearer",
-                jwtService.getTtlSeconds(),
-                tokenSessions.getRefreshTtlSeconds()
-        );
-        return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE, refreshCookie(pair.refreshToken()).toString())
-                .body(response);
-    }
-
-    private ResponseCookie refreshCookie(String token) {
-        return ResponseCookie.from(REFRESH_COOKIE, token)
-                .httpOnly(true)
-                .secure(secureCookies)
-                .sameSite("Strict")
-                .path("/auth")
-                .maxAge(Duration.ofSeconds(tokenSessions.getRefreshTtlSeconds()))
-                .build();
-    }
-
-    private ResponseCookie clearRefreshCookie() {
-        return ResponseCookie.from(REFRESH_COOKIE, "")
-                .httpOnly(true)
-                .secure(secureCookies)
-                .sameSite("Strict")
-                .path("/auth")
-                .maxAge(Duration.ZERO)
+                .header(HttpHeaders.SET_COOKIE, authCookies.clearRefreshCookie().toString())
                 .build();
     }
 
