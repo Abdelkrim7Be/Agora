@@ -73,6 +73,12 @@
             <artifactId>httpclient5</artifactId>
         </dependency>
 
+        <!-- MFA: Base32-encodes the TOTP shared secret (RFC 4648). -->
+        <dependency>
+            <groupId>commons-codec</groupId>
+            <artifactId>commons-codec</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>

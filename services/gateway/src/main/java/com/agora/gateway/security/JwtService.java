@@ -18,6 +18,7 @@ public class JwtService {
 
     private final SecretKey key;
     private final long ttlMillis;
+    private final long mfaChallengeTtlMillis;
 
     public JwtService(GatewayProperties props) {
         String secret = props.getJwt().getSecret();
@@ -32,6 +33,10 @@ public class JwtService {
         this.ttlMillis = props.getJwt().getTtlMinutes() * 60_000L;
         if (ttlMillis <= 0) {
             throw new IllegalStateException("GATEWAY_JWT_TTL_MINUTES must be positive");
+        }
+        this.mfaChallengeTtlMillis = props.getMfa().getChallengeTtlMinutes() * 60_000L;
+        if (mfaChallengeTtlMillis <= 0) {
+            throw new IllegalStateException("GATEWAY_MFA_CHALLENGE_TTL_MINUTES must be positive");
         }
     }
 
@@ -54,6 +59,35 @@ public class JwtService {
                 .verifyWith(key)
                 .requireIssuer(ISSUER)
                 .require("type", "access")
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+
+    /**
+     * Short-lived, role-less token proving "password already checked, TOTP still
+     * owed". Its distinct "type" claim means JwtAuthFilter's parse() (which
+     * requires type=access) rejects it outright — it authenticates nothing except
+     * a call to /auth/mfa/verify.
+     */
+    public String generateMfaChallenge(String username) {
+        Date now = new Date();
+        return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .issuer(ISSUER)
+                .subject(username)
+                .claim("type", "mfa_challenge")
+                .issuedAt(now)
+                .expiration(new Date(now.getTime() + mfaChallengeTtlMillis))
+                .signWith(key)
+                .compact();
+    }
+
+    public Claims parseMfaChallenge(String token) {
+        return Jwts.parser()
+                .verifyWith(key)
+                .requireIssuer(ISSUER)
+                .require("type", "mfa_challenge")
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
