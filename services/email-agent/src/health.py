@@ -86,6 +86,24 @@ def _queue_depth() -> int:
         return 0
 
 
+def _poll_job_queue_component() -> dict:
+    """S-scale-2/3 job queue depth — global, not instance-scoped (the queue
+    itself isn't RLS-scoped; see migration 0010). A future autoscaler (S-scale-5,
+    real k3s HPA) reads `pending` as its scaling signal instead of CPU."""
+    if not settings.job_queue_enabled:
+        return {"enabled": False}
+    try:
+        from src.job_queue import count_jobs
+
+        return {
+            "enabled": True,
+            "pending": count_jobs(status="pending"),
+            "processing": count_jobs(status="processing"),
+        }
+    except Exception:
+        return {"enabled": True, "pending": None, "processing": None}
+
+
 async def aggregate_health() -> dict:
     """Never raises and never blocks long: each probe is time-boxed and
     exception-guarded so one down component reports 'down', not a 500."""
@@ -98,6 +116,7 @@ async def aggregate_health() -> dict:
         "database": _database_component(),
         "redis": _redis_component(),
         "queue_depth": _queue_depth(),
+        "poll_job_queue": _poll_job_queue_component(),
         "notifications": {"enabled": settings.notify_enabled},
         "gmail_budget": budget_status(),
     }

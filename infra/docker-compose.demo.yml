@@ -111,6 +111,60 @@ services:
       GMAIL_WATCH_RENEW_MARGIN_HOURS: ${GMAIL_WATCH_RENEW_MARGIN_HOURS:-12}
       AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
       AGENT_STORE_DB: /app/data/store.db
+      # S-scale-2: off by default — the poller keeps processing inline. Set true
+      # (on both this service and `worker`, profile `job-queue`) to switch the
+      # poller to producer-only and let one or more workers claim + process.
+      AGENT_JOB_QUEUE_ENABLED: ${AGENT_JOB_QUEUE_ENABLED:-false}
+    volumes:
+      - agent_data:/app/data
+      - ../services/email-agent/credentials.json:/app/credentials.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      email-agent-migrate:
+        condition: service_completed_successfully
+      security:
+        condition: service_healthy
+    networks:
+      - agora
+
+  # S-scale-2 worker pool: claims jobs the poller enqueues (AGENT_JOB_QUEUE_ENABLED=true
+  # on both services) via Postgres SKIP LOCKED. Off by default (separate compose
+  # profile); scale with `--profile job-queue up --scale worker=N`.
+  worker:
+    profiles: ["job-queue"]
+    build:
+      context: ../services/email-agent
+      network: host
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
+    command: ["python", "-m", "src.worker"]
+    env_file:
+      - ../services/email-agent/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql://agora_email_agent:${AGENT_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_RUN_MIGRATIONS: "false"
+      AGENT_STORAGE_BACKEND: postgres
+      AGENT_RUN_REGISTRY_BACKEND: postgres
+      AGENT_JOB_QUEUE_ENABLED: "true"
+      TENANT_MODE: ${TENANT_MODE:-single}
+      AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
+      GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      AGENT_MEDIA_DIR: /app/data/media
+      GMAIL_CREDENTIALS_PATH: credentials.json
+      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
+      AGENT_SECURITY_ENABLED: "true"
+      AGENT_SECURITY_URL: http://security:8001
+      AGENT_LLM_PROFILE: local
+      AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
+      OPENAI_API_KEY: ollama-local
+      AGENT_DRY_RUN: "false"
+      AGENT_CHECKPOINTS_DB: /app/data/checkpoints.db
+      AGENT_STORE_DB: /app/data/store.db
     volumes:
       - agent_data:/app/data
       - ../services/email-agent/credentials.json:/app/credentials.json:ro

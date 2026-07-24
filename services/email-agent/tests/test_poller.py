@@ -675,7 +675,7 @@ async def test_process_message_retries_transient_error_then_succeeds(monkeypatch
 
     monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
 
-    outcome = await poller._process_message_with_retry(object(), "m_retry", object(), RulesConfig())
+    outcome = await poller.process_message_with_retry(object(), "m_retry", object(), RulesConfig())
 
     assert outcome == ("m_retry", "completed", "run-1")
     assert attempts["count"] == 3
@@ -698,7 +698,7 @@ async def test_process_message_does_not_retry_deterministic_error(monkeypatch):
     monkeypatch.setattr(poller, "record_failure", lambda error: failures.append(error))
     monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
 
-    outcome = await poller._process_message_with_retry(object(), "m_bad", object(), RulesConfig())
+    outcome = await poller.process_message_with_retry(object(), "m_bad", object(), RulesConfig())
 
     assert outcome == ("m_bad", "failed", "")
     assert attempts["count"] == 1
@@ -772,7 +772,7 @@ async def test_completed_run_is_persisted_before_mark_read_retry(monkeypatch, tm
     monkeypatch.setattr(poller, "mark_as_read", flaky_mark_read)
     monkeypatch.setattr(poller.asyncio, "sleep", fake_sleep)
 
-    outcome = await poller._process_message_with_retry(_graph(), "m_done", object(), RulesConfig())
+    outcome = await poller.process_message_with_retry(_graph(), "m_done", object(), RulesConfig())
 
     assert outcome[0] == "m_done"
     assert outcome[1] == "skipped"
@@ -970,7 +970,7 @@ async def test_retry_exhausted_records_dlq(monkeypatch):
     monkeypatch.setattr(poller, "get_message", lambda msg_id, resource=None: _raw_message(msg_id, "Subject", "Body"))
     monkeypatch.setattr(poller, "fetch_thread", lambda thread_id, resource=None: [_raw_message("m-dlq", "Subject", "Body")])
 
-    outcome = await poller._process_message_with_retry(object(), "m-dlq", object(), rules)
+    outcome = await poller.process_message_with_retry(object(), "m-dlq", object(), rules)
 
     assert outcome == ("m-dlq", "failed", "")
     assert calls[0]["reason"] == "retry_exhausted"
@@ -996,3 +996,68 @@ def test_instance_stagger_even_for_large_fleet():
     assert poller._instance_stagger_seconds(6) == poller._ROUND_ROBIN_INTERVAL_SECONDS
     small = poller._instance_stagger_seconds(3)
     assert 0.5 <= small <= 3.0
+
+
+async def test_enqueue_once_enqueues_without_invoking_the_graph(mocked_gmail, monkeypatch):
+    """S-scale-2 producer path: detect unread mail, enqueue a job per message,
+    never call the graph (no LLM call, no run created) — a worker does that."""
+    set_unread, marked = mocked_gmail
+    set_unread([
+        _raw_message("m_q1", "Quick question", "can you help?"),
+        _raw_message("m_q2", "Another one", "and this?"),
+    ])
+    enqueued_calls: list[tuple[str, str]] = []
+
+    def fake_enqueue_job(instance_id: str, message_id: str):
+        enqueued_calls.append((instance_id, message_id))
+        return {"id": len(enqueued_calls)}
+
+    monkeypatch.setattr(poller, "enqueue_job", fake_enqueue_job)
+
+    class ExplodingGraph:
+        async def ainvoke(self, *args, **kwargs):
+            raise AssertionError("enqueue_once must not invoke the graph")
+
+    outcomes = await poller.enqueue_once(ExplodingGraph(), resource=object())
+
+    assert enqueued_calls == [
+        (current_agent_instance_id(), "m_q1"),
+        (current_agent_instance_id(), "m_q2"),
+    ]
+    assert outcomes == [("m_q1", "enqueued", "1"), ("m_q2", "enqueued", "2")]
+    assert marked == []  # producer never marks read — the worker does after processing
+
+
+async def test_enqueue_once_reports_duplicates_from_a_racing_cycle(mocked_gmail, monkeypatch):
+    set_unread, _marked = mocked_gmail
+    set_unread([_raw_message("m_q3", "Subject", "Body")])
+    monkeypatch.setattr(poller, "enqueue_job", lambda instance_id, message_id: None)
+
+    outcomes = await poller.enqueue_once(object(), resource=object())
+
+    assert outcomes == [("m_q3", "queue_duplicate", "")]
+
+
+async def test_poll_active_instances_uses_enqueue_once_when_job_queue_enabled(monkeypatch):
+    monkeypatch.setattr(poller, "get_status", lambda: {"paused": False})
+    monkeypatch.setattr(poller, "has_stored_token", lambda instance_id: True)
+    monkeypatch.setattr(poller, "gmail_resource", lambda: "gmail:resource")
+    monkeypatch.setattr(poller.settings, "job_queue_enabled", True)
+
+    calls = {"enqueue_once": 0, "poll_once": 0}
+
+    async def fake_enqueue_once(_graph, resource=None):
+        calls["enqueue_once"] += 1
+        return [("m", "enqueued", "1")]
+
+    async def fake_poll_once(_graph, resource=None):
+        calls["poll_once"] += 1
+        return []
+
+    monkeypatch.setattr(poller, "enqueue_once", fake_enqueue_once)
+    monkeypatch.setattr(poller, "poll_once", fake_poll_once)
+
+    results = await poller.poll_active_instances_once(object(), ["agent-a"])
+
+    assert calls == {"enqueue_once": 1, "poll_once": 0}
+    assert results["agent-a"] == [("m", "enqueued", "1")]

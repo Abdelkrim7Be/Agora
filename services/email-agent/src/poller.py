@@ -132,6 +132,7 @@ from src.run_registry import (
 )
 from src.storage import open_graph_storage
 from src.token_store import has_stored_token, validate_token_security
+from src.job_queue import enqueue_job
 from src.tenant import (
     agent_instance_context,
     current_agent_instance_id,
@@ -174,7 +175,7 @@ def _backoff_seconds(attempt: int) -> float:
     return min(base * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
 
 
-async def _process_message_with_retry(
+async def process_message_with_retry(
     graph,
     msg_id: str,
     resource,
@@ -591,11 +592,60 @@ async def poll_history(
     rules_config = rules_config or load_rules()
     outcomes: list[tuple] = []
     for ref in fetch_history_message_refs(start_history_id, resource=resource):
-        outcome = await _process_message_with_retry(graph, ref["id"], resource, rules_config)
+        outcome = await process_message_with_retry(graph, ref["id"], resource, rules_config)
         if outcome[1] != "skipped":
             outcomes.append(outcome)
     maybe_emit_daily_digest(rules_config)
     return outcomes
+
+
+async def _discover_unread_refs(
+    resource,
+    max_results: int,
+    prefetch: bool = True,
+) -> tuple[list[dict], dict[str, dict], str, bool]:
+    """Shared detection: incremental history diff (fallback to full unread scan)
+    plus optional batch prefetch. Returns (refs, prefetched, next_baseline, truncated).
+
+    Incremental sync: with a stored baseline, ask Gmail only for what changed
+    (history.list) instead of relisting the unread inbox every cycle. A stale
+    baseline (Gmail purges history after ~1 week) falls back to the full scan,
+    which reseeds below. The new baseline is captured BEFORE the scan so mail
+    arriving mid-cycle lands in the next window as overlap, never as a gap —
+    downstream processing dedups overlap via the run registry.
+    """
+    refs: list[dict] | None = None
+    truncated = False
+    baseline = get_last_history_id()
+    if baseline:
+        try:
+            history_refs = fetch_history_message_refs(baseline, resource=resource)
+            truncated = len(history_refs) > max_results
+            refs = history_refs[:max_results]
+        except Exception as exc:
+            if not is_stale_history_error(exc):
+                raise
+            print(f"poller: history window stale; falling back to full unread scan: {exc}")
+    try:
+        next_baseline = current_history_id(resource=resource)
+    except Exception:
+        next_baseline = ""
+    if refs is None:
+        refs = fetch_unread(max_results, resource=resource)
+
+    # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
+    # round-trip per 50 instead of one per message. Failure falls back to the
+    # per-message serial fetch inside process_message. Skipped by the producer
+    # path (enqueue_once) — the message body isn't used there, only the id.
+    prefetched: dict[str, dict] = {}
+    if prefetch and len(refs) > 3:
+        try:
+            prefetched = await asyncio.to_thread(
+                fetch_messages_batch, [ref["id"] for ref in refs], resource
+            )
+        except Exception as exc:
+            print(f"poller: batch message fetch failed, using serial: {exc}")
+    return refs, prefetched, next_baseline, truncated
 
 
 async def poll_once(
@@ -622,45 +672,12 @@ async def poll_once(
         for msg_id, label_name in resurface_due_snoozed(resource, rules_config):
             outcomes.append((msg_id, "snoozed_resurfaced", label_name))
 
-    # Incremental sync: with a stored baseline, ask Gmail only for what changed
-    # (history.list) instead of relisting the unread inbox every cycle. A stale
-    # baseline (Gmail purges history after ~1 week) falls back to the full scan,
-    # which reseeds below. The new baseline is captured BEFORE the scan so mail
-    # arriving mid-cycle lands in the next window as overlap, never as a gap —
-    # process_message dedups overlap via the run registry.
-    refs: list[dict] | None = None
-    truncated = False
-    baseline = get_last_history_id()
-    if baseline:
-        try:
-            history_refs = fetch_history_message_refs(baseline, resource=resource)
-            truncated = len(history_refs) > max_results
-            refs = history_refs[:max_results]
-        except Exception as exc:
-            if not is_stale_history_error(exc):
-                raise
-            print(f"poller: history window stale; falling back to full unread scan: {exc}")
-    try:
-        next_baseline = current_history_id(resource=resource)
-    except Exception:
-        next_baseline = ""
-    if refs is None:
-        refs = fetch_unread(max_results, resource=resource)
-
-    # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
-    # round-trip per 50 instead of one per message. Failure falls back to the
-    # per-message serial fetch inside process_message.
-    prefetched: dict[str, dict] = {}
-    if len(refs) > 3:
-        try:
-            prefetched = await asyncio.to_thread(
-                fetch_messages_batch, [ref["id"] for ref in refs], resource
-            )
-        except Exception as exc:
-            print(f"poller: batch message fetch failed, using serial: {exc}")
+    refs, prefetched, next_baseline, truncated = await _discover_unread_refs(
+        resource, max_results
+    )
 
     for ref in refs:
-        outcomes.append(await _process_message_with_retry(
+        outcomes.append(await process_message_with_retry(
             graph, ref["id"], resource, rules_config, message=prefetched.get(ref["id"])
         ))
     # A truncated history batch keeps the old baseline so the overflow is picked
@@ -671,6 +688,54 @@ async def poll_once(
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
+    await asyncio.to_thread(sweep_pending_approval_slas)
+    maybe_emit_daily_digest(rules_config)
+    return outcomes
+
+
+async def enqueue_once(
+    graph,
+    resource=None,
+    max_results: int | None = None,
+    rules_config: RulesConfig | None = None,
+) -> list[tuple]:
+    """Producer path (AGENT_JOB_QUEUE_ENABLED=true): detect unread mail the same
+    way poll_once does, but enqueue a job per message instead of invoking the
+    graph inline. One or more `src.worker` processes claim and process jobs
+    later via Postgres SKIP LOCKED. Returns (msg_id, "enqueued"|"queue_duplicate",
+    job_id) tuples, the same outcome shape poll_once returns.
+
+    Snoozed resurfacing and follow-ups stay synchronous here, outside the queue:
+    both just flip a message back to UNREAD / propose a nudge run directly, and
+    the next detection pass enqueues any resulting unread mail normally.
+    """
+    resource = resource or gmail_resource()
+    max_results = max_results or settings.max_emails_per_run
+    rules_config = rules_config or load_rules()
+    instance_id = current_agent_instance_id()
+
+    if rules_config.snooze.enabled:
+        resurface_due_snoozed(resource, rules_config)
+
+    refs, _prefetched, next_baseline, truncated = await _discover_unread_refs(
+        resource, max_results, prefetch=False
+    )
+    outcomes: list[tuple] = []
+    for ref in refs:
+        job = enqueue_job(instance_id, ref["id"])
+        if job is None:
+            outcomes.append((ref["id"], "queue_duplicate", ""))
+        else:
+            outcomes.append((ref["id"], "enqueued", str(job["id"])))
+    if next_baseline and not truncated:
+        set_last_history_id(next_baseline)
+
+    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    for _msg_id, status, _run_id in outcomes:
+        inc_counter("agora_poller_processed_total", status=status)
+    enqueued_count = sum(1 for _msg_id, status, _run_id in outcomes if status == "enqueued")
+    if enqueued_count:
+        print(f"poller: {instance_id} enqueued {enqueued_count} job(s)")
     await asyncio.to_thread(sweep_pending_approval_slas)
     maybe_emit_daily_digest(rules_config)
     return outcomes
@@ -798,7 +863,10 @@ async def poll_active_instances_once(
                     reload_config()
                     resource = gmail_resource()
                     await maybe_seed_style_profile(instance_id, store, resource)
-                    outcomes = await poll_once(graph, resource=resource)
+                    if settings.job_queue_enabled:
+                        outcomes = await enqueue_once(graph, resource=resource)
+                    else:
+                        outcomes = await poll_once(graph, resource=resource)
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))
