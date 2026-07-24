@@ -123,6 +123,67 @@ def test_interrupt_description_includes_draft_content(fake_llms, respond_email):
     description = paused["__interrupt__"][0].value[0]["description"]
     assert "alice@example.com" in description
     assert "Here you go." in description
+    assert description.startswith("**Reply draft**")
+
+
+# --- format_action_description: every HITL-gated tool gets a real preview,
+# not the generic "Approve 'tool_name'?" fallback. ---
+
+def test_format_action_description_write_email():
+    from src.utils import format_action_description
+
+    description = format_action_description("write_email", DRAFT)
+    assert description.startswith("**Reply draft**")
+    assert "alice@example.com" in description
+    assert "Here you go." in description
+
+
+def test_format_action_description_create_draft():
+    from src.utils import format_action_description
+
+    description = format_action_description("create_draft", DRAFT)
+    assert description.startswith("**Draft (not sent)**")
+    assert "alice@example.com" in description
+
+
+def test_format_action_description_reply_all():
+    from src.utils import format_action_description
+
+    description = format_action_description("reply_all", {"content": "Thanks all."})
+    assert description.startswith("**Reply-all draft**")
+    assert "Thanks all." in description
+
+
+def test_format_action_description_forward_email_single_recipient():
+    from src.utils import format_action_description
+
+    description = format_action_description(
+        "forward_email", {"to": "hr@example.com", "note": "Please handle."}
+    )
+    assert description.startswith("**Forward to**: hr@example.com")
+    assert "Please handle." in description
+
+
+def test_format_action_description_forward_email_multi_recipient():
+    from src.utils import format_action_description
+
+    description = format_action_description(
+        "forward_email",
+        {"to": ["hr@example.com", "backup-hr@example.com"], "note": "FYI."},
+    )
+    assert "hr@example.com, backup-hr@example.com" in description
+
+
+def test_format_action_description_trash_email():
+    from src.utils import format_action_description
+
+    assert format_action_description("trash_email", {}) == "**Move this email to trash?**"
+
+
+def test_format_action_description_unknown_tool_falls_back():
+    from src.utils import format_action_description
+
+    assert format_action_description("some_future_tool", {}) == "Approve 'some_future_tool'?"
 
 
 # --- Agent Inbox resume routing through the real graph (LLMs faked) ---
