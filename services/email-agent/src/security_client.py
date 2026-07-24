@@ -114,3 +114,35 @@ def audit_output(action: str, to: str, subject: str, content: str, run_id: str) 
             "reasons": ["security_service_unreachable"],
             "classifier_unavailable": True,
         }
+
+
+def sanitize_memory_write(namespace_label: str, content: str) -> dict:
+    """POST a synthesized preference update to /sanitize before it is persisted.
+
+    update_memory() synthesizes this text from an LLM call over the full run
+    transcript, which includes untrusted email content — a successful prompt
+    injection can smuggle instructions into what looks like "learned
+    preferences", and those persist across every future run. Reusing /sanitize
+    here checks the synthesized text itself for injection before it is written,
+    the same way inbound email content is checked before the agent sees it.
+
+    Fail closed: any failure blocks the write so a security-service outage
+    never becomes a silent persistent-memory poisoning vector.
+    """
+    payload = {"sender": "", "subject": f"memory:{namespace_label}", "content": content}
+    try:
+        with httpx.Client(timeout=settings.security_timeout) as client:
+            resp = client.post(f"{settings.security_url}/sanitize", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return {
+            "classification": "malicious",
+            "injection_detected": True,
+            "spam": False,
+            "reasons": ["security_service_unreachable"],
+            "cleaned_text": content,
+            "classifier_unavailable": True,
+            "source_trust": "UNTRUSTED",
+            "fields": {},
+        }
