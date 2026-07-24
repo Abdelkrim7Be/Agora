@@ -1562,6 +1562,58 @@ def test_retention_run_rejects_disabled_policy(monkeypatch):
     assert "retention disabled" in response.json()["detail"]
 
 
+def test_gdpr_erase_endpoints_require_owner_role(monkeypatch):
+    with TestClient(app) as client:
+        body = {"email": "alice@example.com"}
+        assert client.post(
+            "/gdpr/erase/dry-run", json=body, headers={"X-Agora-Instance-Role": "viewer"}
+        ).status_code == 403
+        assert client.post(
+            "/gdpr/erase", json=body, headers={"X-Agora-Instance-Role": "viewer"}
+        ).status_code == 403
+
+
+def test_gdpr_erase_dry_run_and_execute_call_through_for_owner(monkeypatch):
+    import src.api as api
+
+    calls = []
+    monkeypatch.setattr(
+        api,
+        "preview_erasure",
+        lambda email, agent_instance_id, revoke_owner_token: calls.append(
+            ("preview", email, agent_instance_id, revoke_owner_token)
+        )
+        or {"email": email, "run_ids": []},
+    )
+    monkeypatch.setattr(
+        api,
+        "erase_subject",
+        lambda email, agent_instance_id, revoke_owner_token: calls.append(
+            ("erase", email, agent_instance_id, revoke_owner_token)
+        )
+        or {"email": email, "deleted": {"runs": 0}},
+    )
+
+    with TestClient(app) as client:
+        dry_run_response = client.post(
+            "/gdpr/erase/dry-run",
+            json={"email": "alice@example.com", "revoke_owner_token": True},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+        erase_response = client.post(
+            "/gdpr/erase",
+            json={"email": "alice@example.com"},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert dry_run_response.status_code == 200
+    assert erase_response.status_code == 200
+    assert calls == [
+        ("preview", "alice@example.com", None, True),
+        ("erase", "alice@example.com", None, False),
+    ]
+
+
 def test_metrics_endpoint_returns_prometheus_text(monkeypatch):
     import src.api as api
     monkeypatch.setattr(api, "render_metrics", lambda: "# HELP agora_test demo\n# TYPE agora_test counter\nagora_test 1\n")
