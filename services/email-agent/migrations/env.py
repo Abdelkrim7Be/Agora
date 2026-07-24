@@ -9,7 +9,11 @@ from sqlalchemy import engine_from_config, pool
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which would silence every app
+    # logger already configured before migrations run — a real problem when
+    # run_migrations=True fires at process startup (and it also breaks caplog
+    # assertions in any test that migrates before the log-emitting test).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No ORM metadata: the email-agent Postgres schema is migration-first.
 # LangGraph checkpoint/store tables remain outside Alembic and are created by

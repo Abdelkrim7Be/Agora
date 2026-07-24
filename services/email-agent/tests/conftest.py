@@ -8,6 +8,47 @@ from langchain_core.messages import AIMessage
 from src.memory import UserPreferences
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_agent_role():
+    """Create the agora_email_agent role before any Postgres migration runs.
+
+    The 0009/0010 grants are conditional on this role already existing when the
+    migration executes (in prod the role is provisioned before deploy). Several
+    Postgres test files call upgrade_to_head() on the shared CI database; whichever
+    runs first fixes the migration head. If that first migration happens without
+    the role present, the conditional GRANTs are silently skipped and every later
+    test connecting as agora_email_agent hits "permission denied". Creating the
+    role here — once, before collection-order can decide — keeps the grants applied
+    regardless of which pg test migrates first.
+    """
+    import os
+
+    admin_url = os.getenv("RLS_TEST_ADMIN_URL", "")
+    if not admin_url:
+        yield
+        return
+
+    import psycopg
+
+    with psycopg.connect(admin_url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_roles WHERE rolname = 'agora_email_agent'
+                    ) THEN
+                        CREATE ROLE agora_email_agent LOGIN PASSWORD 'agent-test-password'
+                            NOSUPERUSER NOBYPASSRLS;
+                    END IF;
+                END
+                $$
+                """
+            )
+    yield
+
+
 # --- Fake LLMs: let tests drive the real graph deterministically, no Groq calls. ---
 
 

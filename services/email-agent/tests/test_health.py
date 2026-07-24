@@ -25,6 +25,7 @@ async def test_aggregate_health_reports_disabled_components_when_unconfigured():
     assert result["database"]["status"] == "disabled"
     assert result["redis"]["status"] == "disabled"
     assert isinstance(result["queue_depth"], int)
+    assert result["poll_job_queue"] == {"enabled": False}
     assert result["notifications"]["enabled"] is False
 
 
@@ -144,6 +145,19 @@ def test_queue_depth_counts_active_statuses_only(monkeypatch):
 
     monkeypatch.setattr(health, "list_runs", _fake_list_runs)
     assert health._queue_depth() == 1
+
+
+def test_poll_job_queue_component_disabled_by_default():
+    assert health._poll_job_queue_component() == {"enabled": False}
+
+
+def test_poll_job_queue_component_reports_depth_when_enabled(monkeypatch):
+    monkeypatch.setattr(settings, "job_queue_enabled", True)
+    monkeypatch.setattr("src.job_queue.count_jobs", lambda status=None: 3 if status == "pending" else 1)
+
+    result = health._poll_job_queue_component()
+
+    assert result == {"enabled": True, "pending": 3, "processing": 1}
 
 
 def test_database_component_disabled_when_no_database_url():

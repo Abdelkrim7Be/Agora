@@ -133,6 +133,16 @@ class Settings:
     # External-identity -> platform user id (aligns webhook tenant key with the gateway).
     user_map: dict = _parse_user_map()
 
+    # S-scale-2: poller becomes a producer (enqueues) and one or more `src.worker`
+    # processes claim + process jobs via Postgres SKIP LOCKED. Off by default —
+    # the poller keeps processing inline, single-process, like before.
+    job_queue_enabled: bool = _env_bool("AGENT_JOB_QUEUE_ENABLED", "false")
+    # A worker crash between claim and done leaves a job stuck 'processing'; a
+    # stale claim older than this is requeued.
+    job_queue_stale_seconds: float = float(os.getenv("AGENT_JOB_QUEUE_STALE_SECONDS", "300"))
+    job_queue_max_attempts: int = int(os.getenv("AGENT_JOB_QUEUE_MAX_ATTEMPTS", "5"))
+    job_queue_poll_seconds: float = float(os.getenv("AGENT_JOB_QUEUE_POLL_SECONDS", "2"))
+
 
 settings = Settings()
 
