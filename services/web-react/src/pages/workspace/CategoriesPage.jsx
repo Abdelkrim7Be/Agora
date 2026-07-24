@@ -13,6 +13,7 @@ import {
   useDuplicateCategory,
   useDeleteCategory,
   useTestCategoryMatch,
+  useRolesQuery,
 } from '../../api/queries';
 import { compactText } from '../../utils/format';
 import {
@@ -56,6 +57,7 @@ export default function CategoriesPage() {
   const [testSubject, setTestSubject] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testError, setTestError] = useState('');
+  const [routeCustomDraft, setRouteCustomDraft] = useState('');
   const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
@@ -66,6 +68,8 @@ export default function CategoriesPage() {
   const duplicateCategory = useDuplicateCategory();
   const deleteCategory = useDeleteCategory();
   const testMatch = useTestCategoryMatch();
+  const rolesQuery = useRolesQuery();
+  const availableRoles = rolesQuery.data?.roles || [];
 
   const parsed = query.data?.parsed;
   const categories = parsed?.categories || [];
@@ -87,7 +91,29 @@ export default function CategoriesPage() {
     setStatus(`Impossible de charger les workflows : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const resetForm = () => { setEditingName(''); setForm(EMPTY_FORM); };
+  const resetForm = () => { setEditingName(''); setForm(EMPTY_FORM); setRouteCustomDraft(''); };
+
+  const routeToList = splitDirectoryValues(form.routeTo);
+
+  const toggleRouteRole = (roleKey) => {
+    const next = new Set(routeToList);
+    if (next.has(roleKey)) next.delete(roleKey); else next.add(roleKey);
+    setForm({ ...form, routeTo: Array.from(next).join(', ') });
+  };
+
+  const addRouteCustomEmail = () => {
+    const email = routeCustomDraft.trim().toLowerCase();
+    if (!email || !email.includes('@') || routeToList.includes(email)) {
+      setRouteCustomDraft('');
+      return;
+    }
+    setForm({ ...form, routeTo: [...routeToList, email].join(', ') });
+    setRouteCustomDraft('');
+  };
+
+  const removeRouteTarget = (value) => {
+    setForm({ ...form, routeTo: routeToList.filter((item) => item !== value).join(', ') });
+  };
 
   const startEdit = (category) => {
     setEditingName(category.name);
@@ -289,7 +315,50 @@ export default function CategoriesPage() {
           </label>
           <label><span>Propriétaire</span><input value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })} placeholder="HR team or hr@company.com" /></label>
           <label><span>Approbateur</span><input value={form.approver} onChange={(e) => setForm({ ...form, approver: e.target.value })} placeholder="manager@company.com" /></label>
-          <label className="workflow-wide"><span>Acheminer vers</span><input value={form.routeTo} onChange={(e) => setForm({ ...form, routeTo: e.target.value })} placeholder="hr, finance ou accounting@company.com" /></label>
+          <div className="workflow-wide route-picker">
+            <span>Acheminer vers</span>
+            {availableRoles.length > 0 && (
+              <div className="mini-chip-row">
+                {availableRoles.map((role) => (
+                  <button
+                    type="button"
+                    key={role.role_key}
+                    className={`mini-chip chip-toggle ${routeToList.includes(role.role_key) ? 'selected' : ''}`}
+                    onClick={() => toggleRouteRole(role.role_key)}
+                  >
+                    {role.display_name || role.role_key}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="route-custom-add">
+              <input
+                value={routeCustomDraft}
+                onChange={(e) => setRouteCustomDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRouteCustomEmail(); } }}
+                placeholder="ou ajouter un e-mail personnalisé"
+              />
+              <button type="button" onClick={addRouteCustomEmail}>Ajouter</button>
+            </div>
+            {routeToList.length > 0 && (
+              <div className="mini-chip-row">
+                {routeToList.map((value) => {
+                  const matchedRole = availableRoles.find((role) => role.role_key === value);
+                  return (
+                    <span className="mini-chip" key={value}>
+                      {matchedRole ? matchedRole.display_name : value}
+                      <button
+                        type="button"
+                        className="chip-remove"
+                        onClick={() => removeRouteTarget(value)}
+                        aria-label={`Retirer ${matchedRole ? matchedRole.display_name : value}`}
+                      >×</button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {!editingName && (
             <label className="workflow-wide"><span>Instructions de réponse / modèle</span>
               <textarea value={form.template} onChange={(e) => setForm({ ...form, template: e.target.value })} placeholder={'Bonjour {{name}},\n\nMerci pour votre demande...\n\nBien cordialement,'} />

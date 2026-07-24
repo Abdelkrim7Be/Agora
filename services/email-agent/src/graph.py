@@ -48,7 +48,7 @@ from src.prompts import (
     triage_user_prompt,
 )
 from src.state import RouterSchema, State, StateInput
-from src.utils import ensure_email_paragraphs, format_draft_markdown, format_email_markdown, parse_email
+from src.utils import ensure_email_paragraphs, format_action_description, format_email_markdown, parse_email
 from src.trace import record_trace
 
 load_dotenv()
@@ -946,9 +946,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                 continue
 
         if authorization_decision == "hitl":
-            description = (
-                format_draft_markdown(args) if name == "write_email" else f"Approve '{name}'?"
-            )
+            description = format_action_description(name, args)
             request = {
                 "action_request": {"action": name, "args": args},
                 "config": {

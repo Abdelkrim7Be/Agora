@@ -41,6 +41,29 @@ def format_draft_markdown(args: dict) -> str:
     return f"**To**: {to}\n**Subject**: {subject}\n\n{content}"
 
 
+def format_action_description(name: str, args: dict) -> str:
+    """Render a human-readable approval preview for any HITL-gated tool call.
+
+    Kept in the same 'description' markdown field the HumanInterrupt schema
+    already exposes (Agent Inbox reads it directly) so every gated action gets a
+    real preview instead of a generic "Approve 'tool_name'?" string.
+    """
+    if name == "write_email":
+        return "**Reply draft**\n\n" + format_draft_markdown(args)
+    if name == "create_draft":
+        return "**Draft (not sent)**\n\n" + format_draft_markdown(args)
+    if name == "reply_all":
+        return f"**Reply-all draft**\n\n{args.get('content', '')}"
+    if name == "forward_email":
+        to = args.get("to", "")
+        targets = ", ".join(to) if isinstance(to, list) else str(to)
+        note = args.get("note", "")
+        return f"**Forward to**: {targets}\n\n{note}"
+    if name == "trash_email":
+        return "**Move this email to trash?**"
+    return f"Approve '{name}'?"
+
+
 def extract_tool_call_names(messages: List[Any]) -> List[str]:
     """Collect the names of every tool call across a list of messages."""
     names: List[str] = []
