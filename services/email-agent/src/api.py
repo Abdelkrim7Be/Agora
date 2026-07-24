@@ -83,6 +83,7 @@ from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_hi
 from src.health import aggregate_health
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
+from src.gdpr import ErasureRequest, erase_subject, preview_erasure
 from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
 from src.token_store import validate_token_security
@@ -1110,6 +1111,22 @@ async def retention_execute(request: Request) -> dict:
     if retention_config.retention_days <= 0:
         raise HTTPException(status_code=400, detail="retention disabled; set retention_days > 0 before executing")
     return await asyncio.to_thread(run_retention)
+
+
+@app.post("/gdpr/erase/dry-run")
+async def gdpr_erase_dry_run(request: Request, body: ErasureRequest) -> dict:
+    _require_instance_role(request, "owner")
+    return await asyncio.to_thread(
+        preview_erasure, body.email, body.agent_instance_id, body.revoke_owner_token
+    )
+
+
+@app.post("/gdpr/erase")
+async def gdpr_erase(request: Request, body: ErasureRequest) -> dict:
+    _require_instance_role(request, "owner")
+    return await asyncio.to_thread(
+        erase_subject, body.email, body.agent_instance_id, body.revoke_owner_token
+    )
 
 
 @app.get("/agent-instances/{instance_id}/connect/gmail/start", response_model=GmailConnectStartResponse)
