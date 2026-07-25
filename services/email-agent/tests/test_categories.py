@@ -533,3 +533,100 @@ def test_workflow_instructions_appear_only_for_owning_workflow(monkeypatch):
         config={"configurable": {"thread_id": str(uuid.uuid4())}},
     )
     assert "Workflow Instructions" not in spy.last_system_content
+
+
+# --- Workstream D: contact model unification ---
+
+def _directory_contact(**overrides):
+    from src.contacts import Contact
+
+    fields = {"email": "vip@company.example", "audience": "prospect", "category": "internal", "priority": "urgent"}
+    fields.update(overrides)
+    return Contact(**fields)
+
+
+def test_classify_unchanged_for_existing_fixtures(tmp_path, monkeypatch):
+    """The critical regression guard: with an empty unified directory, classify_category
+    must behave byte-for-byte like it did before the directory existed."""
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    before_contact_override = classify_category(
+        {"author": "VIP <vip@company.example>", "subject": "hello"}, cfg
+    )
+    before_rule_match = classify_category(
+        {"author": "Client <ana@client.example>", "subject": "urgent issue"}, cfg
+    )
+
+    assert before_contact_override["category"] == "internal"
+    assert before_contact_override["priority"] == "urgent"
+    assert before_rule_match["category"] == "reclamation"
+
+
+def test_directory_contact_matches_before_rules(tmp_path, monkeypatch):
+    directory_contact = _directory_contact(email="ana@client.example", category="internal")
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [directory_contact])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "Client <ana@client.example>", "subject": "urgent issue"}, cfg)
+
+    # Rule matching would have classified this as 'reclamation' (sender_domain
+    # client.example) — the directory contact must win instead.
+    assert result["category"] == "internal"
+
+
+def test_legacy_contact_still_matches_when_absent_from_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "VIP <vip@company.example>", "subject": "hello"}, cfg)
+    assert result["category"] == "internal"
+
+
+def test_directory_wins_over_legacy_for_same_email(tmp_path, monkeypatch):
+    directory_contact = _directory_contact(email="vip@company.example", category="reclamation", priority="low")
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [directory_contact])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "VIP <vip@company.example>", "subject": "hello"}, cfg)
+
+    # categories.yaml's legacy contact says 'internal'; the directory says 'reclamation'.
+    assert result["category"] == "reclamation"
+    assert result["priority"] == "low"
+
+
+def test_exact_email_beats_domain_match(tmp_path, monkeypatch):
+    # A domain-wide legacy contact says 'internal'; an exact-email legacy contact
+    # for the same sender says 'reclamation'. Exact email must win (precedence 2 vs 4).
+    legacy_yaml = CATEGORIES_YAML + (
+        "\n  - domain: client.example\n    category: internal\n"
+        "  - email: ana@client.example\n    category: reclamation\n"
+    )
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(legacy_yaml)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "Client <ana@client.example>", "subject": "hello"}, cfg)
+    assert result["category"] == "reclamation"
+
+
+def test_domain_only_legacy_contact_matches_by_domain(tmp_path, monkeypatch):
+    legacy_yaml = CATEGORIES_YAML + "\n  - domain: client.example\n    category: internal\n"
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(legacy_yaml)
+    cfg = load_categories(path)
+
+    # No exact-email contact for this sender, but the domain-only contact matches,
+    # and would otherwise be shadowed by the 'reclamation' rule for this domain.
+    result = classify_category({"author": "Someone <other@client.example>", "subject": "urgent issue"}, cfg)
+    assert result["category"] == "internal"

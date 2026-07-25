@@ -139,7 +139,29 @@ def unresolved_vars(text: str) -> list[str]:
     return re.findall(r"\{\{(\w+)\}\}", text)
 
 
-def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
+def contact_directory_for_matching(config: CategoriesConfig, agent_instance_id: str | None = None) -> tuple[list, list]:
+    """(directory_contacts, legacy_contacts) in classify_category's precedence order.
+
+    directory_contacts are src.contacts unified-directory entries that carry a
+    category (audience/fields/tags contacts without one are irrelevant to
+    routing). legacy_contacts are the categories.yaml contacts NOT already
+    present in the directory by email — existing categories.yaml files keep
+    matching unchanged; new writes go to the directory. Directory contacts
+    always have an email (schema-required), so only legacy contacts can ever
+    satisfy the domain-only match branch below.
+    """
+    from src.contacts import list_contacts
+
+    directory_contacts = [c for c in list_contacts(agent_instance_id=agent_instance_id) if c.category]
+    directory_emails = {c.email for c in directory_contacts}
+    legacy_contacts = [
+        c for c in config.contacts
+        if not (c.email and _email_address(c.email) in directory_emails)
+    ]
+    return directory_contacts, legacy_contacts
+
+
+def classify_category(email_input: dict, config: CategoriesConfig, agent_instance_id: str | None = None) -> dict:
     if not config.enabled:
         return {"category": None, "priority": "normal", "template": None, "policy": None, "contact": None}
 
@@ -148,26 +170,37 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
     active_categories = [category for category in config.categories if category.enabled]
     category_by_name = {category.name: category for category in active_categories}
 
-    for contact in config.contacts:
-        matched = False
-        if contact.email and _email_address(contact.email) == sender_address:
-            matched = True
-        elif contact.domain and contact.domain.lower() == sender_domain and not contact.email:
-            matched = True
-        if matched and contact.category in category_by_name:
-            category = category_by_name[contact.category]
-            return {
-                "category": category.name,
-                "category_display_name": category.display_name,
-                "priority": contact.priority or category.priority,
-                "template": category.template,
-                "policy": category.policy,
-                "owner": category.owner,
-                "approver": category.approver,
-                "route_to": category.route_to,
-                "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
-                "contact": contact,
-            }
+    directory_contacts, legacy_contacts = contact_directory_for_matching(config, agent_instance_id)
+
+    def _result(contact, category) -> dict:
+        return {
+            "category": category.name,
+            "category_display_name": category.display_name,
+            "priority": (contact.priority if contact.priority else None) or category.priority,
+            "template": category.template,
+            "policy": category.policy,
+            "owner": category.owner,
+            "approver": category.approver,
+            "route_to": category.route_to,
+            "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
+            "contact": contact,
+        }
+
+    # Precedence 1 & 2: exact email match, directory before legacy.
+    for contact in (*directory_contacts, *legacy_contacts):
+        if contact.email and _email_address(contact.email) == sender_address and contact.category in category_by_name:
+            return _result(contact, category_by_name[contact.category])
+
+    # Precedence 3 & 4: domain match when email is unset, directory before legacy
+    # (directory contacts never reach here — see contact_directory_for_matching).
+    for contact in (*directory_contacts, *legacy_contacts):
+        if (
+            not contact.email
+            and contact.domain
+            and contact.domain.lower() == sender_domain
+            and contact.category in category_by_name
+        ):
+            return _result(contact, category_by_name[contact.category])
 
     for category in active_categories:
         if matches_when(category.when, email_input):
