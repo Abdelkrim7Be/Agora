@@ -18,6 +18,10 @@ def test_alembic_scaffold_and_scripts_exist() -> None:
     assert (SERVICE_ROOT / "migrations" / "versions" / "0007_trace_retention.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0008_dlq.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0009_tenant_rls.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0010_poll_jobs.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0011_instance_setup.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0012_notifications.py").is_file()
+    assert (SERVICE_ROOT / "migrations" / "versions" / "0013_contact_categories.py").is_file()
     assert (SERVICE_ROOT / "scripts" / "backup.sh").is_file()
     assert (SERVICE_ROOT / "scripts" / "restore.sh").is_file()
     assert (SERVICE_ROOT / "docs" / "backup-restore.md").is_file()
@@ -192,5 +196,43 @@ def test_tenant_rls_migration_forces_policies_on_all_business_tables() -> None:
         '"email_agent_roles"',
         '"email_agent_contacts"',
         '"email_agent_segments"',
+    ):
+        assert marker in text
+
+
+def test_instance_setup_migration_covers_state_machine_tables() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0011_instance_setup.py").read_text(encoding="utf-8")
+    for marker in (
+        'down_revision = "0010_poll_jobs"',
+        '"email_agent_instance_setup"',
+        '"email_agent_instance_setup_step"',
+        'email_agent_instance_setup_user_instance_idx',
+        'email_agent_instance_setup_step_setup_key_idx',
+        'email_agent_instance_setup_step_claim_idx',
+    ):
+        assert marker in text
+
+
+def test_notifications_migration_covers_notification_table() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0012_notifications.py").read_text(encoding="utf-8")
+    for marker in (
+        'down_revision = "0011_instance_setup"',
+        '"email_agent_notification"',
+        'email_agent_notification_dedupe_idx',
+        'FORCE ROW LEVEL SECURITY',
+        'agora_tenant_isolation',
+    ):
+        assert marker in text
+
+
+def test_contact_categories_migration_adds_routing_columns() -> None:
+    text = (SERVICE_ROOT / "migrations" / "versions" / "0013_contact_categories.py").read_text(encoding="utf-8")
+    for marker in (
+        'down_revision = "0012_notifications"',
+        '"category"',
+        '"domain"',
+        '"priority"',
+        '"category_source"',
+        '"category_confidence"',
     ):
         assert marker in text

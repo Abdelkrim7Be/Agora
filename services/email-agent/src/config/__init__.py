@@ -143,6 +143,19 @@ class Settings:
     job_queue_max_attempts: int = int(os.getenv("AGENT_JOB_QUEUE_MAX_ATTEMPTS", "5"))
     job_queue_poll_seconds: float = float(os.getenv("AGENT_JOB_QUEUE_POLL_SECONDS", "2"))
 
+    # Instance onboarding pipeline (Phase 6 delta — see instance_setup.py).
+    setup_enabled: bool = _env_bool("AGENT_SETUP_PIPELINE_ENABLED", "true")
+    setup_recent_limit: int = int(os.getenv("AGENT_SETUP_RECENT_LIMIT", "50"))
+    setup_backlog_limit: int = int(os.getenv("AGENT_SETUP_BACKLOG_LIMIT", "20"))
+    setup_sent_sample: int = int(os.getenv("AGENT_SETUP_SENT_SAMPLE", "20"))
+    setup_stale_seconds: float = float(os.getenv("AGENT_SETUP_STALE_SECONDS", "300"))
+    setup_max_attempts: int = int(os.getenv("AGENT_SETUP_MAX_ATTEMPTS", "3"))
+    instance_setup_path: str = os.getenv("AGENT_INSTANCE_SETUP_PATH", "logs/instance_setup.json")
+
+    # In-app notification centre (Phase 6 delta — see notification_store.py).
+    notification_store_path: str = os.getenv("AGENT_NOTIFICATION_STORE_PATH", "logs/notifications.json")
+    notification_retention_days: int = int(os.getenv("AGENT_NOTIFICATION_RETENTION_DAYS", "90"))
+
 
 settings = Settings()
 

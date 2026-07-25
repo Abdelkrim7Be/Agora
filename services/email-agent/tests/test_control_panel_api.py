@@ -294,6 +294,11 @@ segments: []
                 "audience": "client",
                 "fields": {"company": "Agora"},
                 "tags": ["vip"],
+                "category": None,
+                "domain": None,
+                "priority": None,
+                "category_source": "manual",
+                "category_confidence": None,
                 "active": True,
             }
         ],
@@ -1707,3 +1712,156 @@ def test_runs_list_carries_confidence_and_review_reason(monkeypatch):
     assert row["confidence"] == "moyenne"
     assert row["action_type"] == "reply_draft"
     assert "review_reason" in row
+
+
+def test_instance_setup_get_requires_viewer_and_calls_through(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "get_setup", lambda: {
+        "status": "running_setup", "started_at": None, "finished_at": None, "error": None,
+        "steps": [], "progress": {"done": 1, "total": 9, "percent": 11},
+    })
+
+    with TestClient(app) as client:
+        response = client.get("/instance-setup", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running_setup"
+
+
+def test_instance_setup_mutations_require_owner_role(monkeypatch):
+    with TestClient(app) as client:
+        assert client.post(
+            "/instance-setup/start", headers={"X-Agora-Instance-Role": "approver"}
+        ).status_code == 403
+        assert client.post(
+            "/instance-setup/retry", headers={"X-Agora-Instance-Role": "viewer"}
+        ).status_code == 403
+        assert client.post(
+            "/instance-setup/skip", headers={"X-Agora-Instance-Role": "viewer"}
+        ).status_code == 403
+        assert client.post(
+            "/instance-setup/steps/learn_style/retry", headers={"X-Agora-Instance-Role": "approver"}
+        ).status_code == 403
+
+
+def test_instance_setup_start_rejects_double_start(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "get_setup", lambda: {
+        "status": "running_setup", "started_at": None, "finished_at": None, "error": None,
+        "steps": [], "progress": {"done": 1, "total": 9, "percent": 11},
+    })
+
+    with TestClient(app) as client:
+        response = client.post("/instance-setup/start", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 409
+
+
+def test_instance_setup_start_calls_through_for_owner(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "get_setup", lambda: {"status": "not_started"})
+    calls = []
+    monkeypatch.setattr(api, "start_setup", lambda user_id, instance_id, **kw: calls.append((user_id, instance_id, kw)) or {
+        "status": "created", "started_at": "now", "finished_at": None, "error": None,
+        "steps": [], "progress": {"done": 0, "total": 9, "percent": 0},
+    })
+    monkeypatch.setattr(api.settings, "job_queue_enabled", True)  # skip the inline BackgroundTask path
+
+    with TestClient(app) as client:
+        response = client.post("/instance-setup/start", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+    assert calls
+
+
+def test_instance_setup_step_retry_rejects_unknown_step(monkeypatch):
+    with TestClient(app) as client:
+        response = client.post(
+            "/instance-setup/steps/not_a_real_step/retry", headers={"X-Agora-Instance-Role": "owner"}
+        )
+    assert response.status_code == 422
+
+
+def test_notifications_list_and_unread_count(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "list_notifications", lambda **kw: [{"id": 1, "title": "Setup done"}])
+    monkeypatch.setattr(api, "unread_count", lambda **kw: 3)
+
+    with TestClient(app) as client:
+        listed = client.get("/notifications", headers={"X-Agora-Instance-Role": "viewer"})
+        count = client.get("/notifications/unread-count", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert listed.status_code == 200
+    assert listed.json()["notifications"] == [{"id": 1, "title": "Setup done"}]
+    assert count.status_code == 200
+    assert count.json()["unread_count"] == 3
+
+
+def test_notifications_mark_read_returns_404_when_missing(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "mark_read", lambda notification_id: None)
+
+    with TestClient(app) as client:
+        response = client.post("/notifications/999/read", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert response.status_code == 404
+
+
+def test_notifications_mark_all_read_and_delete(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "mark_all_read", lambda **kw: 5)
+    deleted = []
+    monkeypatch.setattr(api, "delete_notification", lambda notification_id: deleted.append(notification_id))
+
+    with TestClient(app) as client:
+        mark_all = client.post("/notifications/read-all", headers={"X-Agora-Instance-Role": "viewer"})
+        delete_response = client.delete("/notifications/7", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert mark_all.json()["marked_read"] == 5
+    assert delete_response.json()["deleted"] is True
+    assert deleted == [7]
+
+
+def test_signature_endpoint_rejects_unknown_mode(monkeypatch):
+    with TestClient(app) as client:
+        response = client.put("/signature", json={"enabled": True, "mode": "not_a_real_mode"})
+
+    assert response.status_code == 422
+
+
+def test_signature_endpoint_accepts_known_mode(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "save_signature", lambda body: None)
+
+    with TestClient(app) as client:
+        response = client.put("/signature", json={"enabled": True, "mode": "preserve_provider_signature"})
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "preserve_provider_signature"
+    assert "available_modes" in response.json()
+
+
+def test_contacts_migrate_legacy_requires_owner_and_calls_through(monkeypatch):
+    import src.contacts as contacts_module
+
+    calls = []
+    monkeypatch.setattr(
+        contacts_module, "migrate_legacy_category_contacts",
+        lambda **kw: calls.append(kw) or {"imported": 2, "skipped": 1},
+    )
+
+    with TestClient(app) as client:
+        denied = client.post("/contacts/migrate-legacy", headers={"X-Agora-Instance-Role": "viewer"})
+        allowed = client.post("/contacts/migrate-legacy", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["imported"] == 2
