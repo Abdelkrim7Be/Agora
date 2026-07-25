@@ -9,9 +9,23 @@ from src.instance_config import read_instance_text, write_instance_text
 DEFAULT_SIGNATURE_PATH = SERVICE_ROOT / "signature.yaml"
 SIGNATURE_TOOLS = {"write_email", "reply_all", "create_draft"}
 
+SIGNATURE_MODES = (
+    "preserve_provider_signature",
+    "append_platform_signature",
+    "replace_detected_signature",
+    "ask_each_time",
+)
+
 
 class SignatureConfig(BaseModel):
     enabled: bool = False
+    # append_platform_signature preserves pre-mode behavior for existing installs
+    # whose signature.yaml predates this field.
+    mode: str = "append_platform_signature"
+    # The provider-side signature block detected from sent mail during onboarding
+    # (see instance_setup.py's detect_signature step) — what replace_detected_signature
+    # strips before appending the platform signature. Not the platform's own block.
+    detected_block: str | None = None
     text: str = ""
     image_url: str | None = None
     image_alt: str = "Signature"
@@ -136,12 +150,109 @@ def strip_signature(content: str, signature: SignatureConfig | None = None) -> s
     return body
 
 
-def apply_signature_to_args(tool_name: str, args: dict, signature: SignatureConfig | None = None) -> dict:
+def apply_signature_to_args(
+    tool_name: str, args: dict, signature: SignatureConfig | None = None, *, mode: str | None = None
+) -> dict:
     if tool_name not in SIGNATURE_TOOLS or not isinstance(args, dict):
         return args
     if "content" not in args:
         return args
-    signed = append_signature(str(args.get("content") or ""), signature)
+    signed = apply_signature(str(args.get("content") or ""), signature, mode=mode)
     if signed == args.get("content"):
         return args
     return {**args, "content": signed}
+
+
+def apply_signature(content: str, signature: SignatureConfig | None = None, *, mode: str | None = None) -> str:
+    """Single entry point for signature application, used by the draft path.
+
+    `mode` overrides `signature.mode` (used by ask_each_time on approve, where the
+    human's per-draft choice wins). Idempotent: calling this twice on the same
+    body never appends the block a second time, because append_signature already
+    checks the body doesn't already end with the composed block.
+    """
+    signature = signature or load_signature()
+    effective_mode = mode or signature.mode
+    body = str(content or "")
+    if not signature.enabled:
+        return body
+    if effective_mode == "preserve_provider_signature":
+        return body
+    if effective_mode == "replace_detected_signature":
+        if signature.detected_block:
+            body = strip_detected_signature(body, signature.detected_block)
+        return append_signature(body, signature)
+    if effective_mode == "ask_each_time" and mode is None:
+        # No per-draft choice supplied yet — defer to the approval UI, do not append.
+        return body
+    # append_platform_signature (default), or ask_each_time once a mode override
+    # (the human's chosen value) has been supplied.
+    return append_signature(body, signature)
+
+
+def strip_detected_signature(content: str, block: str) -> str:
+    """Remove a trailing block (e.g. one found by detect_from_sent) from content."""
+    body = str(content or "")
+    if not block:
+        return body
+    stripped = body.rstrip()
+    if stripped.endswith(block.strip()):
+        return stripped[: -len(block.strip())].rstrip()
+    return body
+
+
+_SIGNATURE_DELIMITER = "-- "
+
+
+def detect_from_sent(messages: list[dict]) -> dict:
+    """Heuristic detection of a provider-side (e.g. native Gmail) signature.
+
+    Pure function, no I/O — the caller supplies already-fetched sent-mail samples
+    (each a dict with a 'body' key, as returned by gmail_client.fetch_sent).
+
+    Heuristics: a trailing block repeated across >= 60% of samples; a leading
+    '-- ' delimiter line; trailing lines containing a phone-number-like pattern
+    or a URL are treated as signal that the block is a real signature.
+    """
+    import re
+    from collections import Counter
+
+    bodies = [str(m.get("body") or "") for m in messages if str(m.get("body") or "").strip()]
+    sample_size = len(bodies)
+    if sample_size == 0:
+        return {"detected": False, "block": None, "confidence": 0.0, "sample_size": 0}
+
+    trailing_blocks: list[str] = []
+    for body in bodies:
+        lines = body.rstrip().splitlines()
+        # A '-- ' delimiter line is the strongest signal: Gmail and most clients
+        # insert it right before an appended signature.
+        delim_idx = None
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip() == _SIGNATURE_DELIMITER.strip():
+                delim_idx = i
+                break
+        if delim_idx is not None:
+            block = "\n".join(lines[delim_idx:]).strip()
+            if block:
+                trailing_blocks.append(block)
+            continue
+        # No delimiter: fall back to the last 1-4 lines when they look
+        # signature-like (short lines, a phone number, or a URL).
+        tail = lines[-4:] if len(lines) >= 4 else lines
+        tail_text = "\n".join(tail).strip()
+        if tail_text and (
+            re.search(r"(\+?\d[\d .()-]{6,}\d)", tail_text)
+            or re.search(r"https?://|www\.", tail_text)
+        ):
+            trailing_blocks.append(tail_text)
+
+    if not trailing_blocks:
+        return {"detected": False, "block": None, "confidence": 0.0, "sample_size": sample_size}
+
+    counts = Counter(trailing_blocks)
+    block, occurrences = counts.most_common(1)[0]
+    confidence = occurrences / sample_size
+    if occurrences < 2 or confidence < 0.6:
+        return {"detected": False, "block": None, "confidence": round(confidence, 2), "sample_size": sample_size}
+    return {"detected": True, "block": block, "confidence": round(confidence, 2), "sample_size": sample_size}
