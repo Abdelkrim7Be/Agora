@@ -1418,6 +1418,30 @@ def test_category_edit_endpoint_updates_workflow(monkeypatch, tmp_path):
     assert updated["instructions"]["sla"] == "12h"
 
 
+def test_category_edit_endpoint_persists_approval_policy_fields(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/categories/support",
+            json={
+                "display_name": "Support",
+                "priority": "normal",
+                "policy": "notify",
+                "owner": "Support team",
+                "route_to": ["support@example.com"],
+                "require_approval": True,
+                "external_send_allowed": False,
+            },
+        )
+        got = client.get("/categories")
+
+    assert response.status_code == 200
+    updated = next(c for c in got.json()["parsed"]["categories"] if c["name"] == "support")
+    assert updated["require_approval"] is True
+    assert updated["external_send_allowed"] is False
+
+
 def test_category_edit_endpoint_404_for_unknown(monkeypatch, tmp_path):
     _seed_categories(monkeypatch, tmp_path)
 

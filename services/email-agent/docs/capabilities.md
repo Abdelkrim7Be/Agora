@@ -73,6 +73,24 @@ Default policy decisions:
 
 The security service remains default-deny: adding a new tool also requires adding an explicit `policy.yaml` rule.
 
+### Per-workflow approval policy
+
+A category (`categories.yaml`) can layer two extra rules on top of the tool-level table above.
+Both are strictly additive — they can only make a workflow's tool calls stricter, never less
+strict than the tool's own default:
+
+- `require_approval: true` — escalates that category's tool calls from `allow` to `hitl`, even
+  when the tool's own policy default is `allow` (e.g. forcing human review before an `organize`
+  category auto-labels and archives).
+- `external_send_allowed: false` — blocks that category's send-style tool calls (`write_email`,
+  `forward_email`, `notify_internal`, `reply_all`) from reaching any recipient outside
+  `AGENT_INTERNAL_DOMAINS`. With no internal domains configured, this fails closed (blocks
+  every recipient) rather than silently doing nothing.
+
+Both are enforced in `tool_node`, independent of `AGENT_SECURITY_ENABLED` — they are a local
+workflow-policy rule, not a call to the external security service. Configurable per category via
+`PUT /categories/{name}` (`require_approval`, `external_send_allowed`) or the Workflows page.
+
 ### Output audit before send
 
 `write_email`, `forward_email`, and `reply_all` get one more check beyond `/authorize`:

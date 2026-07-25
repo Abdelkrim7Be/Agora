@@ -42,6 +42,13 @@ class Category(BaseModel):
     approver: str | None = None
     route_to: list[str] = Field(default_factory=list)
     instructions: CategoryInstructions | None = None
+    # Per-workflow approval policy — layered on top of the tool-level default in
+    # security/policy.yaml, never looser than it. require_approval can only
+    # escalate allow -> hitl; it can never downgrade an existing hitl/deny to
+    # allow. external_send_allowed=False restricts this category's send-style
+    # tool calls to AGENT_INTERNAL_DOMAINS recipients only.
+    require_approval: bool = False
+    external_send_allowed: bool = True
 
     @field_validator("name")
     @classmethod

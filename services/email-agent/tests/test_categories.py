@@ -463,6 +463,140 @@ def test_category_instructions_round_trip_through_dump(tmp_path):
     assert reloaded.categories[0].instructions.sla == "Respond within 24h"
 
 
+def test_category_approval_policy_fields_default_and_round_trip(tmp_path):
+    """require_approval / external_send_allowed default safely and survive a
+    load -> dump -> load round-trip, including for pre-existing categories.yaml
+    files that predate these fields (migration safety)."""
+    from src.categories import Category, dump_categories
+
+    default = Category(name="plain", display_name="Plain")
+    assert default.require_approval is False
+    assert default.external_send_allowed is True
+
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_WITH_INSTRUCTIONS)
+    cfg = load_categories(path)
+    cfg.categories[0].require_approval = True
+    cfg.categories[0].external_send_allowed = False
+
+    reloaded_path = tmp_path / "categories_reloaded.yaml"
+    reloaded_path.write_text(dump_categories(cfg))
+    reloaded = load_categories(reloaded_path)
+    assert reloaded.categories[0].require_approval is True
+    assert reloaded.categories[0].external_send_allowed is False
+
+
+def test_require_approval_escalates_organize_policy_to_hitl(fake_llms, monkeypatch):
+    """organize is `allow` at the tool-policy level (see security/policy.yaml), but a
+    category with require_approval=True must still pause for human approval — the
+    per-workflow override can only make a tool-default 'allow' stricter, never the
+    reverse."""
+    import src.graph as g
+    from src.categories import CategoriesConfig, Category
+    from src.automation import RuleWhen
+    from langchain_core.tools import tool as lc_tool
+
+    fake_llms()
+    organize_cfg = CategoriesConfig(
+        enabled=True,
+        categories=[Category(
+            name="newsletters",
+            display_name="Newsletters",
+            policy="organize",
+            labels=["Newsletter"],
+            when=RuleWhen(sender_contains=["newsletter"]),
+            require_approval=True,
+        )],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: organize_cfg)
+
+    @lc_tool
+    def apply_label(label: str) -> str:
+        """Apply a label to the current email."""
+        return f"labelled:{label}"
+
+    @lc_tool
+    def archive_email() -> str:
+        """Archive the current email."""
+        return "archived"
+
+    monkeypatch.setitem(g.tools_by_name_map, "apply_label", apply_label)
+    monkeypatch.setitem(g.tools_by_name_map, "archive_email", archive_email)
+
+    email = {"author": "newsletter@promo.io", "to": "me@example.com", "subject": "Weekly digest", "email_thread": "content"}
+    result = g.email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert "__interrupt__" in result
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "apply_label"
+
+
+def test_external_send_allowed_false_blocks_recipient_outside_internal_domains(monkeypatch, respond_email):
+    """A category with external_send_allowed=False must not let its notify_internal
+    routing reach a recipient outside AGENT_INTERNAL_DOMAINS — even though
+    notify_internal's own tool-level policy would otherwise allow (post-HITL) the
+    send. With no internal domains configured, this fails closed (blocks everything)
+    rather than silently no-op-ing."""
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "route_to": ["ops@external-partner.example"],
+                "when": {"subject_contains": ["question"]},
+                "external_send_allowed": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
+    monkeypatch.setattr(g.settings, "internal_domains", ())
+
+    result = g.email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert "__interrupt__" not in result
+    contents = [
+        m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+        for m in result["messages"]
+    ]
+    assert any("does not allow sending outside internal domains" in (c or "") for c in contents)
+
+
+def test_external_send_allowed_false_permits_internal_domain_recipient(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "route_to": ["ops@company.example"],
+                "when": {"subject_contains": ["question"]},
+                "external_send_allowed": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
+    monkeypatch.setattr(g.settings, "internal_domains", ("company.example",))
+
+    result = g.email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert "__interrupt__" in result
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "notify_internal"
+
+
 def test_classify_category_surfaces_instructions(tmp_path):
     path = tmp_path / "categories.yaml"
     path.write_text(CATEGORIES_WITH_INSTRUCTIONS)

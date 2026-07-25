@@ -51,7 +51,7 @@ ${yamlList(instructions.blocked_cases || [], '      ')}
     ask_for_missing: ${instructions.ask_for_missing ? 'true' : 'false'}`;
 }
 
-export function buildWorkflowYamlSnippet({ name, keywords, policy, priority, templateBody, owner, approver, routeTo, instructions }) {
+export function buildWorkflowYamlSnippet({ name, keywords, policy, priority, templateBody, owner, approver, routeTo, instructions, requireApproval, externalSendAllowed }) {
   const slug = workflowSlug(name);
   const routeTargets = String(routeTo || '').split(',').map((item) => item.trim()).filter(Boolean);
   const templateName = policy === 'auto_draft' && templateBody.trim() ? `${slug}_reply` : null;
@@ -71,6 +71,8 @@ ${yamlList(keywords.split(','), '    ')}
   template: ${templateName || 'null'}
   policy: ${policy}
   labels: []
+  require_approval: ${requireApproval ? 'true' : 'false'}
+  external_send_allowed: ${externalSendAllowed === false ? 'false' : 'true'}
 ${workflowInstructionsYamlBlock(instructions)}`;
   const templateBlock = templateName ? `- name: ${templateName}
   subject: null

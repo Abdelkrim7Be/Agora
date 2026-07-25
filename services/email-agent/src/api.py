@@ -1418,6 +1418,8 @@ class CategoryUpdateInput(BaseModel):
     instructions: dict | None = None
     when: dict | None = None
     template: str | None = None
+    require_approval: bool = False
+    external_send_allowed: bool = True
 
 
 @app.put("/categories/{name}")
@@ -1434,6 +1436,8 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
             cat.owner = body.owner
             cat.approver = body.approver
             cat.route_to = body.route_to
+            cat.require_approval = body.require_approval
+            cat.external_send_allowed = body.external_send_allowed
             if body.instructions:
                 cat.instructions = CategoryInstructions(**body.instructions)
             else:

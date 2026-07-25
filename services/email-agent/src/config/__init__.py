@@ -78,6 +78,12 @@ class Settings:
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
     security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "10"))
+    # Domains treated as "internal" for a category's external_send_allowed=false
+    # guard (comma-separated, case-insensitive). Independent of security_enabled —
+    # this is a local workflow-policy rule, not the external security service.
+    internal_domains: tuple[str, ...] = tuple(
+        d.strip().lower() for d in os.getenv("AGENT_INTERNAL_DOMAINS", "").split(",") if d.strip()
+    )
 
     # Pending-approval email notifications (off by default). Routes through the same
     # connected Gmail mailbox as agent sends; recipient resolves via the role directory.
