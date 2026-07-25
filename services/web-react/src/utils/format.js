@@ -1,3 +1,17 @@
+// Extracts the bare address out of an RFC 5322 "Name <addr@host>" or plain
+// "addr@host" From header value. Returns '' when nothing address-shaped is found.
+export function parseSenderEmail(from) {
+  const raw = String(from || '');
+  const angleMatch = raw.match(/<([^<>]+)>/);
+  const candidate = (angleMatch ? angleMatch[1] : raw).trim().toLowerCase();
+  return candidate.includes('@') ? candidate : '';
+}
+
+export function senderDomain(from) {
+  const email = parseSenderEmail(from);
+  return email.includes('@') ? email.split('@').pop() : '';
+}
+
 export function healthClass(value) {
   if (value === 'healthy' || value === 'active') return 'ok';
   if (value === 'unreachable' || value === 'error' || value === 'inactive') return 'error';

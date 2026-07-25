@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { Pager } from '../../components/ui/Pager';
@@ -14,6 +15,7 @@ import {
   useDeleteCategory,
   useTestCategoryMatch,
   useRolesQuery,
+  useContactsQuery,
 } from '../../api/queries';
 import { compactText } from '../../utils/format';
 import {
@@ -48,6 +50,7 @@ export default function CategoriesPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog } = useDialog();
+  const navigate = useNavigate();
   const canManage = hasRole('owner');
 
   const [form, setForm] = useState(EMPTY_FORM);
@@ -70,11 +73,18 @@ export default function CategoriesPage() {
   const testMatch = useTestCategoryMatch();
   const rolesQuery = useRolesQuery();
   const availableRoles = rolesQuery.data?.roles || [];
+  const directoryContactsQuery = useContactsQuery();
+  const directoryContacts = directoryContactsQuery.data?.contacts || [];
 
   const parsed = query.data?.parsed;
   const categories = parsed?.categories || [];
   const templates = parsed?.templates || [];
   const contacts = parsed?.contacts || [];
+
+  const contactCountByCategory = directoryContacts.reduce((acc, contact) => {
+    if (contact.category) acc[contact.category] = (acc[contact.category] || 0) + 1;
+    return acc;
+  }, {});
 
   useEffect(() => {
     if (!query.data) return;
@@ -453,6 +463,16 @@ export default function CategoriesPage() {
                           {category.owner && <span className="mini-chip">{`owner: ${category.owner}`}</span>}
                           {category.approver && <span className="mini-chip">{`approver: ${category.approver}`}</span>}
                           {routeTargets.length > 0 && <span className="mini-chip">{`route: ${compactText(routeTargets.join(', '), 42)}`}</span>}
+                          {contactCountByCategory[category.name] > 0 && (
+                            <button
+                              type="button"
+                              className="mini-chip chip-link"
+                              onClick={() => navigate(`../contacts?category=${encodeURIComponent(category.name)}`)}
+                              title="Voir les contacts de cette catégorie"
+                            >
+                              {`${contactCountByCategory[category.name]} contact(s)`}
+                            </button>
+                          )}
                         </div>
                       </div>
                       {canManage && (

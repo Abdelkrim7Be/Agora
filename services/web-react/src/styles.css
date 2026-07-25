@@ -3271,3 +3271,9 @@ h1 { font: 700 26px/32px var(--font-heading); }
 
 .category-chip.manual { border-color: var(--primary); color: var(--primary); }
 .category-chip.inferred { border-color: var(--outline-strong); color: var(--muted); font-style: italic; }
+
+.mini-chip.chip-link { cursor: pointer; border: 1px solid var(--primary); color: var(--primary); background: transparent; }
+.mini-chip.chip-link:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+
+.signature-choice-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.signature-choice-btn.selected { border-color: var(--primary); color: var(--primary); }
