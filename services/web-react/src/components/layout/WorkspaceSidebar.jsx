@@ -1,7 +1,7 @@
 import { NavLink, useParams } from 'react-router-dom';
 import { useInstance } from '../../contexts/InstanceContext';
 import { agentTypeLabel } from '../../utils/format';
-import { useAgentTypesQuery, usePendingRunsQuery } from '../../api/queries';
+import { useAgentTypesQuery, usePendingRunsQuery, useUnreadCountQuery } from '../../api/queries';
 
 const TAB_GROUPS = [
   {
@@ -11,6 +11,7 @@ const TAB_GROUPS = [
       { to: 'validation', icon: 'inbox', label: 'Validation' },
       { to: 'drafts', icon: 'drafts', label: 'Brouillons' },
       { to: 'inbox', icon: 'mail', label: 'Messages' },
+      { to: 'notifications', icon: 'notifications', label: 'Notifications' },
     ],
   },
   {
@@ -50,9 +51,11 @@ export default function WorkspaceSidebar() {
   const params = useParams();
   const typesQuery = useAgentTypesQuery();
   const pendingQuery = usePendingRunsQuery(0);
+  const unreadQuery = useUnreadCountQuery();
   const id = params.instanceId || instanceId;
   const typeLabel = agentTypeLabel(currentInstance?.agent_type, typesQuery.data || []);
   const pendingCount = pendingQuery.data?.runs?.length ?? 0;
+  const unreadCount = unreadQuery.data?.unread_count ?? 0;
 
   return (
     <aside className="sidebar">
@@ -94,6 +97,7 @@ export default function WorkspaceSidebar() {
                     <span className="material-symbols-outlined" aria-hidden="true">{tab.icon}</span>
                     <span>{tab.label}</span>
                     {tab.to === 'validation' ? <strong>{pendingCount}</strong> : null}
+                    {tab.to === 'notifications' && unreadCount > 0 ? <strong>{unreadCount}</strong> : null}
                   </NavLink>
                 ))}
               </div>

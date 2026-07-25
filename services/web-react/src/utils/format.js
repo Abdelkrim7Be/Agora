@@ -115,15 +115,35 @@ export function instanceIdentity(instance) {
   return 'connexion en attente';
 }
 
+const SETUP_STATUS_LABEL_FR = {
+  not_started: 'non démarrée',
+  created: 'en attente',
+  provider_connecting: 'connexion...',
+  provider_connected: 'connectée',
+  running_setup: 'en cours',
+  ready: 'prête',
+  failed: 'échouée',
+  unknown: 'inconnue',
+};
+
+export function setupStatusLabelFr(status) {
+  return SETUP_STATUS_LABEL_FR[status] || statusLabelFr(status || 'unknown');
+}
+
 export function instanceSummaryFields(instance, summary) {
   const health = summary.service_health || instance.status || 'unknown';
   const connection = summary.mailbox_connection || (instance.mailbox_identity ? 'configured' : 'unknown');
-  return [
+  const fields = [
     ['Travail en attente', summary.pending_drafts ?? 0],
     ['Coût du jour', formatCostEur(summary.today_cost_eur ?? 0)],
     ['Connexion', statusLabelFr(connection)],
     ['Exécution', statusLabelFr(summary.sync_status || health)],
   ];
+  if (summary.setup_status && summary.setup_status !== 'not_started' && summary.setup_status !== 'unknown') {
+    const percent = summary.setup_status === 'ready' ? '' : ` (${summary.setup_percent ?? 0}%)`;
+    fields.push(['Configuration', `${setupStatusLabelFr(summary.setup_status)}${percent}`]);
+  }
+  return fields;
 }
 
 export function formatDateTimeFr(value) {

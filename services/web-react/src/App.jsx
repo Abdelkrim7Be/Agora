@@ -36,6 +36,8 @@ import CategoriesPage from './pages/workspace/CategoriesPage';
 import RulesPage from './pages/workspace/RulesPage';
 import CampaignsPage from './pages/workspace/CampaignsPage';
 import DlqPage from './pages/workspace/DlqPage';
+import SetupPage from './pages/workspace/SetupPage';
+import NotificationsPage from './pages/workspace/NotificationsPage';
 
 const queryClient = new QueryClient();
 
@@ -98,6 +100,8 @@ export default function App() {
                       {/* Workspace views (per instance) */}
                       <Route path="/instance/:instanceId" element={<ProtectedRoute><WorkspaceLayout /></ProtectedRoute>}>
                         <Route index element={<DashboardPage />} />
+                        <Route path="setup" element={<SetupPage />} />
+                        <Route path="notifications" element={<NotificationsPage />} />
                         <Route path="validation" element={<ValidationPage />} />
                         <Route path="drafts" element={<DraftsPage />} />
                         <Route path="inbox" element={<InboxPage />} />

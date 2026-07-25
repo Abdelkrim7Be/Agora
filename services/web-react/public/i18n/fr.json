@@ -137,6 +137,16 @@
       "title": "File d’erreurs",
       "kicker": "Exploitation",
       "description": "Inspectez les actions bloquées ou en échec et relancez uniquement ce qui peut l’être."
+    },
+    "setup": {
+      "title": "Configuration de l’instance",
+      "kicker": "Démarrage",
+      "description": "Synchronisation, apprentissage du style, import des contacts et catégorisation avant l’ouverture de l’espace de travail."
+    },
+    "notifications": {
+      "title": "Notifications",
+      "kicker": "Centre de notifications",
+      "description": "Suivez les événements de cette instance : configuration, synchronisation, brouillons et campagnes."
     }
   },
   "global": {
