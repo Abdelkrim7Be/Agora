@@ -68,6 +68,28 @@ def forward_email(to: str | list[str], note: str = "") -> str:
 
 
 @tool
+def notify_internal(to: str | list[str], subject: str, note: str) -> str:
+    """Send an internal workflow notification (not a forward of the original email)."""
+    recipients = [to] if isinstance(to, str) else to
+    recipients = [r for r in recipients if r]
+
+    if not recipients:
+        return "No recipients provided to notify."
+
+    if effective_dry_run():
+        return f"Notified {', '.join(recipients)} ({SIMULATED_NOTE})"
+    _require_approval("notify_internal")
+
+    from src.gmail_client import notify_internal_message
+
+    result = notify_internal_message(to=recipients, subject=subject, note=note)
+    sent_id = result.get("id") if isinstance(result, dict) else None
+    return f"Notified {', '.join(recipients)}" + (
+        f" (message id: {sent_id})" if sent_id else ""
+    )
+
+
+@tool
 def reply_all(content: str) -> str:
     """Reply to all participants on the current email thread."""
     message_id = _message_id()
@@ -95,13 +117,14 @@ class Done(BaseModel):
     done: bool | str = True
 
 
-TOOLS = [write_email, forward_email, reply_all, Done]
+TOOLS = [write_email, forward_email, notify_internal, reply_all, Done]
 TOOLS_PROMPT = """
 1. write_email(to, subject, content) - Send emails to specified recipients
 2. forward_email(to, note) - Forward the current email to a recipient or list of recipients
-3. reply_all(content) - Reply to all participants on the current email thread
-4. Done - E-mail has been sent
+3. notify_internal(to, subject, note) - Send an internal workflow notification, not a forward
+4. reply_all(content) - Reply to all participants on the current email thread
+5. Done - E-mail has been sent
 """
 
 # Tools that require human approval before executing (HITL gate).
-REQUIRES_APPROVAL = {"write_email", "forward_email", "reply_all"}
+REQUIRES_APPROVAL = {"write_email", "forward_email", "notify_internal", "reply_all"}

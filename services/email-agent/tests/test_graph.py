@@ -46,7 +46,7 @@ def test_respond_email_routes_to_agent(fake_llms, respond_email):
     assert result["classification_decision"] == "respond"
 
 
-def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
+def test_notify_workflow_routes_to_notify_approval(monkeypatch, respond_email):
     import src.graph as g
     from src.categories import CategoriesConfig
 
@@ -74,7 +74,7 @@ def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
     assert result["workflow_owner"] == "Operations"
     assert result["workflow_route_to"] == ["zinebbellagnech@gmail.com"]
     request = result["__interrupt__"][0].value[0]
-    assert request["action_request"]["action"] == "forward_email"
+    assert request["action_request"]["action"] == "notify_internal"
     assert request["action_request"]["args"]["to"] == ["zinebbellagnech@gmail.com"]
     assert "Réclamation" in request["action_request"]["args"]["note"]
 
@@ -119,8 +119,8 @@ def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
     assert result["workflow_route_to"] == ["finance"]
 
 
-def test_notify_workflow_fan_out_approval_forwards_to_all_recipients(monkeypatch, respond_email):
-    """A 2-recipient route_to produces ONE approval; approving it forwards to both."""
+def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, respond_email):
+    """A 2-recipient route_to produces ONE approval; approving it notifies both."""
     import src.graph as g
     from src.categories import CategoriesConfig
     from langgraph.types import Command
@@ -145,13 +145,13 @@ def test_notify_workflow_fan_out_approval_forwards_to_all_recipients(monkeypatch
 
     paused = email_assistant.invoke({"email_input": email}, run_cfg)
     request = paused["__interrupt__"][0].value[0]
-    assert request["action_request"]["action"] == "forward_email"
+    assert request["action_request"]["action"] == "notify_internal"
     assert request["action_request"]["args"]["to"] == ["ops@example.com", "quality@example.com"]
 
     sent_to = []
     monkeypatch.setattr(
-        "src.gmail_client.forward_message",
-        lambda message_id, to, note: sent_to.append(to) or {"id": f"sent-{to}"},
+        "src.gmail_client.notify_internal_message",
+        lambda to, subject, note: sent_to.append(to) or {"id": "sent-notify"},
     )
     from src.capabilities import email_tools
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
@@ -159,10 +159,13 @@ def test_notify_workflow_fan_out_approval_forwards_to_all_recipients(monkeypatch
     done = email_assistant.invoke(Command(resume={"type": "approve", "args": None}), run_cfg)
 
     assert "__interrupt__" not in done
-    assert sent_to == ["ops@example.com", "quality@example.com"]
+    # One notification, addressed to both recipients — not one send per recipient.
+    assert sent_to == [["ops@example.com", "quality@example.com"]]
 
 
-def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeypatch, respond_email):
+def test_notify_manual_workflow_routes_without_trusted_email_id(monkeypatch, respond_email):
+    """notify_internal never re-fetches the original Gmail message, so unlike the old
+    forward-based routing it works fine for manual (non-Gmail-sourced) runs too."""
     import src.graph as g
     from src.categories import CategoriesConfig
 
@@ -184,8 +187,11 @@ def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeyp
 
     result = email_assistant.invoke({"email_input": respond_email}, _cfg())
 
-    assert "trusted Gmail message id" in result["email_send_failed"]
-    assert "__interrupt__" not in result
+    assert result["classification_decision"] == "notify"
+    assert not result.get("email_send_failed")
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "notify_internal"
+    assert request["action_request"]["args"]["to"] == ["ops@example.com"]
 
 
 def test_ignore_email_ends_after_triage(fake_llms, ignore_email):

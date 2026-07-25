@@ -13,6 +13,12 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
           <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du workflow'}</span>
         </div>
       ) : null}
+      {request.action === 'notify_internal' ? (
+        <div className="route-preview">
+          <strong>Notifier en interne {args.to || 'destinataire'}</strong>
+          <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du workflow'}</span>
+        </div>
+      ) : null}
       {fields.length ? fields.map(([key, value]) => (
         <label className="action-row" key={key}>
           <strong>{actionArgLabel(key)}</strong>

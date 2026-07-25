@@ -1034,6 +1034,11 @@ def test_get_run_prefers_instance_registry_pending_status(monkeypatch):
 
 
 def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
+    """A manual /run caller cannot grant themselves the trusted-Gmail-context
+    capabilities (forward_email/reply_all/inbox tools all key off email_id) by
+    supplying their own email_id/gmail_thread_id — /run strips both before the
+    graph ever sees them, regardless of what the resolved workflow policy does
+    with the run afterwards."""
     from src.categories import CategoriesConfig
     import src.graph as graph
 
@@ -1056,7 +1061,7 @@ def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
     )
 
     with TestClient(app) as client:
-        response = client.post(
+        post_response = client.post(
             "/run",
             json={
                 "author": "Alice <alice@example.com>",
@@ -1067,10 +1072,15 @@ def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
                 "gmail_thread_id": "caller-forged-thread-id",
             },
         )
+        run_id = post_response.json()["run_id"]
+        detail = client.get(
+            f"/run/{run_id}/detail",
+            headers={"X-Agora-User": "viewer", "X-Agora-Agent-Instance": "default-email-agent"},
+        )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "failed"
-    assert "trusted Gmail message id" in response.json()["error"]
+    assert post_response.status_code == 200
+    assert detail.json()["email"]["email_id"] is None
+    assert detail.json()["email"]["gmail_thread_id"] is None
 
 
 async def test_require_run_allows_owned_run(monkeypatch):
@@ -1345,6 +1355,7 @@ def test_approval_action_type_derivation(monkeypatch):
     assert _derive_action_type(_pending("write_email"), None) == "reply_draft"
     assert _derive_action_type(_pending("forward_email"), None) == "forward"
     assert _derive_action_type(_pending("forward_email"), "notify") == "notify"
+    assert _derive_action_type(_pending("notify_internal"), None) == "notify"
     assert _derive_action_type(_pending("trash_email"), None) == "organize"
     assert _derive_action_type(_pending("some_unknown"), None) == "unknown"
 

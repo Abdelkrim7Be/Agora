@@ -519,6 +519,8 @@ def _derive_action_type(pending_action: list | None, classification: str | None)
         return "reply_draft"
     if name == "forward_email":
         return "notify" if classification == "notify" else "forward"
+    if name == "notify_internal":
+        return "notify"
     if name == "reply_all":
         return "reply_all"
     if name == "create_draft":

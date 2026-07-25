@@ -1,7 +1,7 @@
 import pytest
 
 from src.capabilities import current_email_id, hitl_approved
-from src.capabilities.email_tools import forward_email, reply_all, write_email
+from src.capabilities.email_tools import forward_email, notify_internal, reply_all, write_email
 
 
 def test_write_email_dry_run():
@@ -145,3 +145,44 @@ def test_reply_all_live_path_invokes_gmail_helper_after_approval(monkeypatch):
 
     assert result == "Reply-all sent on the current thread (message id: sent-reply)"
     assert calls == [{"message_id": "msg-1", "body": "Thanks"}]
+
+
+def test_notify_internal_schema_has_no_email_id():
+    assert set(notify_internal.args_schema.model_json_schema()["properties"]) == {"to", "subject", "note"}
+
+
+def test_notify_internal_does_not_require_context_email_id():
+    """Unlike forward_email, notify_internal never re-fetches the original message,
+    so it must not need a trusted email_id at all — this is what lets it work for
+    manually-submitted runs, not just Gmail-sourced ones."""
+    result = notify_internal.invoke({"to": "ops@example.com", "subject": "Route", "note": "FYI"})
+    assert result == "Notified ops@example.com (Simulé — aucun e-mail réel envoyé)"
+
+
+def test_notify_internal_live_path_requires_human_approval(monkeypatch):
+    from src.capabilities import email_tools
+
+    monkeypatch.setattr(email_tools.settings, "dry_run", False)
+    with pytest.raises(RuntimeError, match="requires human approval"):
+        notify_internal.invoke({"to": "ops@example.com", "subject": "Route", "note": "FYI"})
+
+
+def test_notify_internal_live_path_invokes_gmail_helper_after_approval(monkeypatch):
+    from src.capabilities import email_tools
+
+    calls: list[dict] = []
+    monkeypatch.setattr(email_tools.settings, "dry_run", False)
+    monkeypatch.setattr(
+        "src.gmail_client.notify_internal_message",
+        lambda to, subject, note: calls.append({"to": to, "subject": subject, "note": note})
+        or {"id": "sent-notify"},
+    )
+
+    approval_token = hitl_approved.set(True)
+    try:
+        result = notify_internal.invoke({"to": ["ops@example.com"], "subject": "Route", "note": "FYI"})
+    finally:
+        hitl_approved.reset(approval_token)
+
+    assert result == "Notified ops@example.com (message id: sent-notify)"
+    assert calls == [{"to": ["ops@example.com"], "subject": "Route", "note": "FYI"}]
