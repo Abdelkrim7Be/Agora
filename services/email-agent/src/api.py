@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import yaml
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -56,6 +56,7 @@ from src.roles import (
 )
 from src.contacts import (
     Contact,
+    ContactCategoryError,
     ContactConflictError,
     ContactNotFoundError,
     Segment,
@@ -157,7 +158,15 @@ from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
-from src.signature import SignatureConfig, load_signature, save_signature
+from src.signature import SIGNATURE_MODES, SignatureConfig, load_signature, save_signature
+from src.notification_store import (
+    delete_notification,
+    list_notifications,
+    mark_all_read,
+    mark_read,
+    unread_count,
+)
+from src.instance_setup import get_setup, run_pipeline_inline, start_setup
 
 
 async def _watch_renewal_loop() -> None:
@@ -332,6 +341,11 @@ class ContactInput(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     active: bool = True
+    category: str | None = None
+    domain: str | None = None
+    priority: str | None = None
+    category_source: str = "manual"
+    category_confidence: float | None = None
 
 
 class SegmentInput(BaseModel):
@@ -448,6 +462,11 @@ def _contact_from_input(body: ContactInput) -> Contact:
         fields=body.fields,
         tags=body.tags,
         active=body.active,
+        category=body.category,
+        domain=body.domain,
+        priority=body.priority,
+        category_source=body.category_source,
+        category_confidence=body.category_confidence,
     )
 
 
@@ -1098,6 +1117,106 @@ async def update_retention_settings(request: Request, body: RetentionSettings) -
     return save_retention_settings(body).model_dump()
 
 
+@app.get("/instance-setup")
+async def get_instance_setup(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return {"agent_instance_id": current_agent_instance_id(), **get_setup()}
+
+
+@app.post("/instance-setup/start")
+async def start_instance_setup(request: Request, background_tasks: BackgroundTasks) -> dict:
+    _require_instance_role(request, "owner")
+    existing = get_setup()
+    if existing["status"] not in ("not_started", "ready", "failed"):
+        raise HTTPException(status_code=409, detail="Setup is already running for this instance")
+    result = await asyncio.to_thread(start_setup, current_user_id(), current_agent_instance_id())
+    if not settings.job_queue_enabled:
+        background_tasks.add_task(
+            run_pipeline_inline, current_user_id(), current_agent_instance_id(), store=app.state.store
+        )
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.post("/instance-setup/retry")
+async def retry_instance_setup(request: Request, background_tasks: BackgroundTasks) -> dict:
+    _require_instance_role(request, "owner")
+    result = await asyncio.to_thread(
+        start_setup, current_user_id(), current_agent_instance_id(), force=True
+    )
+    if not settings.job_queue_enabled:
+        background_tasks.add_task(
+            run_pipeline_inline, current_user_id(), current_agent_instance_id(), store=app.state.store
+        )
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.post("/instance-setup/steps/{step_key}/retry")
+async def retry_instance_setup_step(step_key: str, request: Request, background_tasks: BackgroundTasks) -> dict:
+    _require_instance_role(request, "owner")
+    from src.instance_setup import SETUP_STEPS, retry_step
+
+    if step_key not in SETUP_STEPS:
+        raise HTTPException(status_code=422, detail=f"Unknown setup step: {step_key}")
+    result = await asyncio.to_thread(
+        retry_step, step_key, current_user_id(), current_agent_instance_id()
+    )
+    if not settings.job_queue_enabled:
+        background_tasks.add_task(
+            run_pipeline_inline, current_user_id(), current_agent_instance_id(), store=app.state.store
+        )
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.post("/instance-setup/skip")
+async def skip_instance_setup(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    from src.instance_setup import force_ready
+
+    result = await asyncio.to_thread(force_ready, current_user_id(), current_agent_instance_id())
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.get("/notifications")
+async def list_notifications_endpoint(
+    request: Request,
+    unread_only: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    _require_instance_role(request, "viewer")
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "notifications": list_notifications(unread_only=unread_only, limit=limit),
+    }
+
+
+@app.get("/notifications/unread-count")
+async def notifications_unread_count(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return {"agent_instance_id": current_agent_instance_id(), "unread_count": unread_count()}
+
+
+@app.post("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: int, request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    row = mark_read(notification_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return row
+
+
+@app.post("/notifications/read-all")
+async def mark_all_notifications_read(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return {"agent_instance_id": current_agent_instance_id(), "marked_read": mark_all_read()}
+
+
+@app.delete("/notifications/{notification_id}")
+async def delete_notification_endpoint(notification_id: int, request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    delete_notification(notification_id)
+    return {"agent_instance_id": current_agent_instance_id(), "deleted": True}
+
+
 @app.post("/retention/dry-run")
 async def retention_dry_run(request: Request) -> dict:
     _require_instance_role(request, "owner")
@@ -1167,14 +1286,35 @@ def _gmail_callback_page(status: str, message: str, payload: dict | None = None)
     return HTMLResponse(page_html, status_code=code)
 
 
+def _start_setup_after_connect(background_tasks: BackgroundTasks, user_id: str, agent_instance_id: str) -> None:
+    """Kick off onboarding right after a successful Gmail connect.
+
+    A setup failure here must never break the OAuth success page — mirrors the
+    existing broad-except discipline already used around this callback."""
+    try:
+        with user_context(user_id):
+            with agent_instance_context(agent_instance_id):
+                start_setup(user_id, agent_instance_id)
+        if not settings.job_queue_enabled:
+            background_tasks.add_task(
+                run_pipeline_inline, user_id, agent_instance_id, store=app.state.store
+            )
+    except Exception as exc:
+        print(f"api: failed to start onboarding for {user_id}/{agent_instance_id}: {exc}")
+
+
 @app.get("/connect/gmail/callback", response_class=HTMLResponse)
-async def gmail_connect_callback(code: str | None = None, state: str | None = None) -> HTMLResponse:
+async def gmail_connect_callback(
+    background_tasks: BackgroundTasks, code: str | None = None, state: str | None = None
+) -> HTMLResponse:
     if not code or not state:
         return _gmail_callback_page("error", "Missing Gmail OAuth code or state.")
     try:
         payload = validate_gmail_oauth_state(state)
         exchange_gmail_oauth_code(code, payload)
         record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
+        if settings.setup_enabled:
+            _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
         print(f"api: gmail oauth callback rejected: {exc}")
         return _gmail_callback_page("error", str(exc))
@@ -1467,6 +1607,8 @@ async def create_contact_entry(request: Request, body: ContactInput) -> dict:
         contact = create_contact(_contact_from_input(body))
     except ContactConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ContactCategoryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "agent_instance_id": current_agent_instance_id(),
         "contact": _serialize_contact(contact),
@@ -1481,6 +1623,8 @@ async def update_contact_entry(email: str, request: Request, body: ContactInput)
         contact = update_contact(email, _contact_from_input(body))
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ContactCategoryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -1554,6 +1698,15 @@ async def import_contacts_entries(request: Request, body: ContactsImportInput) -
         "rejected_count": result["rejected_count"],
         "storage": "contacts-directory",
     }
+
+
+@app.post("/contacts/migrate-legacy")
+async def migrate_legacy_contacts_endpoint(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    from src.contacts import migrate_legacy_category_contacts
+
+    result = await asyncio.to_thread(migrate_legacy_category_contacts)
+    return {"agent_instance_id": current_agent_instance_id(), **result}
 
 
 @app.get("/segments")
@@ -2334,13 +2487,23 @@ async def update_send_mode(request: Request, body: SendModeInput) -> dict:
 @app.get("/signature")
 async def get_signature() -> dict:
     signature = load_signature()
-    return {"agent_instance_id": current_agent_instance_id(), **signature.model_dump()}
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **signature.model_dump(),
+        "available_modes": list(SIGNATURE_MODES),
+    }
 
 
 @app.put("/signature")
 async def update_signature(body: SignatureConfig) -> dict:
+    if body.mode not in SIGNATURE_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of: {', '.join(SIGNATURE_MODES)}")
     save_signature(body)
-    return {"agent_instance_id": current_agent_instance_id(), **body.model_dump()}
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **body.model_dump(),
+        "available_modes": list(SIGNATURE_MODES),
+    }
 
 
 @app.post("/signature/image")

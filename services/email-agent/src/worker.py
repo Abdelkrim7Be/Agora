@@ -12,6 +12,13 @@ from src.dlq import setup_dlq
 from src.gmail_client import gmail_resource
 from src.gmail_sync import setup_gmail_sync
 from src.graph import overall_workflow
+from src.instance_setup import (
+    SetupContext,
+    claim_next_step,
+    requeue_stale_steps,
+    run_step,
+    setup_instance_setup,
+)
 from src.job_queue import (
     claim_job,
     mark_job_done,
@@ -30,6 +37,19 @@ from src.trace import setup_trace_store
 
 WORKER_ID = f"{socket.gethostname()}-{os.getpid()}"
 _STALE_SWEEP_INTERVAL_SECONDS = 60.0
+
+
+async def run_setup_step_once(store) -> bool:
+    """Claim and run one onboarding-setup step. Returns True iff a step was claimed."""
+    step = claim_next_step(WORKER_ID)
+    if step is None:
+        return False
+    with agent_instance_context(step["agent_instance_id"]):
+        context = SetupContext(
+            user_id=step["user_id"], agent_instance_id=step["agent_instance_id"], store=store
+        )
+        await run_step(step, context)
+    return True
 
 
 async def run_worker_once(graph) -> bool:
@@ -69,6 +89,7 @@ async def run_forever() -> None:
     setup_sync_status()
     setup_trace_store()
     setup_dlq()
+    setup_instance_setup()
     last_sweep = 0.0
     async with open_graph_storage() as storage:
         graph = overall_workflow.compile(
@@ -81,7 +102,14 @@ async def run_forever() -> None:
                 requeued = await asyncio.to_thread(requeue_stale_jobs)
                 if requeued:
                     print(f"worker: requeued {requeued} stale job(s)")
+                requeued_steps = await asyncio.to_thread(requeue_stale_steps)
+                if requeued_steps:
+                    print(f"worker: requeued {requeued_steps} stale setup step(s)")
                 last_sweep = now
+            # Onboarding beats backlog processing: a new instance should reach
+            # 'ready' before the poll-job queue works through its own backlog.
+            if await run_setup_step_once(storage.store):
+                continue
             claimed = await run_worker_once(graph)
             if not claimed:
                 await asyncio.sleep(

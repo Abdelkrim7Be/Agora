@@ -145,11 +145,37 @@ public class AgentRegistryService {
         if ("inactive".equalsIgnoreCase(instance.getStatus())) {
             summary.put("pending_drafts", 0);
             summary.put("today_cost_eur", 0.0);
+            summary.put("setup_status", "unknown");
             return summary;
         }
         summary.put("pending_drafts", safePendingDrafts(instance, username));
         summary.put("today_cost_eur", safeTodayCost(instance, username));
+        putSetupStatus(summary, instance, username);
         return summary;
+    }
+
+    /** Instance listing must not fail if the agent is unreachable — same
+     *  degrade-to-"unknown" contract as the existing health lookup. */
+    private void putSetupStatus(Map<String, Object> summary, AgentInstance instance, String username) {
+        try {
+            JsonNode root = getJson(instance, username, "/instance-setup");
+            summary.put("setup_status", root.path("status").asText("unknown"));
+            summary.put("setup_percent", root.path("progress").path("percent").asInt(0));
+            java.util.List<String> failedSteps = new java.util.ArrayList<>();
+            JsonNode steps = root.path("steps");
+            if (steps.isArray()) {
+                for (JsonNode step : steps) {
+                    if ("failed".equals(step.path("status").asText())) {
+                        failedSteps.add(step.path("step_key").asText());
+                    }
+                }
+            }
+            summary.put("setup_failed_steps", failedSteps);
+        } catch (RuntimeException ex) {
+            summary.put("setup_status", "unknown");
+            summary.put("setup_percent", 0);
+            summary.put("setup_failed_steps", java.util.List.of());
+        }
     }
 
     private int safePendingDrafts(AgentInstance instance, String username) {

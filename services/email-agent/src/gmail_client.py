@@ -89,6 +89,37 @@ def fetch_sent(max_messages: int = 50, resource=None) -> list[dict]:
     return samples
 
 
+def fetch_recent(max_messages: int = 50, resource=None) -> list[dict]:
+    """Return recent inbox message samples (read or unread), newest first.
+
+    Unlike fetch_unread, this does not depend on unread state — used by the
+    instance onboarding pipeline to seed contacts/persona suggestions from
+    whatever the mailbox already contains."""
+    resource = resource or gmail_resource()
+    refs = (
+        resource.users()
+        .messages()
+        .list(userId="me", q="in:inbox", maxResults=max_messages)
+        .execute()
+        .get("messages", [])
+    )
+    samples: list[dict] = []
+    for ref in refs:
+        message = get_message(ref["id"], resource=resource)
+        body = _extract_message_part(message.get("payload", {})).strip()
+        samples.append(
+            {
+                "id": message.get("id", ref.get("id")),
+                "thread_id": message.get("threadId", ref.get("threadId")),
+                "from": _header_value(message, "From"),
+                "subject": _header_value(message, "Subject"),
+                "date": _header_value(message, "Date"),
+                "body": body,
+            }
+        )
+    return samples
+
+
 def fetch_sender_correspondence(
     sender_email: str,
     exclude_thread_id: str = "",
