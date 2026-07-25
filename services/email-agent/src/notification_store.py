@@ -9,11 +9,27 @@ from src.config import SERVICE_ROOT, settings
 from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
+    agent_instance_context,
     current_agent_instance_id,
     current_user_id,
     normalize_agent_instance_id,
     normalize_user_id,
+    user_context,
 )
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _scoped_connection(user_id: str, agent_instance_id: str):
+    """tenant_connection() binds RLS session vars from the ambient contextvars,
+    not from arguments — it takes none. Emission call sites (e.g. the setup
+    pipeline's BackgroundTask) don't reliably run inside the request's tenant
+    context, so explicitly re-enter it here before connecting."""
+    with user_context(user_id):
+        with agent_instance_context(agent_instance_id):
+            with tenant_connection() as conn:
+                yield conn
 
 DEFAULT_NOTIFICATION_STORE_PATH = SERVICE_ROOT / "logs" / "notifications.json"
 
@@ -238,7 +254,7 @@ def _pg_create(
     from psycopg.rows import dict_row
 
     setup_notification_store()
-    with tenant_connection(user_id=user_id, agent_instance_id=instance_id) as conn:
+    with _scoped_connection(user_id, instance_id) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             if dedupe_key:
                 cur.execute(
@@ -291,7 +307,7 @@ def _pg_list(user_id: str, unread_only: bool, limit: int, instance_id: str | Non
     if unread_only:
         clauses.append("read_at IS NULL")
     where = " AND ".join(clauses)
-    with tenant_connection(user_id=user_id, agent_instance_id=instance_id) as conn:
+    with _scoped_connection(user_id, instance_id) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 f"SELECT * FROM email_agent_notification WHERE {where} "
@@ -311,7 +327,7 @@ def _pg_unread_count(user_id: str, instance_id: str | None) -> int:
         clauses.append("agent_instance_id = %(instance_id)s")
         params["instance_id"] = instance_id
     where = " AND ".join(clauses)
-    with tenant_connection(user_id=user_id, agent_instance_id=instance_id) as conn:
+    with _scoped_connection(user_id, instance_id) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(f"SELECT COUNT(*) AS n FROM email_agent_notification WHERE {where}", params)
             return int(cur.fetchone()["n"])
@@ -339,7 +355,7 @@ def _pg_mark_all_read(user_id: str, instance_id: str | None) -> int:
         clauses.append("agent_instance_id = %(instance_id)s")
         params["instance_id"] = instance_id
     where = " AND ".join(clauses)
-    with tenant_connection(user_id=user_id, agent_instance_id=instance_id) as conn:
+    with _scoped_connection(user_id, instance_id) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"UPDATE email_agent_notification SET read_at = NOW(), updated_at = NOW() WHERE {where}",
@@ -372,7 +388,7 @@ def _pg_prune(older_than_days: int) -> int:
 
 
 def _pg_erase_for_subject(user_id: str, agent_instance_id: str) -> int:
-    with tenant_connection(user_id=user_id, agent_instance_id=agent_instance_id) as conn:
+    with _scoped_connection(user_id, agent_instance_id) as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM email_agent_notification WHERE user_id = %s", (user_id,))
             n = cur.rowcount
