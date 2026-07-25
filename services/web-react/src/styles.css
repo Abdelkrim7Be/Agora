@@ -3277,3 +3277,14 @@ h1 { font: 700 26px/32px var(--font-heading); }
 
 .signature-choice-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--muted); }
 .signature-choice-btn.selected { border-color: var(--primary); color: var(--primary); }
+
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-low));
+  font-size: 13px;
+}

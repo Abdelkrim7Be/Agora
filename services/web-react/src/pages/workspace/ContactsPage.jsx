@@ -16,6 +16,7 @@ import {
   useUploadContactPhoto,
   useDeleteContactPhoto,
   useCategoriesQuery,
+  useCategorizeContact,
 } from '../../api/queries';
 import { compactText } from '../../utils/format';
 
@@ -61,7 +62,7 @@ function ContactAvatar({ contact, apiBlob }) {
 export default function ContactsPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
-  const { confirmDialog } = useDialog();
+  const { confirmDialog, promptDialog } = useDialog();
   const { apiBlob } = useApi();
   const canManage = hasRole('owner');
 
@@ -73,6 +74,8 @@ export default function ContactsPage() {
   const [importAudience, setImportAudience] = useState('client');
   const [searchParams] = useSearchParams();
   const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
+  const [selectedEmails, setSelectedEmails] = useState(new Set());
+  const [bulkCategorizing, setBulkCategorizing] = useState(false);
   const fileInputRef = useRef(null);
   const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
@@ -86,6 +89,7 @@ export default function ContactsPage() {
   const importContacts = useImportContacts();
   const uploadPhoto = useUploadContactPhoto();
   const deletePhoto = useDeleteContactPhoto();
+  const categorizeContact = useCategorizeContact();
   const contacts = query.data?.contacts || [];
 
   useEffect(() => {
@@ -101,6 +105,11 @@ export default function ContactsPage() {
     announcedError.current = query.error.message;
     setStatus(`Impossible de charger les contacts : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const present = new Set(contacts.map((c) => c.email));
+    setSelectedEmails((prev) => new Set([...prev].filter((email) => present.has(email))));
+  }, [contacts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetForm = () => { setEditingEmail(''); setForm(EMPTY_FORM); setHasPhoto(false); };
 
@@ -215,6 +224,41 @@ export default function ContactsPage() {
   const pageContacts = filteredContacts.slice(pager.page * PAGE_SIZE, pager.page * PAGE_SIZE + PAGE_SIZE);
   const hasMore = (pager.page + 1) * PAGE_SIZE < filteredContacts.length;
 
+  const toggleSelect = (email) => {
+    setSelectedEmails((prev) => {
+      const next = new Set(prev);
+      if (next.has(email)) next.delete(email); else next.add(email);
+      return next;
+    });
+  };
+
+  const handleBulkCategorize = async () => {
+    if (!selectedEmails.size) return;
+    const categoryNames = availableCategories.map((c) => c.name).join(', ');
+    const category = await promptDialog({
+      title: `Catégoriser ${selectedEmails.size} contact(s)`,
+      message: categoryNames ? `Catégories disponibles : ${categoryNames}` : 'Saisissez le nom exact de la catégorie.',
+      placeholder: 'Nom de la catégorie',
+      confirmLabel: 'Catégoriser',
+      required: true,
+    });
+    if (!category) return;
+    setBulkCategorizing(true);
+    const emails = Array.from(selectedEmails);
+    const results = await Promise.allSettled(
+      emails.map((email) => categorizeContact.mutateAsync({ email, category, domainOnly: false }))
+    );
+    setBulkCategorizing(false);
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    setStatus(
+      failed
+        ? `${emails.length - failed}/${emails.length} contact(s) catégorisé(s), ${failed} échec(s).`
+        : `${emails.length} contact(s) catégorisé(s).`,
+      failed ? 'warn' : 'ok',
+    );
+    setSelectedEmails(new Set());
+  };
+
   return (
     <>
       <PageHeading view="contacts" />
@@ -296,6 +340,16 @@ export default function ContactsPage() {
               </select>
             ) : null}
           </div>
+          {canManage && selectedEmails.size > 0 && (
+            <div className="bulk-action-bar">
+              <span>{selectedEmails.size} sélectionné(s)</span>
+              <button type="button" disabled={bulkCategorizing} onClick={handleBulkCategorize}>
+                <span className="material-symbols-outlined" aria-hidden="true">label</span>
+                <span>{bulkCategorizing ? 'Catégorisation…' : 'Assigner une catégorie'}</span>
+              </button>
+              <button type="button" className="ghost" onClick={() => setSelectedEmails(new Set())}>Effacer la sélection</button>
+            </div>
+          )}
           <div className="rule-list">
             {!contacts.length ? <div className="empty">Aucun contact enregistré.</div> : (
               <>
@@ -304,6 +358,11 @@ export default function ContactsPage() {
                   const fields = Object.entries(contact.fields || {}).filter(([key]) => key !== 'gender').map(([key, value]) => `${key}: ${value}`);
                   return (
                     <div className={`directory-row contact-row ${contact.active === false ? 'inactive' : ''}`.trim()} key={contact.email}>
+                      {canManage && (
+                        <label className="bulk-select" title="Sélectionner pour une action groupée">
+                          <input type="checkbox" checked={selectedEmails.has(contact.email)} onChange={() => toggleSelect(contact.email)} />
+                        </label>
+                      )}
                       <ContactAvatar contact={contact} apiBlob={apiBlob} />
                       <div className="directory-main">
                         <strong>{contact.name || contact.email}</strong>
