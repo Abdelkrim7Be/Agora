@@ -24,6 +24,7 @@ from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, recor
 from src.metrics import render_metrics
 from src.categories import (
     CategoriesConfig,
+    Contact as LegacyCategoryContact,
     DEFAULT_CATEGORIES_PATH,
     classify_category,
     dump_categories,
@@ -158,7 +159,7 @@ from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
-from src.signature import SIGNATURE_MODES, SignatureConfig, load_signature, save_signature
+from src.signature import SIGNATURE_MODES, SignatureConfig, apply_signature, load_signature, save_signature
 from src.notification_store import (
     delete_notification,
     list_notifications,
@@ -358,6 +359,12 @@ class SegmentInput(BaseModel):
 class ContactsImportInput(BaseModel):
     csv_text: str
     audience_default: str = "client"
+
+
+class CategorizeContactInput(BaseModel):
+    email: str
+    category: str
+    domain_only: bool = False
 
 
 # Prepared-but-unapproved campaigns live in-process (single API worker). A
@@ -1709,6 +1716,38 @@ async def migrate_legacy_contacts_endpoint(request: Request) -> dict:
     return {"agent_instance_id": current_agent_instance_id(), **result}
 
 
+@app.post("/contacts/categorize")
+async def categorize_contact_endpoint(request: Request, body: CategorizeContactInput) -> dict:
+    """One-action 'categoriser l'expéditeur' / 'categoriser le domaine' from the inbox row.
+
+    Sender-scoped requests upsert the unified contact directory (email always
+    present there). Domain-only requests can't live in the directory (its email
+    field is required) so they upsert a legacy categories.yaml domain contact
+    instead — still picked up by classify_category's precedence-4 domain match.
+    """
+    _require_instance_role(request, "owner")
+    from email.utils import parseaddr
+
+    _, address = parseaddr(body.email)
+    address = (address or body.email).strip().lower()
+    if "@" not in address:
+        raise HTTPException(status_code=400, detail="email must contain an address to categorize")
+
+    if body.domain_only:
+        domain = address.rsplit("@", 1)[-1]
+        cfg = await asyncio.to_thread(load_categories, None, current_agent_instance_id())
+        cfg.contacts = [c for c in cfg.contacts if not (c.domain and c.domain.lower() == domain and not c.email)]
+        cfg.contacts.append(LegacyCategoryContact(domain=domain, category=body.category))
+        write_instance_text("categories", dump_categories(cfg), DEFAULT_CATEGORIES_PATH)
+        return {"agent_instance_id": current_agent_instance_id(), "domain": domain, "category": body.category}
+
+    try:
+        contact = upsert_contact(Contact(email=address, audience="prospect", category=body.category, category_source="manual"))
+    except ContactCategoryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"agent_instance_id": current_agent_instance_id(), "contact": _serialize_contact(contact)}
+
+
 @app.get("/segments")
 async def get_segments(request: Request) -> dict:
     _require_instance_role(request, "viewer")
@@ -2504,6 +2543,27 @@ async def update_signature(body: SignatureConfig) -> dict:
         **body.model_dump(),
         "available_modes": list(SIGNATURE_MODES),
     }
+
+
+class SignatureApplyInput(BaseModel):
+    content: str
+    mode: str
+
+
+@app.post("/signature/apply")
+async def apply_signature_endpoint(body: SignatureApplyInput) -> dict:
+    """Compose the final body for one draft under an explicit mode override.
+
+    Used by the approval UI's ask_each_time per-draft toggle: the chosen mode
+    is applied here, and the already-signed content is then sent back through
+    the normal 'edit' approval path — apply_signature's idempotency guarantee
+    means the graph's own signature step (which runs with no override once
+    signature.mode is ask_each_time) leaves this content untouched.
+    """
+    if body.mode not in SIGNATURE_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of: {', '.join(SIGNATURE_MODES)}")
+    signature = load_signature()
+    return {"content": apply_signature(body.content, signature, mode=body.mode)}
 
 
 @app.post("/signature/image")

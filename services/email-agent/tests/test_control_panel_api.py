@@ -1836,6 +1836,24 @@ def test_signature_endpoint_rejects_unknown_mode(monkeypatch):
     assert response.status_code == 422
 
 
+def test_signature_apply_endpoint_composes_final_body(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_signature", lambda: api.SignatureConfig(enabled=True, text="Karim"))
+
+    with TestClient(app) as client:
+        response = client.post("/signature/apply", json={"content": "Bonjour", "mode": "append_platform_signature"})
+
+    assert response.status_code == 200
+    assert "Karim" in response.json()["content"]
+
+
+def test_signature_apply_endpoint_rejects_unknown_mode(monkeypatch):
+    with TestClient(app) as client:
+        response = client.post("/signature/apply", json={"content": "Bonjour", "mode": "not_a_real_mode"})
+    assert response.status_code == 422
+
+
 def test_signature_endpoint_accepts_known_mode(monkeypatch):
     import src.api as api
 
@@ -1865,3 +1883,68 @@ def test_contacts_migrate_legacy_requires_owner_and_calls_through(monkeypatch):
     assert denied.status_code == 403
     assert allowed.status_code == 200
     assert allowed.json()["imported"] == 2
+
+
+def test_contacts_categorize_sender_requires_owner_and_upserts_directory(monkeypatch, tmp_path):
+    import src.contacts as contacts_module
+
+    path = tmp_path / "contacts.yaml"
+    monkeypatch.setattr(contacts_module, "DEFAULT_CONTACTS_PATH", path)
+    monkeypatch.setattr(
+        "src.categories.load_categories",
+        lambda **kw: type("C", (), {"categories": [type("Cat", (), {"name": "support"})()]})(),
+    )
+
+    with TestClient(app) as client:
+        denied = client.post(
+            "/contacts/categorize", json={"email": "Ana <ana@client.example>", "category": "support"},
+            headers={"X-Agora-Instance-Role": "viewer"},
+        )
+        allowed = client.post(
+            "/contacts/categorize", json={"email": "Ana <ana@client.example>", "category": "support"},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["contact"]["email"] == "ana@client.example"
+    assert allowed.json()["contact"]["category"] == "support"
+
+
+def test_contacts_categorize_domain_writes_legacy_categories_yaml(monkeypatch, tmp_path):
+    import src.api as api
+
+    calls = []
+    monkeypatch.setattr(api, "load_categories", lambda *a, **kw: api.CategoriesConfig(enabled=True))
+    monkeypatch.setattr(
+        api, "write_instance_text",
+        lambda kind, content, default, agent_instance_id=None: calls.append((kind, content)),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/contacts/categorize",
+            json={"email": "ana@client.example", "category": "support", "domain_only": True},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["domain"] == "client.example"
+    assert calls and calls[0][0] == "categories"
+    assert "client.example" in calls[0][1]
+
+
+def test_contacts_categorize_rejects_unknown_category(monkeypatch, tmp_path):
+    import src.contacts as contacts_module
+
+    path = tmp_path / "contacts.yaml"
+    monkeypatch.setattr(contacts_module, "DEFAULT_CONTACTS_PATH", path)
+    monkeypatch.setattr("src.categories.load_categories", lambda **kw: type("C", (), {"categories": []})())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/contacts/categorize", json={"email": "ana@client.example", "category": "not_real"},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert response.status_code == 422

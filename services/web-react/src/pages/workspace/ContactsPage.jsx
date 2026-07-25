@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { Pager } from '../../components/ui/Pager';
@@ -70,7 +71,8 @@ export default function ContactsPage() {
   const [csvFile, setCsvFile] = useState(null);
   const [csvText, setCsvText] = useState('');
   const [importAudience, setImportAudience] = useState('client');
-  const [categoryFilter, setCategoryFilter] = useState('');
+  const [searchParams] = useSearchParams();
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
   const fileInputRef = useRef(null);
   const pager = usePager(0);
   const announcedInitialLoad = useRef(false);

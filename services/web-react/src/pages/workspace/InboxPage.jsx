@@ -4,18 +4,22 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
-import { useInboxQuery, useInboxAction } from '../../api/queries';
+import { useInboxQuery, useInboxAction, useCategorizeContact, useCategoriesQuery } from '../../api/queries';
+import { parseSenderEmail, senderDomain } from '../../utils/format';
 
 export default function InboxPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
-  const { confirmDialog } = useDialog();
+  const { confirmDialog, promptDialog } = useDialog();
   const navigate = useNavigate();
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
 
   const query = useInboxQuery();
   const inboxAction = useInboxAction();
+  const categorizeContact = useCategorizeContact();
+  const categoriesQuery = useCategoriesQuery();
+  const availableCategories = categoriesQuery.data?.parsed?.categories || [];
 
   const messages = query.data?.messages || [];
   const warning = query.data?.warning;
@@ -36,6 +40,30 @@ export default function InboxPage() {
       navigate('../validation');
     } else if (msg.run_id) {
       navigate(`../run/${msg.run_id}`);
+    }
+  };
+
+  const handleCategorize = async (msg, domainOnly) => {
+    const email = parseSenderEmail(msg.from);
+    if (!email) {
+      setStatus('Adresse expéditeur introuvable pour cet e-mail.', 'error');
+      return;
+    }
+    const target = domainOnly ? senderDomain(msg.from) : email;
+    const categoryNames = availableCategories.map((c) => c.name).join(', ');
+    const category = await promptDialog({
+      title: domainOnly ? `Catégoriser le domaine ${target}` : `Catégoriser ${target}`,
+      message: categoryNames ? `Catégories disponibles : ${categoryNames}` : 'Saisissez le nom exact de la catégorie.',
+      placeholder: 'Nom de la catégorie',
+      confirmLabel: 'Catégoriser',
+      required: true,
+    });
+    if (!category) return;
+    try {
+      await categorizeContact.mutateAsync({ email, category, domainOnly });
+      setStatus(domainOnly ? `Domaine ${target} catégorisé.` : `Expéditeur ${target} catégorisé.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de catégoriser : ${error.message}`, 'error');
     }
   };
 
@@ -105,6 +133,16 @@ export default function InboxPage() {
                           </button>
                         )}
                         {canManage && <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>}
+                        {canManage && (
+                          <button type="button" title="Catégoriser l’expéditeur" onClick={() => handleCategorize(msg, false)}>
+                            Catégoriser l’expéditeur
+                          </button>
+                        )}
+                        {canManage && (
+                          <button type="button" title="Catégoriser le domaine" onClick={() => handleCategorize(msg, true)}>
+                            Catégoriser le domaine
+                          </button>
+                        )}
                         {canManage && <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>}
                       </div>
                     </td>

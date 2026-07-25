@@ -437,6 +437,16 @@ export function useUploadSignatureImage() {
   });
 }
 
+export function useApplySignatureToDraft() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ content, mode }) => api('/api/agent/signature/apply', {
+      method: 'POST',
+      body: JSON.stringify({ content, mode }),
+    }),
+  });
+}
+
 export function useDeleteSignatureImage() {
   const { api } = useApi();
   return useMutation({
@@ -739,6 +749,19 @@ export function useSaveContact() {
     mutationFn: ({ email, payload }) => (email
       ? api(`/api/agent/contacts/${encodeURIComponent(email)}`, { method: 'PUT', body: JSON.stringify({ ...payload, email }) })
       : api('/api/agent/contacts', { method: 'POST', body: JSON.stringify(payload) })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
+  });
+}
+
+export function useCategorizeContact() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ email, category, domainOnly }) => api('/api/agent/contacts/categorize', {
+      method: 'POST',
+      body: JSON.stringify({ email, category, domain_only: Boolean(domainOnly) }),
+    }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
   });
 }
