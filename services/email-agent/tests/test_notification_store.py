@@ -155,3 +155,70 @@ def test_delete_notification():
     row = create_notification(notification_type="drafts_pending", title="A", user_id="u1", agent_instance_id="i1")
     delete_notification(row["id"])
     assert list_notifications(user_id="u1", agent_instance_id="i1") == []
+
+
+# --- Postgres backend (RLS) ---
+# Regression coverage for a real bug: the pg helpers here once called
+# tenant_connection(user_id=..., agent_instance_id=...) — that function takes
+# no such kwargs (they went straight into psycopg.connect() and raised
+# "invalid connection option"). Only caught by exercising the actual Postgres
+# path, since the JSON-backend tests above monkeypatch database_url="".
+
+import os
+
+PG_URL = os.getenv("RLS_TEST_ADMIN_URL", "")
+
+pg_only = pytest.mark.skipif(not PG_URL, reason="RLS_TEST_ADMIN_URL is required")
+
+
+@pytest.fixture
+def _pg_backend(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", PG_URL)
+    monkeypatch.setattr(settings, "run_registry_backend", "postgres")
+    from src.migrate import upgrade_to_head
+
+    upgrade_to_head()
+    import psycopg
+
+    with psycopg.connect(PG_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM email_agent_notification")
+
+
+@pg_only
+def test_pg_create_list_unread_count_and_mark_read(_pg_backend):
+    row = create_notification(
+        notification_type="drafts_pending", title="PG note", user_id="pg-user", agent_instance_id="pg-instance"
+    )
+    assert unread_count(user_id="pg-user", agent_instance_id="pg-instance") == 1
+
+    rows = list_notifications(user_id="pg-user", agent_instance_id="pg-instance")
+    assert len(rows) == 1
+    assert rows[0]["title"] == "PG note"
+
+    mark_read(row["id"])
+    assert unread_count(user_id="pg-user", agent_instance_id="pg-instance") == 0
+
+
+@pg_only
+def test_pg_mark_all_read_scoped_to_instance(_pg_backend):
+    create_notification(notification_type="drafts_pending", title="A", user_id="pg-user", agent_instance_id="pg-i1")
+    create_notification(notification_type="drafts_pending", title="B", user_id="pg-user", agent_instance_id="pg-i2")
+
+    marked = mark_all_read(user_id="pg-user", agent_instance_id="pg-i1")
+
+    assert marked == 1
+    assert unread_count(user_id="pg-user", agent_instance_id="pg-i1") == 0
+    assert unread_count(user_id="pg-user", agent_instance_id="pg-i2") == 1
+
+
+@pg_only
+def test_pg_erase_for_subject_removes_rows(_pg_backend):
+    create_notification(
+        notification_type="setup_completed", title="Done", user_id="owner@example.com", agent_instance_id="pg-instance"
+    )
+
+    removed = erase_notifications_for_subject("owner@example.com", "pg-instance")
+
+    assert removed == 1
+    assert list_notifications(user_id="owner@example.com", agent_instance_id="pg-instance") == []
