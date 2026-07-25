@@ -33,14 +33,17 @@ def _email_was_sent(messages) -> bool:
 
 
 def test_approval_required_aggregates_per_capability():
-    assert approval_required({"email": True}) == {"write_email", "forward_email", "reply_all"}
+    assert approval_required({"email": True}) == {"write_email", "forward_email", "notify_internal", "reply_all"}
     assert approval_required({"email": True, "calendar": True}) == {
         "write_email",
         "forward_email",
+        "notify_internal",
         "reply_all",
         "schedule_meeting",
     }
-    assert approval_required({"email": True, "calendar": False}) == {"write_email", "forward_email", "reply_all"}
+    assert approval_required({"email": True, "calendar": False}) == {
+        "write_email", "forward_email", "notify_internal", "reply_all",
+    }
 
 
 def test_unknown_run_returns_404(client):

@@ -61,6 +61,23 @@ tools:
       max_content_chars: 20000
       max_per_run: 20
       max_per_day: 500
+  # Internal workflow routing notice: synthesized note only, never the original
+  # message body, so it gets a much smaller content cap than an actual forward.
+  # Same recipient-trust rule as forward_email/reply_all (workflow-configured
+  # recipients read as TRUSTED, replies within a known-internal thread as
+  # INTERNAL) — never UNTRUSTED, since that's a recipient lifted from
+  # unsanitized email content.
+  notify_internal:
+    decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
+    recipients:
+      allow_domains: []
+      deny_domains: []
+    limits:
+      max_content_chars: 2000
+      max_per_run: 20
+      max_per_day: 500
   reply_all:
     decision: hitl
     args:

@@ -731,6 +731,20 @@ def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
     return _send_email_message(to=to, subject=subject, body=body, resource=resource)
 
 
+def notify_internal_message(to: str | list[str], subject: str, note: str, resource=None) -> dict:
+    """Send an internal-only workflow notification.
+
+    Unlike forward_message, this never re-fetches or re-sends the original
+    message body — only the synthesized note text. Untrusted email content
+    the note references (sender, subject line) is never expanded past what
+    the caller already put in `note`.
+    """
+    if effective_dry_run():
+        return _dry_run_result("notify_internal_message", to=to, subject=subject)
+    resource = resource or gmail_resource()
+    return _send_email_message(to=to, subject=subject, body=note, resource=resource)
+
+
 def reply_all_message(message_id: str, body: str, resource=None) -> dict:
     """Reply to all participants on a Gmail message's thread."""
     if effective_dry_run():

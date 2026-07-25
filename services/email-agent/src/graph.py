@@ -189,8 +189,8 @@ def _resolve_route_targets(value: str | None) -> list[str]:
     return resolved.emails if resolved and resolved.emails else []
 
 
-def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | None:
-    if "forward_email" not in tools_by_name_map:
+def _workflow_notify_tool_call(state: State, category_update: dict) -> dict | None:
+    if "notify_internal" not in tools_by_name_map:
         return None
     raw_targets = category_update.get("workflow_route_to") or []
     if isinstance(raw_targets, str):
@@ -219,9 +219,9 @@ def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | N
         "Please handle this request or reply internally with the next action."
     )
     return {
-        "name": "forward_email",
-        "args": {"to": targets, "note": note},
-        "id": f"workflow_forward_{uuid.uuid4().hex}",
+        "name": "notify_internal",
+        "args": {"to": targets, "subject": f"[Agora] {category}", "note": note},
+        "id": f"workflow_notify_{uuid.uuid4().hex}",
         "type": "tool_call",
     }
 
@@ -360,30 +360,15 @@ def category_router(
         )
 
     if policy == "notify":
-        forward_call = _workflow_forward_tool_call(state, category_update)
-        if forward_call is not None and not state["email_input"].get("email_id"):
-            error = (
-                "This workflow requires forwarding the original Gmail message, but this "
-                "run was created manually and has no trusted Gmail message id. Sync the "
-                "mailbox and process the Gmail-originated message instead."
-            )
-            print(f"🔔 Category '{cat}': manual forward rejected")
-            return Command(
-                goto=END,
-                update={
-                    "classification_decision": "notify",
-                    "email_send_failed": error,
-                    **category_update,
-                },
-            )
-        if forward_call is not None:
+        notify_call = _workflow_notify_tool_call(state, category_update)
+        if notify_call is not None:
             print(f"🔔 Category '{cat}': notify policy, routing for approval")
             return Command(
                 goto="environment",
                 update={
                     "classification_decision": "notify",
                     **category_update,
-                    "messages": [AIMessage(content="", tool_calls=[forward_call])],
+                    "messages": [AIMessage(content="", tool_calls=[notify_call])],
                 },
             )
         print(f"🔔 Category '{cat}': notify policy, terminating")

@@ -59,6 +59,12 @@ def format_action_description(name: str, args: dict) -> str:
         targets = ", ".join(to) if isinstance(to, list) else str(to)
         note = args.get("note", "")
         return f"**Forward to**: {targets}\n\n{note}"
+    if name == "notify_internal":
+        to = args.get("to", "")
+        targets = ", ".join(to) if isinstance(to, list) else str(to)
+        subject = args.get("subject", "")
+        note = args.get("note", "")
+        return f"**Internal notification to**: {targets}\n**Subject**: {subject}\n\n{note}"
     if name == "trash_email":
         return "**Move this email to trash?**"
     return f"Approve '{name}'?"
