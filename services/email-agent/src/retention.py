@@ -172,8 +172,15 @@ def preview_retention(now: datetime | None = None) -> dict:
 
 
 def run_retention(now: datetime | None = None) -> dict:
+    from src.notification_store import prune_notifications
+
+    # Independent of the run/cost/trace retention window above — notifications
+    # have their own always-on age limit (AGENT_NOTIFICATION_RETENTION_DAYS).
+    notifications_pruned = prune_notifications(settings.notification_retention_days)
+
     plan = preview_retention(now=now)
     deleted = _zero_counts()
+    deleted["notifications"] = notifications_pruned
     run_ids = list(plan.get("sample_run_ids") or [])
     if not plan.get("enabled"):
         plan["deleted"] = deleted

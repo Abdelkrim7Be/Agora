@@ -96,6 +96,7 @@ def test_erase_subject_removes_contact_runs_costs_traces_and_checkpoints(monkeyp
         "trace_entries": 1,
         "checkpoints": 1,
         "checkpoint_writes": 1,
+        "notifications": 0,
     }
 
     result = gdpr.erase_subject("alice@example.com")
@@ -127,6 +128,7 @@ def test_erase_subject_with_no_matching_data_is_a_clean_noop(monkeypatch, tmp_pa
         "trace_entries": 0,
         "checkpoints": 0,
         "checkpoint_writes": 0,
+        "notifications": 0,
     }
 
 

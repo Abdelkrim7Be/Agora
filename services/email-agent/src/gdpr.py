@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from src.contacts import delete_contact, get_contact
 from src.cost_tracker import count_costs_for_runs, delete_costs_for_runs
+from src.notification_store import erase_notifications_for_subject, list_notifications
 from src.retention import _checkpoint_counts, _delete_checkpoints, _zero_counts
 from src.run_registry import MAX_RUNS, delete_runs, list_runs
 from src.tenant import current_agent_instance_id, normalize_agent_instance_id
@@ -59,6 +60,11 @@ def preview_erasure(
     resolved_instance = normalize_agent_instance_id(agent_instance_id or current_agent_instance_id())
     run_ids = _matching_run_ids(email, resolved_instance)
     checkpoint_counts = _checkpoint_counts(run_ids)
+    notifications_count = 0
+    if revoke_owner_token:
+        notifications_count = len(
+            list_notifications(unread_only=False, limit=200, user_id=email, agent_instance_id=resolved_instance)
+        )
     return {
         "email": email,
         "agent_instance_id": resolved_instance,
@@ -70,6 +76,7 @@ def preview_erasure(
             "cost_entries": count_costs_for_runs(run_ids, agent_instance_id=resolved_instance),
             "trace_entries": count_traces_for_runs(run_ids, agent_instance_id=resolved_instance),
             **checkpoint_counts,
+            "notifications": notifications_count,
         },
     }
 
@@ -96,8 +103,10 @@ def erase_subject(
         contact_deleted = True
 
     token_revoked = False
+    notifications_deleted = 0
     if revoke_owner_token:
         token_revoked = delete_token(user_id=email, agent_instance_id=resolved_instance)
+        notifications_deleted = erase_notifications_for_subject(email, resolved_instance)
 
     run_ids = _matching_run_ids(email, resolved_instance)
     deleted = _zero_counts()
@@ -107,6 +116,7 @@ def erase_subject(
         deleted["cost_entries"] = delete_costs_for_runs(run_ids, agent_instance_id=resolved_instance)
         deleted["runs"] = delete_runs(run_ids, agent_instance_id=resolved_instance)
         deleted.update(checkpoint_deleted)
+    deleted["notifications"] = notifications_deleted
 
     return {
         "email": email,

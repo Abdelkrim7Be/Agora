@@ -93,7 +93,9 @@ def test_retention_dry_run_and_execute_preserve_audit(monkeypatch, tmp_path):
     assert run_registry.get_run("run-old", path=run_path) is not None
 
     executed = retention.run_retention(now=fixed_now)
-    assert executed["deleted"] == dry_run["counts"]
+    # run_retention also sweeps notifications on its own always-on age window,
+    # independent of the run/cost/trace retention_days preview above.
+    assert executed["deleted"] == {**dry_run["counts"], "notifications": 0}
     assert run_registry.get_run("run-old", path=run_path) is None
     assert run_registry.get_run("run-new", path=run_path) is not None
     assert [row["run_id"] for row in cost_tracker.list_costs(path=cost_path, limit=10)] == ["run-new"]
