@@ -10,7 +10,7 @@ import { parseSenderEmail, senderDomain } from '../../utils/format';
 export default function InboxPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
-  const { confirmDialog, promptDialog } = useDialog();
+  const { confirmDialog, promptDialog, selectDialog } = useDialog();
   const navigate = useNavigate();
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
@@ -50,14 +50,23 @@ export default function InboxPage() {
       return;
     }
     const target = domainOnly ? senderDomain(msg.from) : email;
-    const categoryNames = availableCategories.map((c) => c.name).join(', ');
-    const category = await promptDialog({
-      title: domainOnly ? `Catégoriser le domaine ${target}` : `Catégoriser ${target}`,
-      message: categoryNames ? `Catégories disponibles : ${categoryNames}` : 'Saisissez le nom exact de la catégorie.',
-      placeholder: 'Nom de la catégorie',
-      confirmLabel: 'Catégoriser',
-      required: true,
-    });
+    const title = domainOnly ? `Catégoriser le domaine ${target}` : `Catégoriser ${target}`;
+    const category = availableCategories.length
+      ? await selectDialog({
+          title,
+          message: 'Choisissez une catégorie.',
+          options: availableCategories.map((c) => ({ value: c.name, label: c.display_name || c.name })),
+          placeholder: 'Sélectionner une catégorie…',
+          confirmLabel: 'Catégoriser',
+          required: true,
+        })
+      : await promptDialog({
+          title,
+          message: 'Saisissez le nom exact de la catégorie.',
+          placeholder: 'Nom de la catégorie',
+          confirmLabel: 'Catégoriser',
+          required: true,
+        });
     if (!category) return;
     try {
       await categorizeContact.mutateAsync({ email, category, domainOnly });
