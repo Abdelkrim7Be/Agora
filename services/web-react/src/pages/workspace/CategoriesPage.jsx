@@ -31,6 +31,7 @@ const PAGE_SIZE = 5;
 const EMPTY_FORM = {
   name: '', keywords: '', policy: 'auto_draft', priority: 'normal', owner: '', approver: '', routeTo: '', template: '',
   sla: '', requiredData: '', escalation: '', blockedCases: '', askForMissing: false,
+  requireApproval: false, externalSendAllowed: true,
 };
 
 function instructionsFromForm(form) {
@@ -142,6 +143,8 @@ export default function CategoriesPage() {
       escalation: instructions.escalation || '',
       blockedCases: (instructions.blocked_cases || []).join(', '),
       askForMissing: Boolean(instructions.ask_for_missing),
+      requireApproval: Boolean(category.require_approval),
+      externalSendAllowed: category.external_send_allowed !== false,
     });
   };
 
@@ -162,6 +165,8 @@ export default function CategoriesPage() {
         instructions: instructionsFromForm(form),
         when: { subject_contains: keywords },
         template: null,
+        require_approval: form.requireApproval,
+        external_send_allowed: form.externalSendAllowed,
       };
       try {
         await saveEdit.mutateAsync({ name: editingName, payload });
@@ -183,6 +188,8 @@ export default function CategoriesPage() {
       approver: form.approver.trim(),
       routeTo: form.routeTo.trim(),
       instructions: instructionsFromForm(form),
+      requireApproval: form.requireApproval,
+      externalSendAllowed: form.externalSendAllowed,
     });
     let nextYaml = appendWorkflowBlock(yamlText, 'categories', categoryBlock);
     if (templateBlock) nextYaml = appendWorkflowBlock(nextYaml, 'templates', templateBlock);
@@ -208,6 +215,8 @@ export default function CategoriesPage() {
     instructions: category.instructions || null,
     when: category.when || null,
     template: category.template || null,
+    require_approval: Boolean(category.require_approval),
+    external_send_allowed: category.external_send_allowed !== false,
     ...overrides,
   });
 
@@ -382,6 +391,12 @@ export default function CategoriesPage() {
             <label><span>Règle d'escalade</span><input value={form.escalation} onChange={(e) => setForm({ ...form, escalation: e.target.value })} placeholder="Notifier le responsable finance pour les remboursements > 1000 EUR" /></label>
             <label><span>Cas bloqués</span><input value={form.blockedCases} onChange={(e) => setForm({ ...form, blockedCases: e.target.value })} placeholder="remboursements demandés après 30 jours" /></label>
             <label className="workflow-checkbox"><input type="checkbox" checked={form.askForMissing} onChange={(e) => setForm({ ...form, askForMissing: e.target.checked })} /><span>Demander à l'expéditeur les données manquantes</span></label>
+          </div>
+          <div className="workflow-wide instructions-fieldset">
+            <strong>Politique d'approbation</strong>
+            <div className="meta">Vient s'ajouter à la politique de sécurité par défaut de l'outil — ne peut jamais la relâcher, seulement la renforcer.</div>
+            <label className="workflow-checkbox"><input type="checkbox" checked={form.requireApproval} onChange={(e) => setForm({ ...form, requireApproval: e.target.checked })} /><span>Toujours exiger une validation humaine pour ce workflow</span></label>
+            <label className="workflow-checkbox"><input type="checkbox" checked={!form.externalSendAllowed} onChange={(e) => setForm({ ...form, externalSendAllowed: !e.target.checked })} /><span>Interdire l'envoi en dehors des domaines internes</span></label>
           </div>
           <div className="workflow-form-actions workflow-wide">
             <button className="primary" type="submit">

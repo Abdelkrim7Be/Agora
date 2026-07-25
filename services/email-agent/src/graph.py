@@ -812,6 +812,40 @@ def _authorization_cache_key(run_id: str, name: str, tool_call: dict) -> tuple[s
     return (run_id, name, tool_call.get("id", ""))
 
 
+def _category_for_run(state: State):
+    """Look up the Category object driving this run, if any (for require_approval /
+    external_send_allowed — per-workflow policy layered on top of the tool-level
+    default in security/policy.yaml)."""
+    name = state.get("category")
+    if not name:
+        return None
+    cfg = load_categories()
+    return next((c for c in cfg.categories if c.name == name), None)
+
+
+def _recipient_domains(args: dict) -> list[str]:
+    to = args.get("to")
+    text = " ".join(str(v) for v in to) if isinstance(to, list) else str(to or "")
+    return [addr.split("@")[1].lower() for addr in _ARG_ADDR_RE.findall(text)]
+
+
+def _external_recipients_blocked(category, args: dict) -> bool:
+    """True when `category` restricts sends to internal domains and `args` names
+    a recipient outside AGENT_INTERNAL_DOMAINS. Never loosens tool-level policy —
+    only ever adds a stricter, workflow-scoped recipient check on top of it."""
+    if category is None or category.external_send_allowed:
+        return False
+    domains = _recipient_domains(args)
+    if not domains:
+        return False
+    internal = set(settings.internal_domains)
+    if not internal:
+        # external_send_allowed=false with no internal domains configured has
+        # nothing safe to compare against — fail closed rather than no-op.
+        return True
+    return any(domain not in internal for domain in domains)
+
+
 def _call_authorize_action(
     name: str,
     args: dict,
@@ -891,6 +925,7 @@ def tool_node(state: State, store: BaseStore, config=None):
     redraft_baseline = None
     redraft_cleared = False
     run_id = _run_id_from_config(config)
+    category_obj = _category_for_run(state)
 
     # Load automation rules at most once per call, lazily — only when a human
     # correction actually happens (rule learning is a no-op when disabled).
@@ -929,6 +964,17 @@ def tool_node(state: State, store: BaseStore, config=None):
             if authorization_decision == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
+
+        if _external_recipients_blocked(category_obj, args):
+            result.append(_blocked_tool_message(
+                name,
+                f"category '{category_obj.name}' does not allow sending outside internal domains",
+                tool_call["id"],
+            ))
+            continue
+
+        if authorization_decision == "allow" and category_obj is not None and category_obj.require_approval:
+            authorization_decision = "hitl"
 
         if authorization_decision == "hitl":
             description = format_action_description(name, args)
@@ -1054,6 +1100,14 @@ def tool_node(state: State, store: BaseStore, config=None):
             if authz["decision"] == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
+
+        if args != tool_call["args"] and _external_recipients_blocked(category_obj, args):
+            result.append(_blocked_tool_message(
+                name,
+                f"category '{category_obj.name}' does not allow sending outside internal domains",
+                tool_call["id"],
+            ))
+            continue
 
         tool = tools_by_name_map.get(name)
         if tool is None:
