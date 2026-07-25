@@ -9,10 +9,11 @@ const DEFAULTS = {
   cancelLabel: 'Annuler',
   confirmIcon: 'check',
   variant: '',
-  kind: 'confirm', // 'confirm' | 'prompt'
+  kind: 'confirm', // 'confirm' | 'prompt' | 'select'
   placeholder: '',
   defaultValue: '',
   required: true,
+  options: [],
 };
 
 export function DialogProvider({ children }) {
@@ -50,7 +51,7 @@ export function DialogProvider({ children }) {
   }, []);
 
   const submit = useCallback(() => {
-    if (dialog?.kind === 'prompt') {
+    if (dialog?.kind === 'prompt' || dialog?.kind === 'select') {
       const trimmed = value.trim();
       if (dialog.required && !trimmed) {
         setInputError(true);
@@ -64,9 +65,10 @@ export function DialogProvider({ children }) {
 
   const confirmDialog = useCallback((options) => open({ ...options, kind: 'confirm' }), [open]);
   const promptDialog = useCallback((options) => open({ ...options, kind: 'prompt' }), [open]);
+  const selectDialog = useCallback((options) => open({ ...options, kind: 'select' }), [open]);
 
   return (
-    <DialogContext.Provider value={{ confirmDialog, promptDialog }}>
+    <DialogContext.Provider value={{ confirmDialog, promptDialog, selectDialog }}>
       {children}
       <div id="app-dialog" className={`modal app-dialog${dialog?.variant === 'danger' ? ' dialog-danger' : ''}`} hidden={!dialog}>
         {dialog && (
@@ -94,6 +96,19 @@ export function DialogProvider({ children }) {
                   }}
                   autoFocus
                 />
+              )}
+              {dialog.kind === 'select' && (
+                <select
+                  value={value}
+                  className={inputError ? 'input-error' : ''}
+                  onChange={(event) => { setValue(event.target.value); setInputError(false); }}
+                  autoFocus
+                >
+                  <option value="">{dialog.placeholder || 'Choisir…'}</option>
+                  {(dialog.options || []).map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
               )}
               <div className="dialog-actions">
                 <button className="ghost" type="button" onClick={() => close(null)}>{dialog.cancelLabel}</button>

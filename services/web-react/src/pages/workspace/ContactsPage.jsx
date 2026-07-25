@@ -62,7 +62,7 @@ function ContactAvatar({ contact, apiBlob }) {
 export default function ContactsPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
-  const { confirmDialog, promptDialog } = useDialog();
+  const { confirmDialog, promptDialog, selectDialog } = useDialog();
   const { apiBlob } = useApi();
   const canManage = hasRole('owner');
 
@@ -234,14 +234,23 @@ export default function ContactsPage() {
 
   const handleBulkCategorize = async () => {
     if (!selectedEmails.size) return;
-    const categoryNames = availableCategories.map((c) => c.name).join(', ');
-    const category = await promptDialog({
-      title: `Catégoriser ${selectedEmails.size} contact(s)`,
-      message: categoryNames ? `Catégories disponibles : ${categoryNames}` : 'Saisissez le nom exact de la catégorie.',
-      placeholder: 'Nom de la catégorie',
-      confirmLabel: 'Catégoriser',
-      required: true,
-    });
+    const title = `Catégoriser ${selectedEmails.size} contact(s)`;
+    const category = availableCategories.length
+      ? await selectDialog({
+          title,
+          message: 'Choisissez une catégorie.',
+          options: availableCategories.map((c) => ({ value: c.name, label: c.display_name || c.name })),
+          placeholder: 'Sélectionner une catégorie…',
+          confirmLabel: 'Catégoriser',
+          required: true,
+        })
+      : await promptDialog({
+          title,
+          message: 'Saisissez le nom exact de la catégorie.',
+          placeholder: 'Nom de la catégorie',
+          confirmLabel: 'Catégoriser',
+          required: true,
+        });
     if (!category) return;
     setBulkCategorizing(true);
     const emails = Array.from(selectedEmails);
