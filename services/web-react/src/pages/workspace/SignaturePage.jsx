@@ -13,6 +13,7 @@ import {
 
 const EMPTY_FORM = {
   enabled: false,
+  mode: 'append_platform_signature',
   first_name: '',
   last_name: '',
   title: '',
@@ -22,6 +23,13 @@ const EMPTY_FORM = {
   text: '',
   image_alt: 'Signature',
   image_url: '',
+};
+
+const MODE_LABELS = {
+  preserve_provider_signature: 'Conserver la signature du fournisseur (ne rien ajouter)',
+  append_platform_signature: 'Ajouter la signature configurée ici',
+  replace_detected_signature: 'Remplacer la signature détectée par celle configurée ici',
+  ask_each_time: 'Demander à chaque brouillon',
 };
 
 function structuredLines(config) {
@@ -68,6 +76,7 @@ export default function SignaturePage() {
     if (!query.data) return;
     setForm({
       enabled: Boolean(query.data.enabled),
+      mode: query.data.mode || 'append_platform_signature',
       first_name: query.data.first_name || '',
       last_name: query.data.last_name || '',
       title: query.data.title || '',
@@ -152,6 +161,17 @@ export default function SignaturePage() {
             <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
             <span>Ajouter à chaque e-mail</span>
           </label>
+          <label>
+            <span>Mode</span>
+            <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+              {(query.data?.available_modes || Object.keys(MODE_LABELS)).map((mode) => (
+                <option key={mode} value={mode}>{MODE_LABELS[mode] || mode}</option>
+              ))}
+            </select>
+          </label>
+          {query.data?.detected_block ? (
+            <p className="setup-step-detail">Une signature a été détectée dans vos e-mails envoyés lors de la configuration initiale.</p>
+          ) : null}
           <div className="persona-grid">
             <label><span>Prénom</span><input placeholder="Karim" value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></label>
             <label><span>Nom</span><input placeholder="Bellagnech" value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></label>

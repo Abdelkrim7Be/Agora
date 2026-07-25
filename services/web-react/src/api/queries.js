@@ -444,6 +444,122 @@ export function useDeleteSignatureImage() {
   });
 }
 
+// --- Instance setup (onboarding pipeline) ---
+
+const SETUP_TERMINAL_STATUSES = new Set(['ready', 'failed', 'not_started']);
+
+export function useInstanceSetupQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['instance-setup', instanceId],
+    queryFn: () => api('/api/agent/instance-setup'),
+    enabled: Boolean(token) && Boolean(instanceId),
+    refetchInterval: (query) => (SETUP_TERMINAL_STATUSES.has(query.state.data?.status) ? false : 2000),
+  });
+}
+
+export function useStartSetup() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/instance-setup/start', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+export function useRetrySetup() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/instance-setup/retry', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+export function useRetrySetupStep() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (stepKey) => api(`/api/agent/instance-setup/steps/${encodeURIComponent(stepKey)}/retry`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+export function useSkipSetup() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/instance-setup/skip', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+// --- Notifications ---
+
+export function useNotificationsQuery(unreadOnly = false) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['notifications', instanceId, unreadOnly],
+    queryFn: () => api(`/api/agent/notifications?unread_only=${unreadOnly ? 'true' : 'false'}&limit=50`),
+    enabled: Boolean(token) && Boolean(instanceId),
+  });
+}
+
+export function useUnreadCountQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['notifications-unread-count', instanceId],
+    queryFn: () => api('/api/agent/notifications/unread-count'),
+    enabled: Boolean(token) && Boolean(instanceId),
+    refetchInterval: 30_000,
+  });
+}
+
+function invalidateNotifications(queryClient, instanceId) {
+  queryClient.invalidateQueries({ queryKey: ['notifications', instanceId] });
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread-count', instanceId] });
+}
+
+export function useMarkNotificationRead() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (id) => api(`/api/agent/notifications/${id}/read`, { method: 'POST' }),
+    onSuccess: () => invalidateNotifications(queryClient, instanceId),
+  });
+}
+
+export function useMarkAllNotificationsRead() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/notifications/read-all', { method: 'POST' }),
+    onSuccess: () => invalidateNotifications(queryClient, instanceId),
+  });
+}
+
+export function useDeleteNotification() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (id) => api(`/api/agent/notifications/${id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateNotifications(queryClient, instanceId),
+  });
+}
+
 // --- Memory ---
 
 export function useMemorySummaryQuery() {

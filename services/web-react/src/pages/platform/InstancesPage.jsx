@@ -46,7 +46,9 @@ export default function InstancesPage() {
 
   const handleOpen = (instance) => {
     setInstanceId(instance.id);
-    navigate(`/instance/${instance.id}`);
+    const setupStatus = instance.summary?.setup_status;
+    const needsSetup = setupStatus && !['ready', 'not_started', 'unknown'].includes(setupStatus);
+    navigate(needsSetup ? `/instance/${instance.id}/setup` : `/instance/${instance.id}`);
   };
 
   const handleRename = async (instance) => {
