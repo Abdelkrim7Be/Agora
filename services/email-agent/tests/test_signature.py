@@ -1,4 +1,13 @@
-from src.signature import SignatureConfig, append_signature, apply_signature_to_args, strip_signature
+from src.signature import (
+    SIGNATURE_MODES,
+    SignatureConfig,
+    append_signature,
+    apply_signature,
+    apply_signature_to_args,
+    detect_from_sent,
+    strip_detected_signature,
+    strip_signature,
+)
 
 
 def test_disabled_signature_leaves_content_unchanged():
@@ -75,3 +84,85 @@ def test_strip_signature_is_the_inverse_of_append():
 def test_strip_signature_noop_when_not_signed():
     signature = SignatureConfig(enabled=True, text="Karim")
     assert strip_signature("Bonjour", signature) == "Bonjour"
+
+
+def test_existing_config_without_mode_defaults_to_append():
+    signature = SignatureConfig(**{"enabled": True, "text": "Karim"})
+    assert signature.mode == "append_platform_signature"
+
+
+def test_mode_preserve_appends_nothing():
+    signature = SignatureConfig(enabled=True, text="Karim", mode="preserve_provider_signature")
+    assert apply_signature("Bonjour", signature) == "Bonjour"
+
+
+def test_mode_append_appends_once():
+    signature = SignatureConfig(enabled=True, text="Karim", mode="append_platform_signature")
+    signed = apply_signature("Bonjour", signature)
+    assert "Karim" in signed
+    assert signed != "Bonjour"
+
+
+def test_apply_is_idempotent_on_second_call():
+    signature = SignatureConfig(enabled=True, text="Karim", mode="append_platform_signature")
+    once = apply_signature("Bonjour", signature)
+    twice = apply_signature(once, signature)
+    assert once == twice
+
+
+def test_mode_replace_strips_then_appends():
+    signature = SignatureConfig(
+        enabled=True,
+        text="Karim Nouveau",
+        mode="replace_detected_signature",
+        detected_block="-- \nKarim Ancien",
+    )
+    body_with_old_block = "Bonjour,\n\nDetails.\n\n-- \nKarim Ancien"
+    result = apply_signature(body_with_old_block, signature)
+    assert "Karim Ancien" not in result
+    assert "Karim Nouveau" in result
+
+
+def test_ask_each_time_defers_to_approval():
+    signature = SignatureConfig(enabled=True, text="Karim", mode="ask_each_time")
+    assert apply_signature("Bonjour", signature) == "Bonjour"
+    # Once the approval UI supplies the human's chosen mode, it applies immediately.
+    overridden = apply_signature("Bonjour", signature, mode="append_platform_signature")
+    assert "Karim" in overridden
+
+
+def test_invalid_mode_rejected_by_whitelist():
+    assert "not_a_real_mode" not in SIGNATURE_MODES
+
+
+def test_detect_from_sent_finds_repeated_block():
+    messages = [
+        {"body": f"Salut,\n\nMessage {i}.\n\n-- \nKarim Bellagnech\n+212 6 00 00 00 00"}
+        for i in range(5)
+    ]
+    result = detect_from_sent(messages)
+    assert result["detected"] is True
+    assert "Karim Bellagnech" in result["block"]
+    assert result["sample_size"] == 5
+    assert result["confidence"] >= 0.6
+
+
+def test_detect_from_sent_ignores_single_occurrence():
+    messages = [
+        {"body": "Salut,\n\nMessage 1.\n\n-- \nKarim Bellagnech\n+212 6 00 00 00 00"},
+        {"body": "Salut,\n\nMessage 2, nothing signature-like here at all."},
+        {"body": "Salut,\n\nMessage 3, also plain."},
+    ]
+    result = detect_from_sent(messages)
+    assert result["detected"] is False
+
+
+def test_detect_from_sent_empty_sample_returns_not_detected():
+    result = detect_from_sent([])
+    assert result == {"detected": False, "block": None, "confidence": 0.0, "sample_size": 0}
+
+
+def test_strip_detected_signature_removes_trailing_block():
+    body = "Bonjour,\n\nDetails.\n\n-- \nKarim Ancien"
+    stripped = strip_detected_signature(body, "-- \nKarim Ancien")
+    assert stripped == "Bonjour,\n\nDetails."
