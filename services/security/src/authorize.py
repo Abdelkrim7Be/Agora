@@ -18,10 +18,14 @@ def _recipient_text(to) -> str:
     return str(to or "")
 
 
+def _extract_addresses(to) -> list[str]:
+    """Return lowercased addresses from a string/list recipient field."""
+    return [addr.lower() for addr in _ADDR_RE.findall(_recipient_text(to))]
+
+
 def _extract_domains(to) -> list[str]:
     """Return lowercased domains from a string/list recipient field."""
-    addresses = _ADDR_RE.findall(_recipient_text(to))
-    return [addr.split("@")[1].lower() for addr in addresses]
+    return [addr.split("@")[1] for addr in _extract_addresses(to)]
 
 
 def _domain_matches(domain: str, entries) -> bool:
@@ -39,13 +43,26 @@ def _check_recipients(to, recipients) -> str | None:
     if not normalized_to:
         return "recipient 'to' field is empty"
 
-    domains = _extract_domains(normalized_to)
-    if not domains:
+    addresses = _extract_addresses(normalized_to)
+    if not addresses:
         return f"could not parse a valid email address from 'to': {to!r}"
+    domains = [addr.split("@")[1] for addr in addresses]
+
+    for address in addresses:
+        if address in recipients.deny_addresses:
+            return f"recipient address '{address}' is on the deny list"
 
     for domain in domains:
         if _domain_matches(domain, recipients.deny_domains):
             return f"recipient domain '{domain}' is on the deny list"
+
+    # Address allow list is checked before the domain one and is strictly
+    # narrower: when set, membership is per-address and a permitted domain no
+    # longer implies a permitted mailbox.
+    if recipients.allow_addresses:
+        for address in addresses:
+            if address not in recipients.allow_addresses:
+                return f"recipient address '{address}' is not on the allow list"
 
     if recipients.allow_domains:
         for domain in domains:
