@@ -1045,7 +1045,7 @@ def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
     monkeypatch.setattr(
         graph,
         "load_categories",
-        lambda: CategoriesConfig(
+        lambda *a, **kw: CategoriesConfig(
             enabled=True,
             categories=[
                 {

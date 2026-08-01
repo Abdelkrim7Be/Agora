@@ -101,7 +101,7 @@ def test_fatal_step_failure_fails_setup():
 
 def test_nonfatal_step_failure_continues():
     start_setup("user-a", "instance-a")
-    for key in ("verify_provider", "fetch_recent", "import_contacts"):
+    for key in ("verify_provider", "fetch_recent", "seed_categories", "import_contacts"):
         step = claim_next_step("worker-1")
         assert step["step_key"] == key
         complete_step(step["setup_id"], step["step_key"], detail={})

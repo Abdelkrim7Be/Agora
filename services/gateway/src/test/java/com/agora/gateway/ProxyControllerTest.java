@@ -41,7 +41,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",
-        "gateway.owner.password=ownerpass"
+        "gateway.owner.password=ownerpass",
+        "gateway.admin.username=admin",
+        "gateway.admin.password=adminpass"
 })
 class ProxyControllerTest {
 
@@ -68,6 +70,16 @@ class ProxyControllerTest {
 
     private String ownerToken() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("username", "owner", "password", "ownerpass"));
+        String response = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(response).get("token").asText();
+    }
+
+    private String adminToken() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of("username", "admin", "password", "adminpass"));
         String response = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
@@ -124,7 +136,7 @@ class ProxyControllerTest {
                 "display_name", "CEO Email Agent"
         ));
         mockMvc.perform(post("/agent-instances")
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", "Bearer " + adminToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated());

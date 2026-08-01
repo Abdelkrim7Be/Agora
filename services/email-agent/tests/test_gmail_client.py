@@ -811,6 +811,8 @@ def test_gmail_to_email_input_maps_all_fields():
         "labels": [],
         "list_unsubscribe": False,
         "precedence_bulk": False,
+        "list_id": False,
+        "auto_submitted": False,
     }
 
 
