@@ -12,6 +12,7 @@ import {
   useRetrySetup,
   useRetrySetupStep,
   useGmailStatusQuery,
+  useSeedSetupCategories,
 } from '../../api/queries';
 
 export default function SetupPage() {
@@ -22,12 +23,19 @@ export default function SetupPage() {
   const canManage = hasRole('owner');
   const autoStartRef = useRef('');
   const [connecting, setConnecting] = useState(false);
+  const [categoriesSettled, setCategoriesSettled] = useState(false);
+  const [draftCategories, setDraftCategories] = useState([
+    { name: '', keywords: '' },
+    { name: '', keywords: '' },
+    { name: '', keywords: '' },
+  ]);
 
   const query = useInstanceSetupQuery();
   const startSetup = useStartSetup();
   const retrySetup = useRetrySetup();
   const retryStep = useRetrySetupStep();
   const gmailQuery = useGmailStatusQuery();
+  const seedCategories = useSeedSetupCategories();
 
   const setup = query.data;
   const gmailStatus = gmailQuery.data || {};
@@ -74,8 +82,14 @@ export default function SetupPage() {
     }
   };
 
+  // The pipeline no longer starts the moment Gmail connects: the owner names
+  // their own categories first, so the very first pass over the mailbox files
+  // messages under labels they recognise instead of a generic default set.
+  // Auto-start stays for the case where categories already exist (a reconnect,
+  // or an owner who chose the defaults).
   useEffect(() => {
     if (!canManage || !gmailConnected || setup?.status !== 'not_started') return;
+    if (!categoriesSettled) return;
     const key = `${instanceId}:start`;
     if (autoStartRef.current === key || startSetup.isPending) return;
     autoStartRef.current = key;
@@ -83,7 +97,34 @@ export default function SetupPage() {
       onSuccess: () => setStatus('Configuration démarrée.', 'ok'),
       onError: (error) => setStatus(`Impossible de démarrer la configuration : ${error.message}`, 'error'),
     });
-  }, [canManage, gmailConnected, setup?.status, instanceId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canManage, gmailConnected, setup?.status, instanceId, categoriesSettled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const updateDraftCategory = (index, patch) => {
+    setDraftCategories((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const handleSubmitCategories = async () => {
+    const payload = draftCategories
+      .filter((row) => row.name.trim())
+      .map((row) => ({
+        name: row.name.trim(),
+        keywords: row.keywords
+          .split(',')
+          .map((word) => word.trim())
+          .filter(Boolean),
+      }));
+    if (!payload.length) {
+      setStatus('Ajoutez au moins une catégorie, ou passez aux catégories par défaut.', 'error');
+      return;
+    }
+    try {
+      await seedCategories.mutateAsync(payload);
+      setCategoriesSettled(true);
+      setStatus(`${payload.length} catégorie(s) enregistrée(s). Lecture de la boîte en cours.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d’enregistrer les catégories : ${error.message}`, 'error');
+    }
+  };
 
   const handleConnect = async () => {
     if (!instanceId || !canManage) return;
@@ -139,6 +180,51 @@ export default function SetupPage() {
               <span>{connecting ? 'Ouverture Google...' : 'Connecter Gmail'}</span>
             </button>
             {!canManage ? <p className="muted">Un propriétaire de l’instance doit connecter Gmail.</p> : null}
+          </div>
+        ) : (!setup || setup.status === 'not_started') && canManage && !categoriesSettled ? (
+          <div className="setup-categories-panel">
+            <strong>Quelles catégories utilisez-vous ?</strong>
+            <p className="muted">
+              Nommez les familles de messages que vous traitez vraiment — banque, fournisseurs,
+              clients, RH. La boîte est lue juste après, et le premier classement utilise vos
+              catégories. Les mots-clés sont facultatifs : sans eux, la catégorie sert au
+              classement manuel depuis la messagerie.
+            </p>
+            {draftCategories.map((row, index) => (
+              <div className="setup-category-row" key={index}>
+                <input
+                  type="text"
+                  value={row.name}
+                  placeholder="Nom de la catégorie (ex. Banque)"
+                  onChange={(event) => updateDraftCategory(index, { name: event.target.value })}
+                />
+                <input
+                  type="text"
+                  value={row.keywords}
+                  placeholder="Mots-clés séparés par des virgules (facultatif)"
+                  onChange={(event) => updateDraftCategory(index, { keywords: event.target.value })}
+                />
+              </div>
+            ))}
+            <div className="toolbar">
+              <button
+                type="button"
+                onClick={() => setDraftCategories((rows) => [...rows, { name: '', keywords: '' }])}
+              >
+                Ajouter une catégorie
+              </button>
+              <button
+                className="primary"
+                type="button"
+                disabled={seedCategories.isPending}
+                onClick={handleSubmitCategories}
+              >
+                {seedCategories.isPending ? 'Enregistrement...' : 'Enregistrer et charger la boîte'}
+              </button>
+              <button type="button" onClick={() => setCategoriesSettled(true)}>
+                Utiliser les catégories par défaut
+              </button>
+            </div>
           </div>
         ) : !setup || setup.status === 'not_started' ? (
           <p className="empty-cell">

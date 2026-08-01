@@ -3748,3 +3748,54 @@ h1 { font: 700 26px/32px var(--font-heading); }
     grid-template-columns: 1fr;
   }
 }
+
+/* Onboarding: the owner's own categories, collected before the mailbox is read. */
+.setup-categories-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.setup-category-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .setup-category-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* In-workspace guide. */
+.guide-section {
+  padding: 14px 0;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.guide-section:first-of-type {
+  border-top: none;
+}
+
+.guide-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.guide-section p {
+  margin: 0 0 8px;
+  max-width: 78ch;
+  line-height: 1.55;
+}
+
+.guide-divider {
+  margin: 24px 0 4px;
+  padding-top: 18px;
+  border-top: 2px solid var(--border, rgba(255, 255, 255, 0.12));
+  font-size: 1.05rem;
+}

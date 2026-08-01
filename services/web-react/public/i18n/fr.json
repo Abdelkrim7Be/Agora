@@ -143,6 +143,11 @@
       "kicker": "Démarrage",
       "description": "Synchronisation, apprentissage du style, import des contacts et catégorisation avant l’ouverture de l’espace de travail."
     },
+    "guide": {
+      "title": "Guide de l’agent",
+      "kicker": "Prise en main",
+      "description": "Ce que fait l’agent, comment le configurer, et où intervenir."
+    },
     "notifications": {
       "title": "Notifications",
       "kicker": "Centre de notifications",
