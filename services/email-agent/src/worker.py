@@ -31,7 +31,7 @@ from src.postgres import validate_runtime_role
 from src.run_registry import setup_run_registry
 from src.storage import open_graph_storage
 from src.sync_status import setup_sync_status
-from src.tenant import agent_instance_context
+from src.tenant import agent_instance_context, user_context
 from src.token_store import validate_token_security
 from src.trace import setup_trace_store
 
@@ -44,11 +44,12 @@ async def run_setup_step_once(store) -> bool:
     step = claim_next_step(WORKER_ID)
     if step is None:
         return False
-    with agent_instance_context(step["agent_instance_id"]):
-        context = SetupContext(
-            user_id=step["user_id"], agent_instance_id=step["agent_instance_id"], store=store
-        )
-        await run_step(step, context)
+    with user_context(step["user_id"]):
+        with agent_instance_context(step["agent_instance_id"]):
+            context = SetupContext(
+                user_id=step["user_id"], agent_instance_id=step["agent_instance_id"], store=store
+            )
+            await run_step(step, context)
     return True
 
 

@@ -13,9 +13,11 @@ _DEFAULT_PATH = SERVICE_ROOT / "send_mode.yaml"
 
 
 def get_send_mode(agent_instance_id: str | None = None) -> str:
-    """The instance's send mode; absent or invalid config fails safe to simulation."""
+    """The instance's send mode; absent config follows AGENT_DEFAULT_SEND_MODE."""
     raw = read_instance_text(_KIND, _DEFAULT_PATH, agent_instance_id).strip().lower()
-    return raw if raw in SEND_MODES else "simulation"
+    if raw in SEND_MODES:
+        return raw
+    return settings.default_send_mode if settings.default_send_mode in SEND_MODES else "simulation"
 
 
 def set_send_mode(mode: str, agent_instance_id: str | None = None) -> str:

@@ -9,6 +9,7 @@ from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
     current_agent_instance_id,
+    current_user_id,
     normalize_agent_instance_id,
     normalize_user_id,
 )
@@ -150,7 +151,7 @@ def _pg_update(user_id: str, instance_id: str, patch: dict) -> None:
 
 def _resolve(user_id: str | None, instance_id: str | None) -> tuple[str, str]:
     return (
-        normalize_user_id(settings.default_user_id),
+        normalize_user_id(user_id or current_user_id()),
         normalize_agent_instance_id(instance_id or current_agent_instance_id()),
     )
 

@@ -8,6 +8,7 @@ from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
     current_agent_instance_id,
+    current_user_id,
     normalize_agent_instance_id,
     normalize_user_id,
 )
@@ -127,7 +128,7 @@ def get_last_history_id(
     user_id: str | None = None,
     agent_instance_id: str | None = None,
 ) -> str | None:
-    resolved = normalize_user_id(settings.default_user_id)
+    resolved = normalize_user_id(user_id or current_user_id())
     resolved_instance = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
@@ -143,7 +144,7 @@ def set_last_history_id(
 ) -> None:
     if not history_id:
         return
-    resolved = normalize_user_id(settings.default_user_id)
+    resolved = normalize_user_id(user_id or current_user_id())
     resolved_instance = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
