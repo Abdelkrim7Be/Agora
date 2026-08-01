@@ -37,6 +37,8 @@ class EmailInput(TypedDict):
     # Bulk-mail header signals extracted by the poller for the deterministic junk gate.
     list_unsubscribe: NotRequired[bool]
     precedence_bulk: NotRequired[bool]
+    list_id: NotRequired[bool]
+    auto_submitted: NotRequired[bool]
     automation: NotRequired[dict]
     # Verdict and SEC7/SEC9 field trust from the security service, attached by
     # the poller when enabled. Absent on the manual /run path.
