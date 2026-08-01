@@ -65,7 +65,7 @@ def test_notify_workflow_routes_to_notify_approval(monkeypatch, respond_email):
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     email = {**respond_email, "email_id": "msg-route"}
 
     result = email_assistant.invoke({"email_input": email}, _cfg())
@@ -99,7 +99,7 @@ def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     monkeypatch.setattr(
         g,
         "resolve_role",
@@ -139,7 +139,7 @@ def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, r
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     email = {**respond_email, "email_id": "msg-fanout"}
     run_cfg = _cfg()
 
@@ -183,7 +183,7 @@ def test_notify_manual_workflow_routes_without_trusted_email_id(monkeypatch, res
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
 
     result = email_assistant.invoke({"email_input": respond_email}, _cfg())
 
@@ -221,7 +221,7 @@ def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore
     from src.categories import CategoriesConfig
 
     g, inbox_tools = _enable_auto_organize(monkeypatch)
-    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g.settings, "security_enabled", False)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
@@ -263,7 +263,7 @@ def test_auto_organize_uses_authorization_when_security_enabled(
     from src.categories import CategoriesConfig
 
     g, inbox_tools = _enable_auto_organize(monkeypatch, label="Auto/Skip")
-    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
     g._authorization_cache.clear()
     monkeypatch.setattr(g.settings, "security_enabled", True)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
@@ -386,7 +386,7 @@ def test_llm_call_includes_writing_style_in_prompt(monkeypatch, fake_llms, respo
 
     fake_llms(classification="respond")
     from src.categories import CategoriesConfig
-    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g, "llm_with_tools", _CaptureToolLLM())
     store = InMemoryStore()
     store.put(namespace("writing_style"), "user_preferences", wrap_preferences("Use a warm concise voice."))
@@ -418,7 +418,7 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     fake_llms(
         classification="respond",
         tool_sequence=[ai_tool_call("Done", {"done": True})],
@@ -461,7 +461,7 @@ def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, 
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     fake_llms(classification="notify")
 
     result = email_assistant.invoke({"email_input": respond_email}, _cfg())

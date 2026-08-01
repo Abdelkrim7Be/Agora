@@ -131,7 +131,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void owner_can_create_agent_instance() throws Exception {
+    void admin_can_create_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -147,18 +147,25 @@ class AgentRegistryTest {
                 "description", "CEO mailbox workspace"
         ));
 
+        // Creating an instance is reserved to admin; owner is explicitly refused.
         mockMvc.perform(post("/agent-instances")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value("ceo-email-agent"))
                 .andExpect(jsonPath("$.mailbox_identity").value("ceo@example.com"))
-                .andExpect(jsonPath("$.created_by").value("owner"));
+                .andExpect(jsonPath("$.created_by").value("admin"));
     }
 
     @Test
-    void owner_can_rename_agent_instance() throws Exception {
+    void admin_can_rename_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -166,7 +173,7 @@ class AgentRegistryTest {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
 
-        String token = login("owner", "ownerpass");
+        String token = login("admin", "adminpass");
         mockMvc.perform(post("/agent-instances")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -190,7 +197,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void owner_can_delete_agent_instance() throws Exception {
+    void admin_can_delete_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -198,7 +205,7 @@ class AgentRegistryTest {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
 
-        String token = login("owner", "ownerpass");
+        String token = login("admin", "adminpass");
         mockMvc.perform(post("/agent-instances")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -219,7 +226,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void deactivated_agent_instance_stays_visible_to_owner_for_reactivation() throws Exception {
+    void deactivated_agent_instance_stays_visible_to_admin_for_reactivation() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -227,7 +234,7 @@ class AgentRegistryTest {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
 
-        String token = login("owner", "ownerpass");
+        String token = login("admin", "adminpass");
         String body = objectMapper.writeValueAsString(Map.of(
                 "id", "delete-me-email-agent",
                 "agent_type", "email-agent",
