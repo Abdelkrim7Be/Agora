@@ -152,6 +152,11 @@
       "title": "Notifications",
       "kicker": "Centre de notifications",
       "description": "Suivez les événements de cette instance : configuration, synchronisation, brouillons et campagnes."
+    },
+    "junk": {
+      "title": "Filtre anti-bruit",
+      "kicker": "Tri automatique",
+      "description": "Ce qui est écarté avant toute analyse : diffusions, alertes et réponses automatiques."
     }
   },
   "global": {

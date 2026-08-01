@@ -38,6 +38,7 @@ import CampaignsPage from './pages/workspace/CampaignsPage';
 import DlqPage from './pages/workspace/DlqPage';
 import SetupPage from './pages/workspace/SetupPage';
 import GuidePage from './pages/workspace/GuidePage';
+import JunkPage from './pages/workspace/JunkPage';
 import NotificationsPage from './pages/workspace/NotificationsPage';
 import OAuthCallbackPage from './pages/OAuthCallbackPage';
 
@@ -105,6 +106,7 @@ export default function App() {
                         <Route index element={<DashboardPage />} />
                         <Route path="setup" element={<SetupPage />} />
                         <Route path="guide" element={<GuidePage />} />
+                        <Route path="junk" element={<JunkPage />} />
                         <Route path="notifications" element={<NotificationsPage />} />
                         <Route path="validation" element={<ValidationPage />} />
                         <Route path="drafts" element={<DraftsPage />} />

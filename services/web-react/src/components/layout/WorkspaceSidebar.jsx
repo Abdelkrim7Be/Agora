@@ -30,6 +30,7 @@ const TAB_GROUPS = [
       { to: 'signature', icon: 'draw', label: 'Signature' },
       { to: 'memory', icon: 'psychology', label: 'Mémoire' },
       { to: 'rules', icon: 'rule', label: 'Règles' },
+      { to: 'junk', icon: 'filter_alt', label: 'Filtre anti-bruit' },
     ],
   },
   {

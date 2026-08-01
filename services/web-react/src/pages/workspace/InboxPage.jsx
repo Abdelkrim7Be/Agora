@@ -15,6 +15,7 @@ export default function InboxPage() {
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   const query = useInboxQuery();
   const inboxAction = useInboxAction();
@@ -118,6 +119,79 @@ export default function InboxPage() {
     }
   };
 
+  const toggleSelected = (msgId) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(msgId)) next.delete(msgId);
+      else next.add(msgId);
+      return next;
+    });
+  };
+
+  const allVisibleSelected = filteredMessages.length > 0
+    && filteredMessages.every((msg) => selectedIds.has(msg.id));
+
+  const toggleSelectAll = () => {
+    setSelectedIds((current) => {
+      if (allVisibleSelected) {
+        const next = new Set(current);
+        filteredMessages.forEach((msg) => next.delete(msg.id));
+        return next;
+      }
+      const next = new Set(current);
+      filteredMessages.forEach((msg) => next.add(msg.id));
+      return next;
+    });
+  };
+
+  // Filing a backlog one message at a time is the slow part of onboarding: after
+  // the first load there are a couple of hundred messages and only a handful of
+  // distinct senders. Selecting a batch and assigning one category files every
+  // sender behind it at once.
+  const handleBulkCategorize = async () => {
+    const chosen = filteredMessages.filter((msg) => selectedIds.has(msg.id));
+    if (!chosen.length) return;
+    const senders = [...new Set(chosen.map((msg) => parseSenderEmail(msg.from)).filter(Boolean))];
+    if (!senders.length) {
+      setStatus('Aucune adresse expéditeur exploitable dans la sélection.', 'error');
+      return;
+    }
+    const category = availableCategories.length
+      ? await selectDialog({
+          title: `Classer ${chosen.length} message(s)`,
+          message: `${senders.length} expéditeur(s) seront classés dans cette catégorie.`,
+          options: availableCategories.map((c) => ({ value: c.name, label: c.display_name || c.name })),
+          placeholder: 'Sélectionner une catégorie…',
+          confirmLabel: 'Classer',
+          required: true,
+        })
+      : await promptDialog({
+          title: `Classer ${chosen.length} message(s)`,
+          message: 'Saisissez le nom exact de la catégorie.',
+          placeholder: 'Nom de la catégorie',
+          confirmLabel: 'Classer',
+          required: true,
+        });
+    if (!category) return;
+
+    let done = 0;
+    const failed = [];
+    for (const email of senders) {
+      try {
+        await categorizeContact.mutateAsync({ email, category, domainOnly: false });
+        done += 1;
+      } catch (error) {
+        failed.push(email);
+      }
+    }
+    setSelectedIds(new Set());
+    if (failed.length) {
+      setStatus(`${done} expéditeur(s) classés, ${failed.length} en échec : ${failed.join(', ')}`, 'error');
+    } else {
+      setStatus(`${done} expéditeur(s) classés dans « ${category} ».`, 'ok');
+    }
+  };
+
   const handleAction = async (command, msgId) => {
     if (command === 'trash') {
       const confirmed = await confirmDialog({
@@ -146,6 +220,16 @@ export default function InboxPage() {
           <span>Actualiser</span>
         </button>
         <span className="counter">{filteredMessages.length}/{messages.length} message{messages.length === 1 ? '' : 's'}</span>
+        {selectedIds.size > 0 && canManage ? (
+          <>
+            <span className="counter">{selectedIds.size} sélectionné{selectedIds.size === 1 ? '' : 's'}</span>
+            <button className="primary" type="button" onClick={handleBulkCategorize}>
+              <span className="material-symbols-outlined" aria-hidden="true">category</span>
+              <span>Classer la sélection</span>
+            </button>
+            <button type="button" onClick={() => setSelectedIds(new Set())}>Annuler la sélection</button>
+          </>
+        ) : null}
       </div>
       <div className="folder-tabs" role="tablist" aria-label="Dossiers de catégories">
         {folderOptions.map((folder) => (
@@ -163,11 +247,22 @@ export default function InboxPage() {
       <div className="table-wrap">
         <table className="data-table">
           <thead>
-            <tr><th>De</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th></tr>
+            <tr>
+              <th className="select-cell">
+                <input
+                  type="checkbox"
+                  aria-label="Tout sélectionner"
+                  checked={allVisibleSelected}
+                  onChange={toggleSelectAll}
+                  disabled={!filteredMessages.length}
+                />
+              </th>
+              <th>De</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th>
+            </tr>
           </thead>
           <tbody>
             {!filteredMessages.length ? (
-              <tr><td colSpan={5} className="empty-cell">
+              <tr><td colSpan={6} className="empty-cell">
                 {warning ? (
                   <div className="inbox-empty-state">
                     <strong>Cette boîte n’est pas encore connectée à Gmail.</strong>
@@ -184,7 +279,15 @@ export default function InboxPage() {
                   ? 'Relire le brouillon'
                   : msg.run_id ? 'Détail de l’exécution' : 'aucun';
                 return (
-                  <tr key={msg.id}>
+                  <tr key={msg.id} className={selectedIds.has(msg.id) ? 'row-selected' : undefined}>
+                    <td className="select-cell">
+                      <input
+                        type="checkbox"
+                        aria-label={`Sélectionner ${msg.subject || 'ce message'}`}
+                        checked={selectedIds.has(msg.id)}
+                        onChange={() => toggleSelected(msg.id)}
+                      />
+                    </td>
                     <td>{msg.from || 'Inconnu'}</td>
                     <td>{msg.unread ? <strong>{msg.subject || '(sans objet)'}</strong> : (msg.subject || '(sans objet)')}<div className="muted">{msg.snippet || ''}</div></td>
                     <td>{msg.date || ''}</td>
