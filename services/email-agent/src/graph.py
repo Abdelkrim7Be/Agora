@@ -414,8 +414,17 @@ def _category_policy_command(
         author, to, subject, email_thread = parse_email(state["email_input"])
         atts = state["email_input"].get("attachments") or []
         email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
-        if remaining_vars:
-            print(f"📧 Category '{cat}': template has unresolved vars {remaining_vars}, routing to LLM for finalization")
+        category_obj = next((c for c in categories_config.categories if c.name == cat), None)
+        # 'adapt' asks the model to rework the template against this specific
+        # message. Without it a fully-resolved template goes out verbatim, which
+        # is how an invoice reminder quoting its number, amount and due date got
+        # a reply asking for the number, amount and due date.
+        adapt_to_message = category_obj is not None and category_obj.template_mode == "adapt"
+        if remaining_vars or adapt_to_message:
+            reason = (
+                f"unresolved vars {remaining_vars}" if remaining_vars else "template_mode=adapt"
+            )
+            print(f"📧 Category '{cat}': {reason}, routing to LLM for finalization")
             return Command(
                 goto="llm_call",
                 update={
@@ -429,9 +438,18 @@ def _category_policy_command(
                             f"To: {template_tool_call['args']['to']}\n"
                             f"Subject: {template_tool_call['args']['subject']}\n"
                             f"Content: {content}\n\n"
-                            f"Fill in the unresolved placeholders "
-                            f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
-                            f"from the email context below, then call write_email. "
+                            + (
+                                f"Fill in the unresolved placeholders "
+                                f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
+                                f"from the email context below, then call write_email. "
+                                if remaining_vars
+                                else (
+                                    "Adapt it to what this message actually says: keep the "
+                                    "template's structure and tone, drop anything it asks for "
+                                    "that the sender already provided, and answer the specific "
+                                    "point raised. Then call write_email. "
+                                )
+                            ) +
                             f"Keep the template's closing (\"{content.rstrip().splitlines()[-1] if content.strip() else ''}\") "
                             f"as the last line of the body - do not add a name, title, or company "
                             f"after it; the signature is appended automatically.\n\n{email_markdown}"
@@ -1378,29 +1396,6 @@ def _feedback_from_messages(messages) -> str:
     return ""
 
 
-def _fast_redraft(previous: dict, feedback: str) -> dict | None:
-    lowered = (feedback or "").lower()
-    short_cues = ("plus court", "plus direct", "court", "direct", "shorter", "concise")
-    if not any(cue in lowered for cue in short_cues):
-        return None
-    body = _strip_content_headers(strip_signature(previous.get("content", ""))).strip()
-    if not body:
-        return None
-    lines = [line.strip() for line in body.splitlines() if line.strip()]
-    greeting = next((line for line in lines if line.lower().startswith(("bonjour", "bonsoir", "hello", "hi ", "dear "))), "Bonjour,")
-    questions = [line for line in lines if "?" in line]
-    final_question = questions[-1] if questions else "Pouvez-vous confirmer le contexte exact et l'echeance souhaitee ?"
-    if "une seule question" in lowered or "single question" in lowered:
-        body_lines = [greeting, "Merci pour votre message. Nous avons bien recu votre demande.", final_question]
-    else:
-        body_lines = [greeting, "Merci pour votre message. Nous revenons vers vous rapidement avec les elements attendus.", final_question]
-    return _normalize_recipient_args({
-        "to": previous.get("to", ""),
-        "subject": previous.get("subject", ""),
-        "content": "\n\n".join(body_lines),
-    })
-
-
 def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
     """Revise the pending draft with one structured LLM call (no tool-choice loop).
 
@@ -1426,10 +1421,6 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
         agent_config.agent.writing_style_default,
     )
     run_id = _run_id_from_config(config)
-    fast_args = _fast_redraft(previous, feedback)
-    if fast_args is not None:
-        print("✏️ Redraft satisfied by fast deterministic edit path")
-        return {"messages": [_synthetic_write_email_message(fast_args)]}
 
     # Strip any already-appended signature before the model ever sees the
     # body: otherwise it tends to "helpfully" add its own closing line on
