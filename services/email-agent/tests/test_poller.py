@@ -1307,3 +1307,137 @@ async def test_security_hold_retry_updates_the_same_run(mocked_gmail, monkeypatc
 
     held = [r for r in list_runs(limit=50) if r.get("email_id") == "m_held"]
     assert len(held) == 1
+
+
+async def test_a_draft_is_withdrawn_when_the_deep_classifier_says_hostile(
+    mocked_gmail, fake_llms, monkeypatch
+):
+    # The sanitize fast path clears content that carries no heuristic keyword, so
+    # a carefully worded injection reaches the model unclassified. The full
+    # classifier runs on the reply it produced, before that reply is recorded as
+    # something a human can approve.
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m_subtle", "Question", "Could you handle the transfer as discussed?")])
+    monkeypatch.setattr(poller.settings, "security_enabled", True)
+    monkeypatch.setattr(poller.settings, "security_deep_check_drafts", True)
+    import src.graph as g
+
+    monkeypatch.setattr(
+        g, "authorize_action",
+        lambda *a, **kw: {"decision": "hitl", "reason": "test"},
+    )
+
+    async def _clean(**kwargs):
+        return {
+            "injection_detected": False,
+            "classifier_unavailable": False,
+            "classification": "benign",
+            "cleaned_text": kwargs.get("content", ""),
+            "source_trust": "UNTRUSTED",
+            "fields": {},
+        }
+
+    async def _hostile(content, known_internal=False):
+        return {"trust": "HOSTILE", "reasons": ["classifier"], "classifier_unavailable": False}
+
+    monkeypatch.setattr(poller, "sanitize_email", _clean)
+    monkeypatch.setattr(poller, "classify_content", _hostile)
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, "c1"),
+        ],
+    )
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert [status for _id, status, _run in outcomes] == ["security_hold"]
+    assert marked == []  # stays unread and visible
+
+    from src.run_registry import list_runs
+
+    record = next(r for r in list_runs(limit=50) if r.get("email_id") == "m_subtle")
+    # Nothing approvable was ever recorded.
+    assert not record.get("pending_action")
+
+
+async def test_a_clean_deep_verdict_leaves_the_draft_alone(mocked_gmail, fake_llms, monkeypatch):
+    set_unread, _marked = mocked_gmail
+    set_unread([_raw_message("m_fine", "Devis", "Bonjour, un devis SVP")])
+    monkeypatch.setattr(poller.settings, "security_enabled", True)
+    monkeypatch.setattr(poller.settings, "security_deep_check_drafts", True)
+    import src.graph as g
+
+    monkeypatch.setattr(
+        g, "authorize_action",
+        lambda *a, **kw: {"decision": "hitl", "reason": "test"},
+    )
+
+    async def _clean(**kwargs):
+        return {
+            "injection_detected": False,
+            "classifier_unavailable": False,
+            "classification": "benign",
+            "cleaned_text": kwargs.get("content", ""),
+            "source_trust": "UNTRUSTED",
+            "fields": {},
+        }
+
+    async def _untrusted(content, known_internal=False):
+        return {"trust": "UNTRUSTED", "reasons": [], "classifier_unavailable": False}
+
+    monkeypatch.setattr(poller, "sanitize_email", _clean)
+    monkeypatch.setattr(poller, "classify_content", _untrusted)
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, "c1"),
+        ],
+    )
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert [status for _id, status, _run in outcomes] == ["pending_approval"]
+
+
+async def test_the_deep_check_can_be_turned_off(mocked_gmail, fake_llms, monkeypatch):
+    set_unread, _marked = mocked_gmail
+    set_unread([_raw_message("m_off", "Devis", "Bonjour")])
+    monkeypatch.setattr(poller.settings, "security_enabled", True)
+    monkeypatch.setattr(poller.settings, "security_deep_check_drafts", False)
+    import src.graph as g
+
+    monkeypatch.setattr(
+        g, "authorize_action",
+        lambda *a, **kw: {"decision": "hitl", "reason": "test"},
+    )
+
+    async def _clean(**kwargs):
+        return {
+            "injection_detected": False,
+            "classifier_unavailable": False,
+            "classification": "benign",
+            "cleaned_text": kwargs.get("content", ""),
+            "source_trust": "UNTRUSTED",
+            "fields": {},
+        }
+
+    called: list[str] = []
+
+    async def _tracker(content, known_internal=False):
+        called.append(content)
+        return {"trust": "HOSTILE", "reasons": [], "classifier_unavailable": False}
+
+    monkeypatch.setattr(poller, "sanitize_email", _clean)
+    monkeypatch.setattr(poller, "classify_content", _tracker)
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call("write_email", {"to": "a@b.com", "subject": "Re", "content": "Hi"}, "c1"),
+        ],
+    )
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert called == []
+    assert [status for _id, status, _run in outcomes] == ["pending_approval"]
