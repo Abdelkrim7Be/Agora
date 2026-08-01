@@ -164,6 +164,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/agent/segments/*").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/segments/*").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/drafts").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                // Junk-gate settings: readable by anyone who can see the workspace,
+                // editable by the instance owner, same shape as the rules surface.
+                .requestMatchers(HttpMethod.GET, "/api/agent/junk").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/junk").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/rules").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/rules").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/rules/suggestions").hasAnyRole("OWNER", "VIEWER", "ADMIN")
