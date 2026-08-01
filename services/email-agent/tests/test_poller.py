@@ -1257,3 +1257,20 @@ async def test_flagged_email_never_reaches_the_model_through_a_category_match(
 
     assert called == []
     assert [status for _id, status, _run in outcomes] == ["security_hold"]
+
+
+async def test_empty_history_window_still_reconciles_unread_mail(mocked_gmail, fake_llms, monkeypatch):
+    # "Nothing changed since the baseline" is not "nothing is waiting": mail that
+    # became unread while the baseline advanced would otherwise never be seen
+    # again by the incremental path.
+    set_unread, marked = mocked_gmail
+    set_unread([_raw_message("m_missed", "FYI", "hello")])
+    monkeypatch.setattr(poller, "get_last_history_id", lambda *a, **kw: "1000")
+    monkeypatch.setattr(poller, "fetch_history_message_refs", lambda *a, **kw: [])
+    monkeypatch.setattr(poller, "current_history_id", lambda resource=None: "1001")
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert [msg_id for msg_id, _status, _run in outcomes] == ["m_missed"]
+    assert marked == ["m_missed"]
