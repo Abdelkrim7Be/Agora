@@ -3799,3 +3799,52 @@ h1 { font: 700 26px/32px var(--font-heading); }
   border-top: 2px solid var(--border, rgba(255, 255, 255, 0.12));
   font-size: 1.05rem;
 }
+
+/* Junk-gate settings. */
+.junk-toggles {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.junk-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.junk-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.junk-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.junk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.junk-list textarea {
+  width: 100%;
+  font-family: inherit;
+}
+
+/* Bulk selection in the messages table. */
+.data-table .select-cell {
+  width: 36px;
+  text-align: center;
+}
+
+.data-table tr.row-selected {
+  background: color-mix(in srgb, var(--accent, #4f7cff) 12%, transparent);
+}
