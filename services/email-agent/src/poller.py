@@ -736,6 +736,15 @@ async def _discover_unread_refs(
         next_baseline = ""
     if refs is None:
         refs = fetch_unread(max_results, resource=resource)
+    elif not refs:
+        # An empty history window means "nothing changed since the baseline",
+        # which is not the same as "nothing is waiting". Anything that became
+        # unread while the baseline was being advanced — or was restored to the
+        # inbox out of spam, or had its run cleared by hand — is invisible to the
+        # diff forever after. This mailbox sat on unread mail for hours that way.
+        # A full unread list is one call, and the run registry dedups whatever it
+        # returns, so reconcile whenever the incremental path comes back empty.
+        refs = fetch_unread(max_results, resource=resource)
 
     # history.list reports one record per change, so the same message shows up
     # several times in a window where it was e.g. delivered and then labelled.
