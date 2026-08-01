@@ -1214,6 +1214,79 @@ async def retry_instance_setup_step(step_key: str, request: Request, background_
     return {"agent_instance_id": current_agent_instance_id(), **result}
 
 
+class SetupCategoryInput(BaseModel):
+    """One category as the owner describes it during onboarding."""
+
+    name: str
+    description: str | None = None
+    policy: str = "auto_draft"
+    priority: str = "normal"
+    keywords: list[str] = Field(default_factory=list)
+
+
+class SetupCategoriesInput(BaseModel):
+    categories: list[SetupCategoryInput]
+
+
+@app.post("/instance-setup/categories")
+async def seed_instance_categories(request: Request, body: SetupCategoriesInput) -> dict:
+    """Record the owner's own categories before the mailbox is read.
+
+    Onboarding used to invent a default set (clients / externe / interne) and
+    only then look at the mail, so the first classification every owner saw was
+    somebody else's taxonomy. Collecting the real one first means the very first
+    pass over the mailbox files messages into categories the owner recognises —
+    "banque", "fournisseurs", whatever the business actually runs on.
+
+    Names are the workflow keys, so they are slugged; the label the owner typed
+    is kept as the display name. A category with no keywords still matches
+    nothing on its own — it becomes a target for manual filing on the triage
+    screen, which is the point of asking before the fetch rather than after.
+    """
+    _require_instance_role(request, "owner")
+    import re as _re
+
+    from src.automation import RuleWhen
+    from src.categories import Category, dump_categories
+
+    seen: set[str] = set()
+    categories: list[Category] = []
+    for entry in body.categories:
+        label = entry.name.strip()
+        if not label:
+            continue
+        slug = _re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        keywords = [k.strip() for k in entry.keywords if k.strip()]
+        categories.append(
+            Category(
+                name=slug,
+                display_name=label,
+                description=entry.description or None,
+                enabled=True,
+                priority=entry.priority,
+                policy=entry.policy,
+                when=RuleWhen(subject_contains=keywords, body_contains=keywords),
+            )
+        )
+
+    if not categories:
+        raise HTTPException(status_code=422, detail="At least one category is required")
+
+    _categories_yaml, cfg = _current_categories()
+    cfg.enabled = True
+    cfg.categories = categories
+    payload = dump_categories(cfg)
+    write_instance_text("categories", payload, DEFAULT_CATEGORIES_PATH)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "categories_yaml": payload,
+        "parsed": cfg.model_dump(),
+    }
+
+
 @app.post("/instance-setup/skip")
 async def skip_instance_setup(request: Request) -> dict:
     _require_instance_role(request, "owner")

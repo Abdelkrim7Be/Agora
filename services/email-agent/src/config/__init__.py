@@ -173,7 +173,13 @@ class Settings:
 
     # Instance onboarding pipeline (Phase 6 delta — see instance_setup.py).
     setup_enabled: bool = _env_bool("AGENT_SETUP_PIPELINE_ENABLED", "true")
-    setup_recent_limit: int = int(os.getenv("AGENT_SETUP_RECENT_LIMIT", "50"))
+    # Onboarding reads the mailbox once and everything downstream — contacts,
+    # categories, style, persona, the first drafts — is built from that single
+    # sample. 50 was too thin a slice to characterise a real mailbox, so the
+    # workspace opened on a directory and a style profile drawn from a fortnight
+    # of mail. Fetching headers for 200 is a handful of batched calls; only the
+    # backlog triage below spends model time per message.
+    setup_recent_limit: int = int(os.getenv("AGENT_SETUP_RECENT_LIMIT", "200"))
     setup_backlog_limit: int = int(os.getenv("AGENT_SETUP_BACKLOG_LIMIT", "20"))
     setup_sent_sample: int = int(os.getenv("AGENT_SETUP_SENT_SAMPLE", "50"))
     setup_llm_step_timeout_seconds: float = float(os.getenv("AGENT_SETUP_LLM_STEP_TIMEOUT_SECONDS", "120"))
