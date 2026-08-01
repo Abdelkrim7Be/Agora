@@ -9,9 +9,9 @@ from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
     current_agent_instance_id,
-    current_user_id,
     normalize_agent_instance_id,
     normalize_user_id,
+    user_context,
 )
 
 DEFAULT_SYNC_STATUS_PATH = SERVICE_ROOT / "logs" / "gmail_sync_status.json"
@@ -150,8 +150,15 @@ def _pg_update(user_id: str, instance_id: str, patch: dict) -> None:
 # --- Public API ---
 
 def _resolve(user_id: str | None, instance_id: str | None) -> tuple[str, str]:
+    """Connection status describes the mailbox, so it is stored per instance.
+
+    Keying it on the acting user split one connection into a private record per
+    delegate: an approver opening the workspace saw "disconnected" for a mailbox
+    the owner had connected, and each of them drove their own reconnect. The
+    identity is a constant for the same reason the Gmail baseline is one.
+    """
     return (
-        normalize_user_id(user_id or current_user_id()),
+        normalize_user_id(settings.default_user_id),
         normalize_agent_instance_id(instance_id or current_agent_instance_id()),
     )
 
@@ -162,7 +169,8 @@ def get_status(
 ) -> dict:
     uid, iid = _resolve(user_id, agent_instance_id)
     if selected_run_registry_backend() == "postgres":
-        raw = _pg_get(uid, iid)
+        with user_context(uid):
+            raw = _pg_get(uid, iid)
     else:
         raw = _json_get(uid, iid)
     return {
@@ -223,7 +231,8 @@ def record_success(
     if watch_expires_at is not None:
         patch["watch_expires_at"] = watch_expires_at
     if selected_run_registry_backend() == "postgres":
-        _pg_update(uid, iid, patch)
+        with user_context(uid):
+            _pg_update(uid, iid, patch)
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -269,7 +278,8 @@ def record_failure(
         "last_error": public_error_message(error),
     }
     if selected_run_registry_backend() == "postgres":
-        _pg_update(uid, iid, patch)
+        with user_context(uid):
+            _pg_update(uid, iid, patch)
     else:
         _json_update(uid, iid, patch)
 
@@ -282,6 +292,7 @@ def set_paused(
     uid, iid = _resolve(user_id, agent_instance_id)
     patch = {"paused": paused}
     if selected_run_registry_backend() == "postgres":
-        _pg_update(uid, iid, patch)
+        with user_context(uid):
+            _pg_update(uid, iid, patch)
     else:
         _json_update(uid, iid, patch)
