@@ -12,9 +12,15 @@ from src.policy import PolicyConfig, load_policy
 _ADDR_RE = re.compile(r"[\w.+-]+@[\w.-]+")
 
 
-def _extract_domains(to: str) -> list[str]:
-    """Return lowercased domains from a comma-separated to field. Empty list if unparseable."""
-    addresses = _ADDR_RE.findall(to)
+def _recipient_text(to) -> str:
+    if isinstance(to, list):
+        return ", ".join(str(item) for item in to if item)
+    return str(to or "")
+
+
+def _extract_domains(to) -> list[str]:
+    """Return lowercased domains from a string/list recipient field."""
+    addresses = _ADDR_RE.findall(_recipient_text(to))
     return [addr.split("@")[1].lower() for addr in addresses]
 
 
@@ -27,12 +33,13 @@ def _domain_matches(domain: str, entries) -> bool:
     return any(domain == e or domain.endswith("." + e) for e in entries)
 
 
-def _check_recipients(to: str, recipients) -> str | None:
+def _check_recipients(to, recipients) -> str | None:
     """Return a deny-reason string if the recipient fails policy, else None."""
-    if not to or not to.strip():
+    normalized_to = _recipient_text(to).strip()
+    if not normalized_to:
         return "recipient 'to' field is empty"
 
-    domains = _extract_domains(to)
+    domains = _extract_domains(normalized_to)
     if not domains:
         return f"could not parse a valid email address from 'to': {to!r}"
 
