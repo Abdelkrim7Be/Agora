@@ -1,3 +1,12 @@
+# Local dev sends real mail (AGENT_DRY_RUN=false), and the connected test mailbox
+# also holds messages from real third parties. Both processes that can reach the
+# Gmail send API therefore run with an outbound allow list naming the only two
+# mailboxes this environment may ever write to; anything else raises before the
+# message is built. The security service enforces the same pair at policy level
+# (see SECURITY_POLICY_PATH below) — this is the layer underneath it.
+x-outbound-allowlist: &outbound_allowlist
+  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com"
+
 services:
   ollama-init:
     entrypoint: []
@@ -12,6 +21,7 @@ services:
     volumes:
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
     environment:
+      <<: *outbound_allowlist
       AGENT_DRY_RUN: "false"
       AGENT_DEFAULT_SEND_MODE: "live"
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:8081/api/agent/connect/gmail/callback
@@ -19,6 +29,12 @@ services:
       # relative redirect from the OAuth callback just works). Local dev splits
       # them across ports, so the callback needs to know where the web app is.
       AGENT_APP_BASE_URL: http://localhost:5173
+
+  security:
+    volumes:
+      - ../services/security/policy.live-test.yaml:/app/policy.live-test.yaml:ro
+    environment:
+      SECURITY_POLICY_PATH: policy.live-test.yaml
 
   gateway:
     ports:
@@ -44,6 +60,7 @@ services:
     env_file:
       - ../services/email-agent/.env
     environment:
+      <<: *outbound_allowlist
       PYTHONUNBUFFERED: "1"
       DATABASE_URL: postgresql://agora_email_agent:${AGENT_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-agora}
       AGENT_RUN_MIGRATIONS: "false"
