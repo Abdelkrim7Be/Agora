@@ -71,6 +71,16 @@ class Settings:
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
     default_send_mode: str = os.getenv("AGENT_DEFAULT_SEND_MODE", "simulation").strip().lower()
+    # Hard cap on who the agent may ever send real mail to, enforced at the Gmail
+    # send helpers themselves — below the security service, below dry-run, below
+    # any policy or model decision. Empty (the default) means no restriction;
+    # set it when running live tests so an unattended agent cannot reach anyone
+    # outside a known set of mailboxes.
+    outbound_allowlist: frozenset[str] = frozenset(
+        entry.strip().lower()
+        for entry in os.getenv("AGENT_OUTBOUND_ALLOWLIST", "").split(",")
+        if entry.strip()
+    )
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
     # Durable state files — shared by the API and the poller so a paused run started
