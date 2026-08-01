@@ -699,18 +699,23 @@ def test_classify_unchanged_for_existing_fixtures(tmp_path, monkeypatch):
     assert before_rule_match["category"] == "reclamation"
 
 
-def test_directory_contact_matches_before_rules(tmp_path, monkeypatch):
+def test_rules_match_before_the_directory_contact(tmp_path, monkeypatch):
     directory_contact = _directory_contact(email="ana@client.example", category="internal")
     monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [directory_contact])
     path = tmp_path / "categories.yaml"
     path.write_text(CATEGORIES_YAML)
     cfg = load_categories(path)
 
-    result = classify_category({"author": "Client <ana@client.example>", "subject": "urgent issue"}, cfg)
+    # What the message is about wins over who sent it: the 'reclamation' rule
+    # matches this sender domain and subject, so it decides, even though the
+    # directory files this contact under 'internal'. The reverse order meant a
+    # single directory entry swallowed every workflow the owner had configured.
+    claimed = classify_category({"author": "Client <ana@client.example>", "subject": "urgent issue"}, cfg)
+    assert claimed["category"] == "reclamation"
 
-    # Rule matching would have classified this as 'reclamation' (sender_domain
-    # client.example) — the directory contact must win instead.
-    assert result["category"] == "internal"
+    # With nothing for a rule to match on, the contact's category still applies.
+    unclaimed = classify_category({"author": "Client <ana@client.example>", "subject": "bonjour"}, cfg)
+    assert unclaimed["category"] == "internal"
 
 
 def test_legacy_contact_still_matches_when_absent_from_directory(tmp_path, monkeypatch):
@@ -724,15 +729,18 @@ def test_legacy_contact_still_matches_when_absent_from_directory(tmp_path, monke
 
 
 def test_directory_wins_over_legacy_for_same_email(tmp_path, monkeypatch):
-    directory_contact = _directory_contact(email="vip@company.example", category="reclamation", priority="low")
+    # Sender domain deliberately outside every rule's `when`, so the comparison
+    # is purely directory-contact vs legacy-contact.
+    legacy_yaml = CATEGORIES_YAML + "\n  - email: vip@partner.example\n    category: internal\n"
+    directory_contact = _directory_contact(email="vip@partner.example", category="reclamation", priority="low")
     monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [directory_contact])
     path = tmp_path / "categories.yaml"
-    path.write_text(CATEGORIES_YAML)
+    path.write_text(legacy_yaml)
     cfg = load_categories(path)
 
-    result = classify_category({"author": "VIP <vip@company.example>", "subject": "hello"}, cfg)
+    result = classify_category({"author": "VIP <vip@partner.example>", "subject": "hello"}, cfg)
 
-    # categories.yaml's legacy contact says 'internal'; the directory says 'reclamation'.
+    # The legacy contact says 'internal'; the directory says 'reclamation'.
     assert result["category"] == "reclamation"
     assert result["priority"] == "low"
 
@@ -760,9 +768,10 @@ def test_domain_only_legacy_contact_matches_by_domain(tmp_path, monkeypatch):
     path.write_text(legacy_yaml)
     cfg = load_categories(path)
 
-    # No exact-email contact for this sender, but the domain-only contact matches,
-    # and would otherwise be shadowed by the 'reclamation' rule for this domain.
-    result = classify_category({"author": "Someone <other@client.example>", "subject": "urgent issue"}, cfg)
+    # No exact-email contact for this sender, and no rule claims the message
+    # (the 'reclamation' rule needs 'urgent' in the subject too), so the
+    # domain-only contact decides.
+    result = classify_category({"author": "Someone <other@client.example>", "subject": "bonjour"}, cfg)
     assert result["category"] == "internal"
 
 
@@ -837,3 +846,61 @@ def test_template_name_placeholder_falls_back_to_polished_greeting():
 
     assert "{{name}}" not in rendered
     assert rendered.startswith("Bonjour,\n")
+
+
+def _config_with_contact_and_rules():
+    from src.categories import CategoriesConfig, Category, Contact
+    from src.automation import RuleWhen
+
+    return CategoriesConfig(
+        enabled=True,
+        contacts=[
+            Contact(email="client@example.com", category="finance_requests", priority="urgent")
+        ],
+        categories=[
+            Category(
+                name="finance_requests",
+                display_name="Finance",
+                policy="auto_draft",
+                priority="normal",
+            ),
+            Category(
+                name="reclamation",
+                display_name="Réclamation",
+                policy="notify",
+                priority="normal",
+                when=RuleWhen(subject_contains=["reclamation"]),
+            ),
+        ],
+    )
+
+
+def test_subject_rule_beats_the_sender_category():
+    # One directory entry used to file every message from that sender under its
+    # own category, so a complaint from a known client never reached the
+    # complaint workflow the owner had configured.
+    result = classify_category(
+        {"author": "client@example.com", "subject": "Reclamation commande 88213", "email_thread": ""},
+        _config_with_contact_and_rules(),
+    )
+    assert result["category"] == "reclamation"
+    assert result["policy"] == "notify"
+
+
+def test_sender_category_still_applies_when_no_rule_matches():
+    result = classify_category(
+        {"author": "client@example.com", "subject": "Question diverse", "email_thread": ""},
+        _config_with_contact_and_rules(),
+    )
+    assert result["category"] == "finance_requests"
+
+
+def test_contact_priority_still_overrides_on_a_rule_match():
+    # The contact keeps saying how urgent this sender is, even when the subject
+    # decides which workflow handles the message.
+    result = classify_category(
+        {"author": "client@example.com", "subject": "Reclamation urgente", "email_thread": ""},
+        _config_with_contact_and_rules(),
+    )
+    assert result["category"] == "reclamation"
+    assert result["priority"] == "urgent"

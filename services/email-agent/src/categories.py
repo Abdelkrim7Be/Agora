@@ -39,6 +39,14 @@ class Category(BaseModel):
     # workflows whose input genuinely is machine-generated — invoices emitted by
     # a billing system, ticket notifications from a helpdesk.
     accepts_automated: bool = False
+    # How the category's template is used when the policy is auto_draft.
+    #   strict — send the rendered template as-is when every variable resolved.
+    #            Deterministic and free, right for a pure acknowledgement.
+    #   adapt  — always hand the template to the model as a starting point, with
+    #            the message in front of it. Costs a model call, but the reply
+    #            answers what was actually written instead of asking for details
+    #            the sender already gave.
+    template_mode: Literal["strict", "adapt"] = "strict"
     enabled: bool = True
     priority: Literal["urgent", "normal", "low"] = "normal"
     when: RuleWhen = Field(default_factory=RuleWhen)
@@ -209,24 +217,40 @@ def classify_category(email_input: dict, config: CategoriesConfig, agent_instanc
             "contact": contact,
         }
 
-    # Precedence 1 & 2: exact email match, directory before legacy.
+    # The contact whose category applies to this sender, if any. Looked up first
+    # but applied last: it says who wrote, not what they wrote about.
+    matched_contact = None
     for contact in (*directory_contacts, *legacy_contacts):
         if contact.email and _email_address(contact.email) == sender_address and contact.category in category_by_name:
-            return _result(contact, category_by_name[contact.category])
+            matched_contact = contact
+            break
+    if matched_contact is None:
+        # Domain match when email is unset, directory before legacy (directory
+        # contacts never reach here — see contact_directory_for_matching).
+        for contact in (*directory_contacts, *legacy_contacts):
+            if (
+                not contact.email
+                and contact.domain
+                and contact.domain.lower() == sender_domain
+                and contact.category in category_by_name
+            ):
+                matched_contact = contact
+                break
 
-    # Precedence 3 & 4: domain match when email is unset, directory before legacy
-    # (directory contacts never reach here — see contact_directory_for_matching).
-    for contact in (*directory_contacts, *legacy_contacts):
-        if (
-            not contact.email
-            and contact.domain
-            and contact.domain.lower() == sender_domain
-            and contact.category in category_by_name
-        ):
-            return _result(contact, category_by_name[contact.category])
-
+    # What the message is about beats who sent it. The sender's category used to
+    # win outright, so a single directory entry filed every message from that
+    # address under one category — a complaint, an internship application and an
+    # invoice reminder all landed in the same workflow, and the subject rules the
+    # owner had written were never consulted. A contact category is the fallback
+    # for mail no rule claims, and still supplies the priority override.
     for category in active_categories:
         if matches_when(category.when, email_input):
+            if matched_contact is not None:
+                return {
+                    **_result(matched_contact, category),
+                    "category": category.name,
+                    "category_display_name": category.display_name,
+                }
             return {
                 "category": category.name,
                 "category_display_name": category.display_name,
@@ -239,6 +263,10 @@ def classify_category(email_input: dict, config: CategoriesConfig, agent_instanc
                 "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
                 "contact": None,
             }
+
+    if matched_contact is not None:
+        return _result(matched_contact, category_by_name[matched_contact.category])
+
     return {"category": None, "priority": "normal", "template": None, "policy": None, "contact": None}
 
 
@@ -263,7 +291,11 @@ def render_template_text(text: str, email_input: dict, contact: "Contact | None"
     rendered = text
     for key, value in values.items():
         rendered = rendered.replace("{{" + key + "}}", str(value))
-    rendered = re.sub(r"(?m)^Bonjour\s+$", "Bonjour,", rendered)
+    # A variable that resolved to nothing leaves its punctuation stranded:
+    # "Bonjour {{prenom}}," renders as "Bonjour ," for a contact with no name.
+    rendered = re.sub(r"[ \t]+([,.])", r"\1", rendered)
+    # Same case without punctuation: a greeting line reduced to just the word.
+    rendered = re.sub(r"(?m)^([A-Za-zÀ-ÿ]+)[ \t]+$", r"\1,", rendered)
     return rendered
 
 
