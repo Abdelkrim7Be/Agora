@@ -73,43 +73,51 @@ export default function PermissionsPage() {
         <div className="notice">
           Une délégation donne à un utilisateur un rôle sur cette instance uniquement : <strong>owner</strong> (configurer + approuver), <strong>approver</strong> (relire/envoyer les brouillons), <strong>viewer</strong> (consulter). Le rôle JWT global s'applique à toute la plateforme ; les délégations l'étendent pour des espaces précis.
         </div>
-        {grants.length ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Utilisateur</th><th>Rôle</th><th>Accordé par</th><th>Accordé le</th><th></th></tr></thead>
-              <tbody>
-                {grants.map((g) => (
-                  <tr key={g.user_id}>
-                    <td>{g.user_id}</td>
-                    <td><span className="status-pill">{g.role}</span></td>
-                    <td>{g.granted_by || '—'}</td>
-                    <td>{g.granted_at ? formatDateTimeFr(g.granted_at) : '—'}</td>
-                    <td><button className="danger" type="button" onClick={() => handleRemove(g.user_id)}>Révoquer</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="notice">Aucune délégation explicite pour cette instance. Les utilisateurs y accèdent via leur rôle JWT global uniquement.</div>
-        )}
-        <form className="toolbar" style={{ marginTop: '1rem' }} onSubmit={handleAdd}>
-          <select aria-label="Utilisateur à autoriser" style={{ flex: 1 }} value={userId} onChange={(e) => setUserId(e.target.value)}>
-            <option value="">Choisir un utilisateur</option>
-            {activeUsers.map((user) => {
-              const details = [user.role, user.department].filter(Boolean).join(' / ');
-              return <option key={user.username} value={user.username}>{user.username}{details ? ` (${details})` : ''}</option>;
-            })}
-          </select>
-          <select aria-label="Rôle sur l'instance" value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="approver">approver</option>
-            <option value="viewer">viewer</option>
-            <option value="owner">owner</option>
-          </select>
-          <button className="primary" type="submit" disabled={!userId}>
-            <span className="material-symbols-outlined" aria-hidden="true">add</span><span>Accorder</span>
-          </button>
-        </form>
+        <div className="grants-panel">
+          {grants.length ? (
+            <div className="rule-list grants-list">
+              {grants.map((g) => (
+                <div className="directory-row" key={g.user_id}>
+                  <div className="directory-icon"><span className="material-symbols-outlined" aria-hidden="true">person</span></div>
+                  <div className="directory-main">
+                    <strong>{g.user_id}</strong>
+                    <div className="mini-chip-row">
+                      <span className="status-pill">{g.role}</span>
+                      <span className="mini-chip">accordé par {g.granted_by || '—'}</span>
+                      <span className="mini-chip">{g.granted_at ? formatDateTimeFr(g.granted_at) : '—'}</span>
+                    </div>
+                  </div>
+                  <div className="directory-actions">
+                    <button className="danger" type="button" onClick={() => handleRemove(g.user_id)}>
+                      <span className="material-symbols-outlined" aria-hidden="true">remove_moderator</span><span>Révoquer</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty grants-empty">Aucune délégation explicite pour cette instance. Les utilisateurs y accèdent via leur rôle JWT global uniquement.</div>
+          )}
+          <form className="grants-add-row" onSubmit={handleAdd}>
+            <select className="grants-user-select" aria-label="Utilisateur à autoriser" value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">Choisir un utilisateur</option>
+              {activeUsers.map((user) => {
+                const details = [user.role, user.department].filter(Boolean).join(' / ');
+                return <option key={user.username} value={user.username}>{user.username}{details ? ` (${details})` : ''}</option>;
+              })}
+            </select>
+            <select className="grants-role-select" aria-label="Rôle sur l'instance" value={role} onChange={(e) => setRole(e.target.value)}>
+              <option value="approver">approver</option>
+              <option value="viewer">viewer</option>
+              <option value="owner">owner</option>
+            </select>
+            <div className="directory-actions">
+              <button className="primary" type="submit" disabled={!userId}>
+                <span className="material-symbols-outlined" aria-hidden="true">add</span><span>Accorder</span>
+              </button>
+            </div>
+          </form>
+        </div>
       </Card>
     </>
   );

@@ -28,6 +28,15 @@ const STATUS_CLASS = {
   abandoned: 'error',
 };
 
+function formatElapsed(startedAt) {
+  if (!startedAt) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${minutes} min ${rest} s`;
+}
+
 function detailSummary(step) {
   if (!step.detail) return null;
   const d = step.detail;
@@ -57,6 +66,9 @@ export function SetupProgress({ setup, onRetryStep, canManage }) {
             </span>
             <div className="setup-step-body">
               <strong>{STEP_LABELS[step.step_key] || step.step_key}</strong>
+              {step.status === 'running' && step.started_at ? (
+                <span className="setup-step-detail">En cours depuis {formatElapsed(step.started_at)}</span>
+              ) : null}
               {detailSummary(step) ? <span className="setup-step-detail">{detailSummary(step)}</span> : null}
               {step.status === 'failed' && step.error ? <span className="setup-step-error">{step.error}</span> : null}
             </div>

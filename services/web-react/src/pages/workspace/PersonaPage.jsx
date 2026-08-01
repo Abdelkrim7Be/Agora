@@ -10,6 +10,7 @@ import {
   useSuggestPersona,
   useConfigQuery,
   useSaveConfig,
+  useInstanceSetupQuery,
 } from '../../api/queries';
 
 const EMPTY_PERSONA = {
@@ -90,7 +91,9 @@ export default function PersonaPage() {
   const suggestPersona = useSuggestPersona();
   const configQuery = useConfigQuery(showAdvanced);
   const saveConfig = useSaveConfig();
+  const setupQuery = useInstanceSetupQuery();
   const announcedError = useRef(null);
+  const seededSuggestionRef = useRef(false);
 
   useEffect(() => {
     if (!query.data) return;
@@ -113,6 +116,26 @@ export default function PersonaPage() {
     announcedError.current = query.error.message;
     setStatus(`Impossible de charger le persona : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The onboarding pipeline already runs suggest_persona and computes a real
+  // suggestion, but nothing ever surfaced it — it just sat in the setup
+  // record while this page's own "Analyser" button re-ran the same analysis
+  // from scratch. Seed it once, only while the persona is still genuinely
+  // empty and the user hasn't triggered their own analysis this session.
+  useEffect(() => {
+    if (seededSuggestionRef.current || suggestion || !query.data) return;
+    const p = query.data;
+    const isEmpty = !p.identite?.prenom && !p.identite?.nom && !p.identite?.fonction
+      && !p.identite?.entreprise && !p.mission && !(p.perimetre?.repond_a?.length);
+    if (!isEmpty) return;
+    const step = (setupQuery.data?.steps || []).find((s) => s.step_key === 'suggest_persona');
+    const onboardingSuggestion = step?.detail?.suggestion;
+    if (!onboardingSuggestion) return;
+    seededSuggestionRef.current = true;
+    setSuggestion(onboardingSuggestion);
+    setSuggestionChecks(Object.fromEntries(suggestionRows(onboardingSuggestion).map((row) => [row.field, true])));
+    setStatus('Suggestion issue de la configuration initiale — validez les champs ci-dessous.', 'ok');
+  }, [query.data, setupQuery.data, suggestion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async () => {
     try {

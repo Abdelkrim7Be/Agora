@@ -101,10 +101,14 @@ export default function MemoryPage() {
   };
 
   const summary = summaryQuery.data || {};
+  const learnedCount = MEMORY_CARDS.reduce((count, card) => count + (summary[card.kind] || []).length, 0);
 
   return (
     <>
       <PageHeading view="memory" />
+      {summaryQuery.data && learnedCount === 0 ? (
+        <div className="notice"><strong>Mémoire vide :</strong> aucun apprentissage personnalisé n a encore été extrait de validations, corrections ou e-mails envoyés. Les brouillons utilisent encore la configuration par défaut et les informations de démarrage.</div>
+      ) : null}
       <div className="toolbar">
         <button type="button" onClick={handleReload}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger la mémoire</span>

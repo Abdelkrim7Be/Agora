@@ -197,6 +197,7 @@ export default function CampaignsPage() {
   return (
     <>
       <PageHeading view="campaigns" />
+      <div className="notice"><strong>Campagne :</strong> envoi sortant groupé. Vous choisissez un segment de contacts, un modèle, puis la campagne attend une approbation humaine avant envoi. La planification horaire automatique n est pas encore active dans cette vue.</div>
       <div className="campaigns-grid">
         <Card>
           <div className="card-header">
@@ -220,7 +221,7 @@ export default function CampaignsPage() {
             </label>
             <button className="primary" type="submit" disabled={!preparation.ready} title={preparation.reason}>
               <span className="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>
-              <span>Mettre en file pour approbation</span>
+              <span>Préparer pour validation</span>
             </button>
           </form>
           <p className="hint">Le modèle est filtré selon l'audience du segment. Une variable manquante ou une audience incompatible bloque la mise en file.</p>
@@ -324,7 +325,7 @@ export default function CampaignsPage() {
 
       <Card>
         <div className="card-header">
-          <div><h2>Campagnes en attente</h2><p>Vérifiez le nombre de destinataires et le premier email rendu avant d'approuver l'envoi global.</p></div>
+          <div><h2>Campagnes préparées à valider</h2><p>Vérifiez le nombre de destinataires et le premier email rendu avant d'approuver l'envoi global.</p></div>
         </div>
         <div className="campaign-pending">
           {!pending.length ? 'Aucune campagne en attente.' : pending.map((campaign) => {

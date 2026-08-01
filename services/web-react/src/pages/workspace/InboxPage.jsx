@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
-import { useInboxQuery, useInboxAction, useCategorizeContact, useCategoriesQuery } from '../../api/queries';
+import { useInboxQuery, useInboxAction, useCategorizeContact, useCategoriesQuery, useContactsQuery } from '../../api/queries';
 import { parseSenderEmail, senderDomain } from '../../utils/format';
 
 export default function InboxPage() {
@@ -14,15 +14,57 @@ export default function InboxPage() {
   const navigate = useNavigate();
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
+  const [categoryFilter, setCategoryFilter] = useState('all');
 
   const query = useInboxQuery();
   const inboxAction = useInboxAction();
   const categorizeContact = useCategorizeContact();
   const categoriesQuery = useCategoriesQuery();
+  const contactsQuery = useContactsQuery();
   const availableCategories = categoriesQuery.data?.parsed?.categories || [];
 
   const messages = query.data?.messages || [];
   const warning = query.data?.warning;
+
+  const contacts = contactsQuery.data?.contacts || [];
+  const categoryByEmail = useMemo(() => {
+    const exact = new Map();
+    const domains = new Map();
+    contacts.forEach((contact) => {
+      if (!contact.category) return;
+      if (contact.email) exact.set(String(contact.email).toLowerCase(), contact.category);
+      if (contact.domain) domains.set(String(contact.domain).toLowerCase(), contact.category);
+    });
+    return { exact, domains };
+  }, [contacts]);
+
+  const categoryForMessage = (msg) => {
+    const email = parseSenderEmail(msg.from || '').toLowerCase();
+    const domain = senderDomain(msg.from || '').toLowerCase();
+    return categoryByEmail.exact.get(email) || categoryByEmail.domains.get(domain) || msg.category || 'uncategorized';
+  };
+
+  const folderOptions = useMemo(() => {
+    const base = availableCategories.map((category) => ({
+      value: category.name,
+      label: category.display_name || category.name,
+    }));
+    return [{ value: 'all', label: 'Tous' }, ...base, { value: 'uncategorized', label: 'Non classés' }];
+  }, [availableCategories]);
+
+  const folderCounts = useMemo(() => {
+    const counts = { all: messages.length, uncategorized: 0 };
+    availableCategories.forEach((category) => { counts[category.name] = 0; });
+    messages.forEach((msg) => {
+      const category = categoryForMessage(msg);
+      counts[category] = (counts[category] || 0) + 1;
+    });
+    return counts;
+  }, [messages, availableCategories, categoryByEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredMessages = useMemo(() => (
+    categoryFilter === 'all' ? messages : messages.filter((msg) => categoryForMessage(msg) === categoryFilter)
+  ), [messages, categoryFilter, categoryByEmail]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
@@ -103,7 +145,20 @@ export default function InboxPage() {
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
           <span>Actualiser</span>
         </button>
-        <span className="counter">{messages.length} message{messages.length === 1 ? '' : 's'}</span>
+        <span className="counter">{filteredMessages.length}/{messages.length} message{messages.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="folder-tabs" role="tablist" aria-label="Dossiers de catégories">
+        {folderOptions.map((folder) => (
+          <button
+            key={folder.value}
+            type="button"
+            className={categoryFilter === folder.value ? 'active' : ''}
+            onClick={() => setCategoryFilter(folder.value)}
+          >
+            <span>{folder.label}</span>
+            <strong>{folderCounts[folder.value] || 0}</strong>
+          </button>
+        ))}
       </div>
       <div className="table-wrap">
         <table className="data-table">
@@ -111,7 +166,7 @@ export default function InboxPage() {
             <tr><th>De</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {!messages.length ? (
+            {!filteredMessages.length ? (
               <tr><td colSpan={5} className="empty-cell">
                 {warning ? (
                   <div className="inbox-empty-state">
@@ -121,10 +176,10 @@ export default function InboxPage() {
                       <span>Ouvrir la synchronisation Gmail</span>
                     </button>
                   </div>
-                ) : 'Boîte de réception vide.'}
+                ) : (categoryFilter === 'all' ? 'Boîte de réception vide.' : 'Aucun message dans ce dossier.')}
               </td></tr>
             ) : (
-              messages.map((msg) => {
+              filteredMessages.map((msg) => {
                 const verdictLabel = msg.run_status === 'pending_approval'
                   ? 'Relire le brouillon'
                   : msg.run_id ? 'Détail de l’exécution' : 'aucun';

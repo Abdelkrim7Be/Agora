@@ -121,7 +121,7 @@ export default function SegmentsPage() {
         </button>
         <span className="counter">{query.data?.storage || 'contacts-directory'}</span>
       </div>
-      <div className="notice"><strong>Segment = vue :</strong> liste explicite ou filtre dynamique sur les contacts actifs.</div>
+      <div className="notice"><strong>Segment :</strong> groupe réutilisable de contacts. Il peut être une liste fixe d e-mails ou une vue dynamique basée sur audience, tags ou champs métier. Les campagnes utilisent les segments pour choisir leurs destinataires.</div>
       <div className="editor-grid">
         {canManage && (
           <Card className="editor-card">
