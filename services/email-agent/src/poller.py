@@ -481,12 +481,18 @@ async def _process_message_locked(
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
     )
+    # A security_hold is retried below rather than skipped. Its existing run id
+    # is carried into that retry so the attempt updates the run instead of
+    # filing a new one: retrying every cycle otherwise left a fresh row per
+    # cycle for the same message, and one held message became dozens of runs.
+    retry_run_id = ""
     if existing:
         if existing["status"] == "pending_approval":
             return (msg_id, existing["status"], existing["run_id"])
         if existing["status"] != "security_hold":
             mark_as_read(msg_id, resource=resource)
             return (msg_id, "skipped", existing["run_id"])
+        retry_run_id = existing["run_id"]
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
     if message is None:
@@ -621,7 +627,7 @@ async def _process_message_locked(
     if rule_plan:
         email_input = {**email_input, "automation": rule_plan}
 
-    run_id = str(uuid.uuid4())
+    run_id = retry_run_id or str(uuid.uuid4())
     cfg = {"configurable": {"thread_id": run_id}}
 
     result = await graph.ainvoke({"email_input": email_input}, cfg)
