@@ -496,8 +496,18 @@ async def _process_message_locked(
         return (msg_id, "skipped", "")
 
     # Deterministic junk gate: bulk/no-reply mail never reaches the LLM or the
-    # validation box — unless a configured workflow claims it (workflow wins).
-    # Runs before fetch_thread so gated mail costs no extra Gmail call.
+    # validation box. Runs before fetch_thread so gated mail costs no extra
+    # Gmail call.
+    #
+    # Junk is judged on the message, not on who sent it. A category claim used to
+    # skip this check entirely, which meant one directory contact carrying a
+    # category turned every alert digest and newsletter from that address into a
+    # drafted reply — the sender matched, so nothing ever looked at the bulk
+    # headers. Detection now runs first and a category may only rescue automated
+    # mail when it says so explicitly (accepts_automated), which is what a real
+    # automated workflow like machine-issued invoices needs. Everything else
+    # loses to the junk verdict, and the junk allowlist remains the way to
+    # exempt a sender wholesale.
     gate_input = {
         **gmail_to_email_input(message),
         "agent_instance_id": current_agent_instance_id(),
@@ -506,28 +516,44 @@ async def _process_message_locked(
     category_match = classify_category(
         gate_input, categories_config, agent_instance_id=current_agent_instance_id()
     )
-    if not category_match.get("category"):
-        junk, junk_reason = is_junk(
-            gate_input, load_junk(agent_instance_id=current_agent_instance_id())
+    junk, junk_reason = is_junk(
+        gate_input, load_junk(agent_instance_id=current_agent_instance_id())
+    )
+    claimed_category = category_match.get("category")
+    if junk and claimed_category:
+        claiming = next(
+            (c for c in categories_config.categories if c.name == claimed_category),
+            None,
         )
-        if junk:
-            run_id = str(uuid.uuid4())
-            upsert_run(
-                run_id,
-                "completed",
-                email_input={
-                    **gate_input,
-                    "category": "junk_auto",
-                    "category_display_name": "Ignoré automatiquement",
-                    "junk_reason": junk_reason,
-                },
-                classification="ignore",
-                pending_action=None,
-                agent_instance_id=current_agent_instance_id(),
+        if claiming is not None and claiming.accepts_automated:
+            print(
+                f"poller: {msg_id} looks automated ({junk_reason}) but category "
+                f"'{claimed_category}' accepts automated mail; keeping it"
             )
-            mark_as_read(msg_id, resource=resource)
-            print(f"poller: junk-gated {msg_id} ({junk_reason})")
-            return (msg_id, "completed", run_id)
+            junk = False
+        else:
+            print(
+                f"poller: {msg_id} claimed by category '{claimed_category}' but "
+                f"junk-gated anyway ({junk_reason})"
+            )
+    if junk:
+        run_id = str(uuid.uuid4())
+        upsert_run(
+            run_id,
+            "completed",
+            email_input={
+                **gate_input,
+                "category": "junk_auto",
+                "category_display_name": "Ignoré automatiquement",
+                "junk_reason": junk_reason,
+            },
+            classification="ignore",
+            pending_action=None,
+            agent_instance_id=current_agent_instance_id(),
+        )
+        mark_as_read(msg_id, resource=resource)
+        print(f"poller: junk-gated {msg_id} ({junk_reason})")
+        return (msg_id, "completed", run_id)
 
     thread = fetch_thread(message["threadId"], resource=resource)
     email_input = {

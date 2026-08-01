@@ -33,6 +33,12 @@ class Category(BaseModel):
     name: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     description: str | None = None
+    # Whether this category may claim mail the junk gate flagged as automated or
+    # bulk. Off by default: a category matching on a sender must not turn that
+    # sender's newsletters and alert digests into drafted replies. Turn it on for
+    # workflows whose input genuinely is machine-generated — invoices emitted by
+    # a billing system, ticket notifications from a helpdesk.
+    accepts_automated: bool = False
     enabled: bool = True
     priority: Literal["urgent", "normal", "low"] = "normal"
     when: RuleWhen = Field(default_factory=RuleWhen)
