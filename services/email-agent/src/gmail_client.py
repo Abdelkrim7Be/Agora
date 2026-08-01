@@ -499,6 +499,31 @@ def _signature_inline_images(body: str) -> dict[str, tuple[bytes, str]] | None:
     return {SIGNATURE_CID: inline}
 
 
+class OutboundRecipientBlocked(RuntimeError):
+    """Raised when a send targets an address outside the outbound allowlist."""
+
+
+def _enforce_outbound_allowlist(to: str | list[str]) -> None:
+    """Refuse to send to anyone outside AGENT_OUTBOUND_ALLOWLIST, when it is set.
+
+    Last line of defense, below the security service and below dry-run: every
+    real send in this module funnels through _send_email_message, so an allowlist
+    checked here holds even if policy is misconfigured, security is disabled, or
+    the model invents a recipient. Empty setting (the default) disables the check
+    entirely and leaves normal operation untouched.
+    """
+    allowlist = settings.outbound_allowlist
+    if not allowlist:
+        return
+    recipients = _email_addresses(*(to if isinstance(to, list) else [to]))
+    blocked = [addr for addr in recipients if addr.lower() not in allowlist]
+    if blocked or not recipients:
+        raise OutboundRecipientBlocked(
+            f"outbound allowlist blocked recipients {blocked or list(to)}; "
+            f"allowed: {sorted(allowlist)}"
+        )
+
+
 def _send_email_message(
     to: str | list[str],
     subject: str,
@@ -508,6 +533,7 @@ def _send_email_message(
     resource=None,
     rich: bool = True,
 ) -> dict:
+    _enforce_outbound_allowlist(to)
     resource = resource or gmail_resource()
     message = _build_email_message(
         to, subject, body, extra_headers=extra_headers, rich=rich,
@@ -548,6 +574,9 @@ def send_html_message(
     """
     if respect_dry_run and effective_dry_run():
         return _dry_run_result("send_html", to=to, subject=subject)
+    # Campaign broadcasts build their own MIME message instead of going through
+    # _send_email_message, so the allowlist has to be enforced here as well.
+    _enforce_outbound_allowlist(to)
     resource = resource or gmail_resource()
     message = EmailMessage()
     message["To"] = to
