@@ -32,6 +32,7 @@ class CategoryInstructions(BaseModel):
 class Category(BaseModel):
     name: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
+    description: str | None = None
     enabled: bool = True
     priority: Literal["urgent", "normal", "low"] = "normal"
     when: RuleWhen = Field(default_factory=RuleWhen)
@@ -125,16 +126,25 @@ def matches_when(when: RuleWhen, email_input: dict) -> bool:
     predicate is only meaningful as a catch-all in automation rules, not for
     category classification where it would incorrectly catch every email.
     """
-    if not when.sender_contains and not when.sender_domain and not when.subject_contains and not when.labels:
+    if not when.sender_contains and not when.sender_regex and not when.sender_domain and not when.subject_contains and not when.body_contains and not when.labels:
         return False
     sender = email_input.get("author", "")
     subject = email_input.get("subject", "")
+    body = email_input.get("email_thread", "")
     labels = set(email_input.get("labels", []))
     if when.sender_contains and not _contains_any(sender, when.sender_contains):
         return False
+    if when.sender_regex:
+        try:
+            if not any(re.search(pattern, sender, re.IGNORECASE) for pattern in when.sender_regex):
+                return False
+        except re.error:
+            return False
     if when.sender_domain and _sender_domain(sender) not in {d.lower() for d in when.sender_domain}:
         return False
     if when.subject_contains and not _contains_any(subject, when.subject_contains):
+        return False
+    if when.body_contains and not _contains_any(body, when.body_contains):
         return False
     if when.labels and not set(when.labels).issubset(labels):
         return False
@@ -231,11 +241,15 @@ def _re_subject(subject: str) -> str:
 
 
 def render_template_text(text: str, email_input: dict, contact: "Contact | None" = None) -> str:
+    sender_name, _sender_address = parseaddr(email_input.get("author", ""))
+    sender_name = " ".join(sender_name.split())
     values = {
         "subject": email_input.get("subject", ""),
         "author": email_input.get("author", ""),
         "to": email_input.get("to", ""),
         "email_thread": email_input.get("email_thread", ""),
+        "name": sender_name,
+        "prenom": sender_name.split()[0] if sender_name else "",
     }
     if contact and contact.name and contact.name.split():
         values["name"] = contact.name
@@ -243,6 +257,7 @@ def render_template_text(text: str, email_input: dict, contact: "Contact | None"
     rendered = text
     for key, value in values.items():
         rendered = rendered.replace("{{" + key + "}}", str(value))
+    rendered = re.sub(r"(?m)^Bonjour\s+$", "Bonjour,", rendered)
     return rendered
 
 

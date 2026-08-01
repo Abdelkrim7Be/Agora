@@ -764,3 +764,76 @@ def test_domain_only_legacy_contact_matches_by_domain(tmp_path, monkeypatch):
     # and would otherwise be shadowed by the 'reclamation' rule for this domain.
     result = classify_category({"author": "Someone <other@client.example>", "subject": "urgent issue"}, cfg)
     assert result["category"] == "internal"
+
+
+def test_rule_when_matches_sender_regex_and_body_contains():
+    from src.automation import RuleWhen
+    from src.categories import matches_when
+
+    email = {
+        "author": "Leads <north-africa@partner.example>",
+        "subject": "Hello",
+        "email_thread": "Bonjour, nous demandons un devis pour 12 licences.",
+    }
+
+    assert matches_when(
+        RuleWhen(sender_regex=[r"north-.*@partner\.example"], body_contains=["devis"]),
+        email,
+    )
+    assert not matches_when(RuleWhen(sender_regex=["[broken"]), email)
+    assert not matches_when(RuleWhen(body_contains=["facture"]), email)
+
+
+def test_llm_tagged_category_executes_auto_draft_policy(monkeypatch, fake_llms):
+    import src.graph as g
+    from src.categories import CategoriesConfig, Category, Template
+    from src.automation import RuleWhen
+    from types import SimpleNamespace
+
+    class _CategoryRouter:
+        def invoke(self, _messages, config=None):
+            return SimpleNamespace(classification="ignore", category="support")
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[Category(
+            name="support",
+            display_name="Support",
+            policy="auto_draft",
+            template="support_reply",
+            when=RuleWhen(subject_contains=["never-match-this"]),
+        )],
+        templates=[Template(
+            name="support_reply",
+            subject="Re: {{subject}}",
+            body="Bonjour,\n\nNous revenons vers vous rapidement.\n\nCordialement",
+            variables=[],
+        )],
+    )
+    fake_llms(classification="ignore")
+    monkeypatch.setattr(g, "llm_router", _CategoryRouter())
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
+
+    email = {
+        "author": "Client <client@example.com>",
+        "to": "Me <me@example.com>",
+        "subject": "Question produit",
+        "email_thread": "Pouvez-vous aider ?",
+    }
+    result = g.email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert result.get("classification_decision") == "respond"
+    assert result.get("category") == "support"
+    assert result.get("messages")[-1].tool_calls[0]["name"] == "write_email"
+
+
+def test_template_name_placeholder_falls_back_to_polished_greeting():
+    from src.categories import render_template_text
+
+    rendered = render_template_text(
+        "Bonjour {{name}}\n\nMerci pour votre message.",
+        {"subject": "Question", "author": "client@example.com"},
+    )
+
+    assert "{{name}}" not in rendered
+    assert rendered.startswith("Bonjour,\n")

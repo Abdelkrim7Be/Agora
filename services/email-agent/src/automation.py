@@ -28,8 +28,10 @@ class RuleWhen(BaseModel):
     """
 
     sender_contains: list[str] = Field(default_factory=list)
+    sender_regex: list[str] = Field(default_factory=list)
     sender_domain: list[str] = Field(default_factory=list)
     subject_contains: list[str] = Field(default_factory=list)
+    body_contains: list[str] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
 
 
@@ -221,15 +223,24 @@ def _matches_rule(rule: AutomationRule, email_input: dict) -> bool:
     when = rule.when
     sender = email_input.get("author", "")
     subject = email_input.get("subject", "")
+    body = email_input.get("email_thread", "")
     labels = set(email_input.get("labels", []))
 
     if when.sender_contains and not _contains_any(sender, when.sender_contains):
         return False
+    if when.sender_regex:
+        try:
+            if not any(re.search(pattern, sender, re.IGNORECASE) for pattern in when.sender_regex):
+                return False
+        except re.error:
+            return False
     if when.sender_domain:
         domain = _sender_domain(sender)
         if domain not in {d.lower() for d in when.sender_domain}:
             return False
     if when.subject_contains and not _contains_any(subject, when.subject_contains):
+        return False
+    if when.body_contains and not _contains_any(body, when.body_contains):
         return False
     if when.labels and not set(when.labels).issubset(labels):
         return False
