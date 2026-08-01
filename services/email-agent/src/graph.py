@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from email.utils import parseaddr
 from functools import wraps
 from typing import Literal
 
@@ -260,7 +261,8 @@ def category_router(
     call is skipped entirely. Unmatched emails fall through to triage_router with
     the category context already in state for the LLM to refine (B4).
     """
-    categories_config = load_categories()
+    agent_instance_id = state["email_input"].get("agent_instance_id")
+    categories_config = load_categories(agent_instance_id=agent_instance_id)
     category_meta = classify_category(state["email_input"], categories_config)
 
     cat = category_meta.get("category")
@@ -268,7 +270,6 @@ def category_router(
     matched_contact = category_meta.get("contact")
 
     author, _, _, _ = parse_email(state["email_input"])
-    agent_instance_id = state["email_input"].get("agent_instance_id")
     contact_dir = get_contact(author, agent_instance_id=agent_instance_id)
     contact_lang = contact_dir.fields.get("lang") if contact_dir and contact_dir.fields else None
 
@@ -392,6 +393,118 @@ def category_router(
     return Command(goto="triage_router", update=category_update)
 
 
+def _category_policy_command(
+    state: State,
+    categories_config,
+    cat: str,
+    category_update: dict,
+    matched_contact=None,
+) -> Command | None:
+    """Execute a category policy from deterministic or LLM fallback routing."""
+    policy = category_update.get("category_policy")
+
+    if policy == "auto_draft":
+        template_tool_call = auto_draft_tool_call(
+            state["email_input"], categories_config, cat, contact=matched_contact
+        )
+        if template_tool_call is None:
+            return None
+        content = template_tool_call["args"].get("content", "")
+        remaining_vars = unresolved_vars(content)
+        author, to, subject, email_thread = parse_email(state["email_input"])
+        atts = state["email_input"].get("attachments") or []
+        email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
+        if remaining_vars:
+            print(f"📧 Category '{cat}': template has unresolved vars {remaining_vars}, routing to LLM for finalization")
+            return Command(
+                goto="llm_call",
+                update={
+                    "classification_decision": "respond",
+                    **category_update,
+                    "messages": [{
+                        "role": "user",
+                        "content": (
+                            f"This email matches the '{cat}' category. Draft a response using this "
+                            f"template as a starting point:\n\n"
+                            f"To: {template_tool_call['args']['to']}\n"
+                            f"Subject: {template_tool_call['args']['subject']}\n"
+                            f"Content: {content}\n\n"
+                            f"Fill in the unresolved placeholders "
+                            f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
+                            f"from the email context below, then call write_email. "
+                            f"Keep the template's closing (\"{content.rstrip().splitlines()[-1] if content.strip() else ''}\") "
+                            f"as the last line of the body - do not add a name, title, or company "
+                            f"after it; the signature is appended automatically.\n\n{email_markdown}"
+                        ),
+                    }],
+                },
+            )
+        print(f"📧 Category '{cat}': auto-draft from template")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "respond",
+                **category_update,
+                "messages": [
+                    {"role": "user", "content": f"Draft from category template for email: {email_markdown}"},
+                    AIMessage(content="", tool_calls=[template_tool_call]),
+                ],
+            },
+        )
+
+    if policy == "organize":
+        if "apply_label" not in tools_by_name_map or "archive_email" not in tools_by_name_map:
+            print(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
+            return None
+        cat_obj = next((c for c in categories_config.categories if c.name == cat), None)
+        labels = (cat_obj.labels if cat_obj and cat_obj.labels else [cat])
+        org_tool_calls = [
+            {"name": "apply_label", "args": {"label": label}, "id": f"org_label_{i}", "type": "tool_call"}
+            for i, label in enumerate(labels)
+        ] + [{"name": "archive_email", "args": {}, "id": "org_archive", "type": "tool_call"}]
+        print(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "ignore",
+                **category_update,
+                "auto_organized": True,
+                "messages": [AIMessage(content="", tool_calls=org_tool_calls)],
+            },
+        )
+
+    if policy == "notify":
+        notify_call = _workflow_notify_tool_call(state, category_update)
+        if notify_call is not None:
+            print(f"🔔 Category '{cat}': notify policy, routing for approval")
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "notify",
+                    **category_update,
+                    "messages": [AIMessage(content="", tool_calls=[notify_call])],
+                },
+            )
+        print(f"🔔 Category '{cat}': notify policy, terminating")
+        return Command(goto=END, update={"classification_decision": "notify", **category_update})
+
+    if policy == "ignore":
+        print(f"🚫 Category '{cat}': ignore policy")
+        if _can_auto_organize():
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "ignore",
+                    **category_update,
+                    "auto_organized": True,
+                    "messages": [_auto_organize_message()],
+                },
+            )
+        return Command(goto=END, update={"classification_decision": "ignore", **category_update})
+
+    return None
+
+
 class _CoercedDraft(PydanticBaseModel):
     """Structured extraction of an email draft from a plain-text model reply."""
 
@@ -414,6 +527,23 @@ def _normalize_recipient_args(args: dict) -> dict:
             return {**args, "to": cleaned}
     return args
 
+
+
+
+def _email_addr(value: str | None) -> str:
+    return (parseaddr(value or "")[1] or "").strip().lower()
+
+
+def _guard_reply_recipient(name: str, args: dict, email_input: dict) -> dict:
+    if name not in {"write_email", "create_draft"} or not isinstance(args, dict):
+        return args
+    proposed = _email_addr(args.get("to"))
+    original_sender = _email_addr(email_input.get("author"))
+    mailbox_addresses = {_email_addr(email_input.get("to"))}
+    mailbox_addresses.discard("")
+    if original_sender and (not proposed or proposed in mailbox_addresses):
+        return {**args, "to": original_sender}
+    return args
 
 def _last_write_email_args(messages) -> dict:
     for message in reversed(messages):
@@ -819,7 +949,7 @@ def _category_for_run(state: State):
     name = state.get("category")
     if not name:
         return None
-    cfg = load_categories()
+    cfg = load_categories(agent_instance_id=state["email_input"].get("agent_instance_id"))
     return next((c for c in cfg.categories if c.name == name), None)
 
 
@@ -955,6 +1085,7 @@ def tool_node(state: State, store: BaseStore, config=None):
         if name in {"write_email", "reply_all", "create_draft"} and isinstance(raw_args.get("content"), str):
             raw_args = {**raw_args, "content": ensure_email_paragraphs(raw_args["content"])}
         args = _normalize_recipient_args(apply_signature_to_args(name, raw_args))
+        args = _guard_reply_recipient(name, args, state["email_input"])
         authorization_decision = "hitl" if name in approval_set else "allow"
         arg_trust = _derive_arg_trust(args, state["email_input"].get("security"))
 
@@ -973,7 +1104,10 @@ def tool_node(state: State, store: BaseStore, config=None):
             ))
             continue
 
-        if authorization_decision == "allow" and category_obj is not None and category_obj.require_approval:
+        if authorization_decision != "deny" and (
+            state.get("category_policy") == "auto_draft"
+            or (category_obj is not None and (category_obj.require_approval or category_obj.policy == "auto_draft"))
+        ):
             authorization_decision = "hitl"
 
         if authorization_decision == "hitl":
@@ -1244,6 +1378,29 @@ def _feedback_from_messages(messages) -> str:
     return ""
 
 
+def _fast_redraft(previous: dict, feedback: str) -> dict | None:
+    lowered = (feedback or "").lower()
+    short_cues = ("plus court", "plus direct", "court", "direct", "shorter", "concise")
+    if not any(cue in lowered for cue in short_cues):
+        return None
+    body = _strip_content_headers(strip_signature(previous.get("content", ""))).strip()
+    if not body:
+        return None
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    greeting = next((line for line in lines if line.lower().startswith(("bonjour", "bonsoir", "hello", "hi ", "dear "))), "Bonjour,")
+    questions = [line for line in lines if "?" in line]
+    final_question = questions[-1] if questions else "Pouvez-vous confirmer le contexte exact et l'echeance souhaitee ?"
+    if "une seule question" in lowered or "single question" in lowered:
+        body_lines = [greeting, "Merci pour votre message. Nous avons bien recu votre demande.", final_question]
+    else:
+        body_lines = [greeting, "Merci pour votre message. Nous revenons vers vous rapidement avec les elements attendus.", final_question]
+    return _normalize_recipient_args({
+        "to": previous.get("to", ""),
+        "subject": previous.get("subject", ""),
+        "content": "\n\n".join(body_lines),
+    })
+
+
 def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
     """Revise the pending draft with one structured LLM call (no tool-choice loop).
 
@@ -1269,6 +1426,11 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
         agent_config.agent.writing_style_default,
     )
     run_id = _run_id_from_config(config)
+    fast_args = _fast_redraft(previous, feedback)
+    if fast_args is not None:
+        print("✏️ Redraft satisfied by fast deterministic edit path")
+        return {"messages": [_synthetic_write_email_message(fast_args)]}
+
     # Strip any already-appended signature before the model ever sees the
     # body: otherwise it tends to "helpfully" add its own closing line on
     # top of the real signature block, producing a duplicate sign-off. The
@@ -1462,6 +1624,13 @@ def triage_router(
                 "workflow_approver": c.approver,
                 "workflow_route_to": c.route_to,
             }
+
+    if category_update.get("category") and category_update.get("category_policy"):
+        policy_command = _category_policy_command(
+            state, categories_config, category_update["category"], category_update
+        )
+        if policy_command is not None:
+            return policy_command
 
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")
