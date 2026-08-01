@@ -201,7 +201,19 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
-_INBOX_METADATA_HEADERS = ["From", "Subject", "Date"]
+# Date/From/Subject drive the inbox list; the remaining headers are the bulk-mail
+# signals the junk gate reads (src/junk_gate.py). Without them a prefetched
+# message reaches the gate with half its evidence missing.
+_INBOX_METADATA_HEADERS = [
+    "From",
+    "To",
+    "Subject",
+    "Date",
+    "List-Unsubscribe",
+    "List-Id",
+    "Precedence",
+    "Auto-Submitted",
+]
 
 
 def _inbox_metadata_request(resource, msg_id: str):
@@ -922,4 +934,7 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "labels": message.get("labelIds", []),
         "list_unsubscribe": bool(_header(headers, "List-Unsubscribe", "")),
         "precedence_bulk": _header(headers, "Precedence", "").strip().lower() in {"bulk", "list", "junk"},
+        "list_id": bool(_header(headers, "List-Id", "")),
+        # RFC 3834: anything but "no" marks generated mail (auto-replied, auto-generated).
+        "auto_submitted": _header(headers, "Auto-Submitted", "").strip().lower() not in {"", "no"},
     }
