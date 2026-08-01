@@ -521,6 +521,23 @@ export function useInstanceSetupQuery() {
   });
 }
 
+export function useSeedSetupCategories() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (categories) =>
+      api('/api/agent/instance-setup/categories', {
+        method: 'POST',
+        body: JSON.stringify({ categories }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] });
+    },
+  });
+}
+
 export function useStartSetup() {
   const { api } = useApi();
   const queryClient = useQueryClient();

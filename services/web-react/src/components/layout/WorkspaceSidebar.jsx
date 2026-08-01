@@ -8,6 +8,7 @@ const TAB_GROUPS = [
   {
     label: 'Travail',
     tabs: [
+      { to: 'guide', icon: 'help', label: 'Guide' },
       { to: '', end: true, icon: 'dashboard', label: 'Tableau de bord' },
       { to: 'validation', icon: 'inbox', label: 'Validation' },
       { to: 'drafts', icon: 'drafts', label: 'Brouillons' },
@@ -27,13 +28,18 @@ const TAB_GROUPS = [
       { to: 'config', icon: 'person', label: 'Persona' },
       { to: 'style', icon: 'edit_note', label: 'Style' },
       { to: 'signature', icon: 'draw', label: 'Signature' },
-      { to: 'categories', icon: 'category', label: 'Catégories' },
-      { to: 'roles', icon: 'groups', label: 'Annuaire des rôles' },
-      { to: 'contacts', icon: 'contact_mail', label: 'Contacts' },
-      { to: 'segments', icon: 'group_work', label: 'Segments' },
-      { to: 'campaigns', icon: 'campaign', label: 'Campagnes', minRole: 'owner' },
       { to: 'memory', icon: 'psychology', label: 'Mémoire' },
       { to: 'rules', icon: 'rule', label: 'Règles' },
+    ],
+  },
+  {
+    label: 'Gestion',
+    tabs: [
+      { to: 'categories', icon: 'category', label: 'Catégories' },
+      { to: 'contacts', icon: 'contact_mail', label: 'Contacts' },
+      { to: 'segments', icon: 'group_work', label: 'Segments' },
+      { to: 'roles', icon: 'groups', label: 'Annuaire des rôles' },
+      { to: 'campaigns', icon: 'campaign', label: 'Campagnes', minRole: 'owner' },
     ],
   },
   {
