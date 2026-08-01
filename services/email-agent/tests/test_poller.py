@@ -1061,3 +1061,90 @@ async def test_poll_active_instances_uses_enqueue_once_when_job_queue_enabled(mo
 
     assert calls == {"enqueue_once": 1, "poll_once": 0}
     assert results["agent-a"] == [("m", "enqueued", "1")]
+
+
+def _bulk_message(msg_id: str, sender: str, subject: str) -> dict:
+    """A message carrying the headers real campaign and alert mail carries."""
+    data = base64.urlsafe_b64encode(b"Se desabonner de cette alerte.").decode()
+    return {
+        "id": msg_id,
+        "threadId": f"thread-{msg_id}",
+        "labelIds": ["INBOX", "UNREAD"],
+        "payload": {
+            "headers": [
+                {"name": "From", "value": sender},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Subject", "value": subject},
+                {"name": "List-Id", "value": "<google-alerts.google.com>"},
+                {"name": "List-Unsubscribe", "value": "<mailto:x@google.com>"},
+                {"name": "Precedence", "value": "bulk"},
+            ],
+            "body": {"data": data},
+        },
+    }
+
+
+def _categories_matching_sender(sender: str, accepts_automated: bool) -> CategoriesConfig:
+    return CategoriesConfig(
+        enabled=True,
+        categories=[
+            Category(
+                name="finance_requests",
+                display_name="Finance",
+                policy="auto_draft",
+                when=RuleWhen(sender_contains=[sender]),
+                accepts_automated=accepts_automated,
+            )
+        ],
+    )
+
+
+async def test_category_claim_does_not_rescue_bulk_mail_from_the_junk_gate(
+    mocked_gmail, fake_llms, monkeypatch
+):
+    # A directory contact carrying a category used to make every alert digest
+    # from that address a drafted reply, because a category claim skipped the
+    # junk gate entirely. The bulk headers must win.
+    set_unread, marked = mocked_gmail
+    sender = "alerts-sender@example.com"
+    set_unread([_bulk_message("m_alert", sender, "Google Alerte - IA")])
+    monkeypatch.setattr(
+        poller,
+        "load_categories",
+        lambda agent_instance_id=None: _categories_matching_sender(sender, False),
+    )
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    assert [status for _id, status, _run in outcomes] == ["completed"]
+    assert marked == ["m_alert"]
+    from src.run_registry import list_runs
+
+    record = next(r for r in list_runs(limit=50) if r.get("email_id") == "m_alert")
+    assert record["category"] == "junk_auto"
+    assert record["classification"] == "ignore"
+
+
+async def test_category_marked_accepts_automated_still_claims_bulk_mail(
+    mocked_gmail, fake_llms, monkeypatch
+):
+    # The opt-in exists for workflows whose input really is machine-generated,
+    # such as invoices emitted by a billing system.
+    set_unread, _marked = mocked_gmail
+    sender = "billing@example.com"
+    set_unread([_bulk_message("m_invoice", sender, "Facture F-2026-0412")])
+    monkeypatch.setattr(
+        poller,
+        "load_categories",
+        lambda agent_instance_id=None: _categories_matching_sender(sender, True),
+    )
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), resource=object())
+
+    from src.run_registry import list_runs
+
+    record = next(r for r in list_runs(limit=50) if r.get("email_id") == "m_invoice")
+    assert record["category"] == "finance_requests"
+    # auto_draft proposes a reply and stops for approval rather than completing.
+    assert [status for _id, status, _run in outcomes] == ["pending_approval"]
