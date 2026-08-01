@@ -125,7 +125,12 @@ public class AgentRegistryService {
                 request.color() == null || request.color().isBlank() ? type.getColor() : request.color(),
                 request.icon() == null || request.icon().isBlank() ? type.getIcon() : request.icon()
         );
-        return instances.save(instance);
+        AgentInstance saved = instances.save(instance);
+        String assignedTo = request.assignedTo();
+        if (assignedTo != null && !assignedTo.isBlank() && !assignedTo.equals(username)) {
+            grants.save(new AgentInstanceGrant(saved.getId(), assignedTo, "owner", username));
+        }
+        return saved;
     }
 
     public Map<String, Object> summary(AgentInstance instance, String username) {
@@ -267,7 +272,11 @@ public class AgentRegistryService {
             @com.fasterxml.jackson.annotation.JsonProperty("status") String status,
             @com.fasterxml.jackson.annotation.JsonProperty("allowed_roles") String allowedRoles,
             @com.fasterxml.jackson.annotation.JsonProperty("color") String color,
-            @com.fasterxml.jackson.annotation.JsonProperty("icon") String icon
+            @com.fasterxml.jackson.annotation.JsonProperty("icon") String icon,
+            // Who this instance is actually for. Left blank, it belongs to no one but
+            // global owner/admin (who see every instance regardless) — an explicit
+            // pick here is what grants a specific person ownership of it.
+            @com.fasterxml.jackson.annotation.JsonProperty("assigned_to") String assignedTo
     ) {}
 
     public record UpdateAgentInstanceRequest(

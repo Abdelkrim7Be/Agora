@@ -22,7 +22,10 @@ public class AgentInstanceSeeder implements CommandLineRunner {
     @Override
     public void run(String... args) {
         String id = props.getDefaultAgentInstance();
-        if (id == null || id.isBlank() || instances.existsById(id)) return;
+        // Only seed on a genuinely empty table (fresh install) — checking
+        // existsById(id) instead resurrected a deliberately deleted default
+        // instance on every gateway restart, even with other instances present.
+        if (id == null || id.isBlank() || instances.count() > 0) return;
 
         GatewayProperties.AgentType type = props.getAgentTypes().stream()
                 .filter(t -> "email-agent".equals(t.getId()))
