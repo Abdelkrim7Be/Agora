@@ -2271,8 +2271,9 @@ async def drafts(
 
 
 @app.get("/junk")
-async def get_junk() -> dict:
+async def get_junk(request: Request) -> dict:
     """Junk-gate settings for this instance, plus the reasons the gate can report."""
+    _require_instance_role(request, "viewer")
     config = load_junk(agent_instance_id=current_agent_instance_id())
     return {
         "agent_instance_id": current_agent_instance_id(),
@@ -2281,8 +2282,9 @@ async def get_junk() -> dict:
 
 
 @app.put("/junk")
-async def update_junk(body: JunkInput) -> dict:
+async def update_junk(request: Request, body: JunkInput) -> dict:
     """Patch junk-gate settings; omitted fields keep their current value."""
+    _require_instance_role(request, "owner")
     current = load_junk(agent_instance_id=current_agent_instance_id())
     patch = body.model_dump(exclude_none=True)
     for key in ("allowed_senders", "allowed_domains", "blocked_senders", "blocked_domains"):

@@ -453,6 +453,50 @@ class RbacTest {
     }
 
     @Test
+    void viewer_can_read_junk_settings() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/junk"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"junk\":{\"enabled\":true}}")));
+
+        mockMvc.perform(get("/api/agent/junk")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/junk")));
+    }
+
+    @Test
+    void viewer_cannot_change_junk_settings_403() throws Exception {
+        mockMvc.perform(put("/api/agent/junk")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":false}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/junk")));
+    }
+
+    @Test
+    void owner_can_change_junk_settings() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/junk"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"junk\":{\"enabled\":false}}")));
+
+        mockMvc.perform(put("/api/agent/junk")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":false}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/junk")));
+    }
+
+    @Test
     void viewer_cannot_add_rule_403() throws Exception {
         mockMvc.perform(post("/api/agent/rules/rule")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
