@@ -1,0 +1,81 @@
+services:
+  ollama-init:
+    entrypoint: []
+
+  ollama:
+    gpus: !reset []
+    environment:
+      NVIDIA_VISIBLE_DEVICES: !reset ""
+      NVIDIA_DRIVER_CAPABILITIES: !reset ""
+
+  email-agent:
+    volumes:
+      - ../services/email-agent/credentials.json:/app/credentials.json:ro
+    environment:
+      AGENT_DRY_RUN: "false"
+      AGENT_DEFAULT_SEND_MODE: "live"
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8081/api/agent/connect/gmail/callback
+      # Prod leaves this empty (Traefik puts web + gateway on one origin, so a
+      # relative redirect from the OAuth callback just works). Local dev splits
+      # them across ports, so the callback needs to know where the web app is.
+      AGENT_APP_BASE_URL: http://localhost:5173
+
+  gateway:
+    ports:
+      - "8081:8080"
+
+  web:
+    ports:
+      - "5173:8080"
+
+  # docker-compose.yml has no poller service at all (only the demo overlay
+  # does, tuned for a single live mailbox). Without one, fetched inbox mail
+  # never becomes drafts/notifications outside a manual "Verifier Gmail"
+  # click — src/poller.py already loops every connected instance via
+  # agent_instance_context, so it works unmodified for multi-instance local dev.
+  poller:
+    build:
+      context: ../services/email-agent
+      network: host
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    command: ["python", "-m", "src.poller"]
+    env_file:
+      - ../services/email-agent/.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql://agora_email_agent:${AGENT_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-agora}
+      AGENT_RUN_MIGRATIONS: "false"
+      AGENT_STORAGE_BACKEND: postgres
+      AGENT_RUN_REGISTRY_BACKEND: postgres
+      TENANT_MODE: ${TENANT_MODE:-single}
+      AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
+      GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      AGENT_MEDIA_DIR: /app/data/media
+      GMAIL_CREDENTIALS_PATH: credentials.json
+      AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
+      AGENT_SECURITY_ENABLED: "true"
+      AGENT_SECURITY_URL: http://security:8001
+      AGENT_LLM_PROFILE: local
+      AGENT_LLM_CONFIG_PATH: config/llm.local-docker.yaml
+      OPENAI_API_KEY: ollama-local
+      AGENT_DRY_RUN: ${AGENT_DRY_RUN:-false}
+      AGENT_DEFAULT_SEND_MODE: "live"
+      AGENT_POLL_INTERVAL_MIN: "1"
+      GMAIL_POLLING_FALLBACK_ENABLED: "true"
+      AGENT_JOB_QUEUE_ENABLED: "false"
+    volumes:
+      - agent_data:/app/data
+      - ../services/email-agent/credentials.json:/app/credentials.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      email-agent-migrate:
+        condition: service_completed_successfully
+      security:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    networks:
+      - agora
