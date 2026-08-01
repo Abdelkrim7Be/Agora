@@ -238,19 +238,13 @@ class RbacTest {
     }
 
     @Test
-    void owner_can_read_cost_summary() throws Exception {
-        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"period\":\"session\"}")));
-
+    void owner_cannot_read_cost_summary_403() throws Exception {
         mockMvc.perform(get("/api/agent/costs/summary?period=session")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.period").value("session"));
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
 
-        wireMock.verify(1, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
     }
 
     @Test
@@ -764,10 +758,10 @@ class RbacTest {
     }
 
     @Test
-    void owner_can_list_users_for_instance_grants() throws Exception {
+    void owner_cannot_list_users_403() throws Exception {
         mockMvc.perform(get("/users")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass")))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
     }
 
     @Test

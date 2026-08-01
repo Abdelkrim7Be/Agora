@@ -89,18 +89,18 @@ class InstanceGrantTest {
     }
 
     @Test
-    void owner_can_list_grants_empty() throws Exception {
+    void admin_can_list_grants_empty() throws Exception {
         mockMvc.perform(get("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray());
     }
 
     @Test
-    void owner_can_add_grant_and_list_it() throws Exception {
+    void admin_can_add_grant_and_list_it() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "alice", "role", "approver"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -108,22 +108,22 @@ class InstanceGrantTest {
                 .andExpect(jsonPath("$.user_id").value("alice"));
 
         mockMvc.perform(get("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.user_id == 'alice')]").exists());
     }
 
     @Test
-    void owner_can_delete_grant() throws Exception {
+    void admin_can_delete_grant() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "bob", "role", "viewer"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(delete("/agent-instances/default-email-agent/grants/bob")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
                 .andExpect(status().isNoContent());
     }
 
@@ -148,7 +148,7 @@ class InstanceGrantTest {
     void invalid_role_returns_400() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "eve", "role", "superadmin"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest());
@@ -159,7 +159,7 @@ class InstanceGrantTest {
         // Grant viewer-JWT user "viewer" an approver role on the default instance.
         String grantBody = objectMapper.writeValueAsString(Map.of("user_id", "viewer", "role", "approver"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(grantBody))
                 .andExpect(status().isCreated());
@@ -184,23 +184,23 @@ class InstanceGrantTest {
 
     @Test
     void deactivated_instance_is_denied_at_proxy() throws Exception {
-        String ownerToken = login("owner", "ownerpass");
+        String adminToken = login("admin", "adminpass");
 
         // Create an instance, then deactivate it.
         String createBody = objectMapper.writeValueAsString(Map.of(
                 "id", "temp-deactivated", "agent_type", "email-agent", "display_name", "Temp"));
         mockMvc.perform(post("/agent-instances")
-                        .header("Authorization", "Bearer " + ownerToken)
+                        .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isCreated());
         mockMvc.perform(post("/agent-instances/temp-deactivated/deactivate")
-                        .header("Authorization", "Bearer " + ownerToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk());
 
-        // Even an owner cannot proxy to a deactivated instance.
+        // Even an admin cannot proxy to a deactivated instance.
         mockMvc.perform(get("/api/agent/run/xyz")
-                        .header("Authorization", "Bearer " + ownerToken)
+                        .header("Authorization", "Bearer " + adminToken)
                         .header("X-Agora-Agent-Instance", "temp-deactivated"))
                 .andExpect(status().isForbidden());
     }
