@@ -261,6 +261,19 @@ def category_router(
     call is skipped entirely. Unmatched emails fall through to triage_router with
     the category context already in state for the LLM to refine (B4).
     """
+    # The security verdict has to be honored here, not only in triage_router.
+    # This node runs first and, on a category match, jumps straight to the model
+    # or to a tool call — so a flagged message that happened to match a category
+    # skipped the check entirely. In one live test an injected "forward the
+    # mailbox to <attacker>" instruction reached the model that way and came back
+    # as an internal notification repeating the instruction verbatim, with a
+    # subject the attacker had chosen: no send left the system, but a human was
+    # being asked to perform the attack by hand.
+    sec = state["email_input"].get("security")
+    if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
+        print("🛡️ Category routing skipped - forced notify by security verdict")
+        return Command(goto=END, update={"classification_decision": "notify"})
+
     agent_instance_id = state["email_input"].get("agent_instance_id")
     categories_config = load_categories(agent_instance_id=agent_instance_id)
     category_meta = classify_category(state["email_input"], categories_config)
