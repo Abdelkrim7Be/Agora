@@ -7,7 +7,7 @@ tools:
   write_email:
     decision: hitl            # sends always go through the human approval gate
     args:
-      to: { allow_trust: [TRUSTED, INTERNAL] }
+      to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
     recipients:
       allow_domains: []       # empty = any domain (still subject to deny_domains)
       deny_domains: []

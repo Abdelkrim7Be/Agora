@@ -145,6 +145,18 @@ def test_allow_domain_is_case_insensitive():
     assert resp.decision == "hitl"
 
 
+def test_list_recipients_are_checked_like_comma_separated_recipients():
+    policy = _policy_with_recipients(deny_domains=["evil.com"])
+    req = AuthorizeRequest(
+        action="write_email",
+        args={"to": ["good@company.com", "bad@evil.com"], "subject": "x", "content": "Hello"},
+        context={},
+    )
+    resp = authorize(req, policy=policy)
+    assert resp.decision == "deny"
+    assert "evil.com" in resp.reason
+
+
 def test_comma_separated_recipients_any_denied_blocks():
     # If any recipient in a comma-separated list is on the deny list, deny the whole send.
     policy = _policy_with_recipients(deny_domains=["evil.com"])
