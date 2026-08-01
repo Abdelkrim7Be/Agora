@@ -186,8 +186,14 @@ async def test_poll_once_skips_email_with_active_run(mocked_gmail, fake_llms):
     assert first[0][1] == "pending_approval"
     first_run_id = first[0][2]
 
+    # Discovery now filters approval-pending mail out entirely, so the second
+    # cycle is a no-op rather than a re-report of the same run.
     second = await poller.poll_once(graph, resource=object())
-    assert second == [("m_dup", "pending_approval", first_run_id)]
+    assert second == []
+    from src.run_registry import find_run_by_email
+
+    still = find_run_by_email("m_dup", user_id=None, agent_instance_id=current_agent_instance_id())
+    assert still["run_id"] == first_run_id  # reused, never duplicated
     assert marked == []  # still awaiting a human → never marked read
 
 
@@ -244,7 +250,16 @@ async def test_poll_once_reuses_active_run_across_delegated_users(mocked_gmail, 
     with user_context("approver@example.com"):
         second = await poller.poll_once(graph, resource=object())
 
-    assert second == [("m_delegated", "pending_approval", first[0][2])]
+    # The second actor rediscovers nothing: the instance-scoped pending run
+    # already covers the message, whoever triggers the sync.
+    assert second == []
+    from src.run_registry import find_run_by_email
+
+    with user_context("approver@example.com"):
+        record = find_run_by_email(
+            "m_delegated", user_id=None, agent_instance_id=current_agent_instance_id()
+        )
+    assert record["run_id"] == first[0][2]
     assert marked == []
 
 
@@ -1148,3 +1163,45 @@ async def test_category_marked_accepts_automated_still_claims_bulk_mail(
     assert record["category"] == "finance_requests"
     # auto_draft proposes a reply and stops for approval rather than completing.
     assert [status for _id, status, _run in outcomes] == ["pending_approval"]
+
+
+async def test_poll_once_stops_refetching_mail_already_awaiting_approval(
+    mocked_gmail, fake_llms, monkeypatch
+):
+    # Approval-pending mail stays UNREAD on purpose, so discovery keeps finding
+    # it. It must not be re-downloaded every cycle just to be deduped after.
+    set_unread, _marked = mocked_gmail
+    set_unread([_raw_message("m_wait", "Devis", "Bonjour, un devis SVP")])
+    fake_llms(
+        classification="respond",
+        tool_sequence=[
+            ai_tool_call(
+                "write_email",
+                {"to": "a@b.com", "subject": "Re: Devis", "content": "Bonjour"},
+                "c1",
+            ),
+        ],
+    )
+
+    first = await poller.poll_once(_graph(), resource=object())
+    assert [status for _id, status, _run in first] == ["pending_approval"]
+
+    fetched: list[str] = []
+    original = poller.get_message
+    monkeypatch.setattr(
+        poller,
+        "get_message",
+        lambda msg_id, resource=None: (fetched.append(msg_id), original(msg_id, resource))[1],
+    )
+
+    second = await poller.poll_once(_graph(), resource=object())
+
+    assert second == []
+    assert fetched == []
+
+
+async def test_discovery_drops_duplicate_history_refs():
+    # history.list emits one record per change, so a delivered-then-labelled
+    # message appears more than once in the same window.
+    refs = [{"id": "a"}, {"id": "b"}, {"id": "a"}, {"id": "c"}, {"id": "b"}]
+    assert [ref["id"] for ref in poller._unique_refs(refs)] == ["a", "b", "c"]

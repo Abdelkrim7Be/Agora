@@ -673,6 +673,36 @@ async def poll_history(
     return outcomes
 
 
+def _unique_refs(refs: list[dict]) -> list[dict]:
+    """Drop repeated message ids, keeping first-seen order."""
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for ref in refs:
+        msg_id = ref.get("id")
+        if not msg_id or msg_id in seen:
+            continue
+        seen.add(msg_id)
+        unique.append(ref)
+    return unique
+
+
+def _messages_awaiting_approval() -> set[str]:
+    """Gmail ids of this instance's runs already parked on a human decision."""
+    try:
+        pending = list_runs(
+            status="pending_approval",
+            user_id=None,
+            agent_instance_id=current_agent_instance_id(),
+            limit=500,
+        )
+    except Exception as exc:
+        # Never let a registry hiccup stop detection; worst case is the old
+        # behavior of re-fetching mail that will be deduped downstream anyway.
+        print(f"poller: could not list pending approvals, not filtering: {exc}")
+        return set()
+    return {record["email_id"] for record in pending if record.get("email_id")}
+
+
 async def _discover_unread_refs(
     resource,
     max_results: int,
@@ -706,6 +736,20 @@ async def _discover_unread_refs(
         next_baseline = ""
     if refs is None:
         refs = fetch_unread(max_results, resource=resource)
+
+    # history.list reports one record per change, so the same message shows up
+    # several times in a window where it was e.g. delivered and then labelled.
+    refs = _unique_refs(refs)
+
+    # Mail already waiting on a human keeps its UNREAD flag on purpose, so every
+    # cycle rediscovers it forever. _process_message_locked would return it
+    # untouched anyway, but only after the batch below has fetched its full body:
+    # a mailbox holding twenty pending approvals re-downloaded twenty messages a
+    # minute, indefinitely, against the same Gmail quota that sends draw on.
+    # Drop them here instead, where it costs one registry read for the batch.
+    awaiting_human = _messages_awaiting_approval()
+    if awaiting_human:
+        refs = [ref for ref in refs if ref["id"] not in awaiting_human]
 
     # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
     # round-trip per 50 instead of one per message. Failure falls back to the
