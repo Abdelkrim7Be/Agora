@@ -100,6 +100,12 @@ class Settings:
     # was reprocessed as a brand-new run every poll cycle, forever, without
     # ever actually completing.
     security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "180"))
+    # Put a drafted reply through the full quarantined classifier before it
+    # becomes approvable. /sanitize skips that classifier when no heuristic
+    # keyword fires, so without this a carefully worded injection is never
+    # actually classified. Scoped to messages that produced a draft, which keeps
+    # the slow local model off the rest of the mailbox.
+    security_deep_check_drafts: bool = _env_bool("AGENT_SECURITY_DEEP_CHECK_DRAFTS", "true")
     # Domains treated as "internal" for a category's external_send_allowed=false
     # guard (comma-separated, case-insensitive). Independent of security_enabled —
     # this is a local workflow-policy rule, not the external security service.

@@ -7,6 +7,14 @@ tools:
   write_email:
     decision: hitl            # sends always go through the human approval gate
     args:
+      # Mail arriving from outside is UNTRUSTED by baseline and the classifier can
+      # only push it further down to HOSTILE, never up — so this list means "any
+      # recipient except one lifted from content classified hostile". Listing only
+      # TRUSTED/INTERNAL here would block every reply to an external customer,
+      # which is most of what this agent does. The protection is the HOSTILE
+      # exclusion, and it is only worth anything while something actually
+      # classifies content: see AGENT_SECURITY_DEEP_CHECK_DRAFTS, which puts every
+      # drafted reply through the quarantined classifier before it is approvable.
       to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
     recipients:
       allow_domains: []       # empty = any domain (still subject to deny_domains)

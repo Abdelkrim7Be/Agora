@@ -86,7 +86,7 @@ from src.config import load_config, settings
 from src.runtime_settings import load_runtime_settings
 from src.memory import namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
-from src.security_client import sanitize_email
+from src.security_client import classify_content, sanitize_email
 from src.gmail_client import (
     current_history_id,
     download_attachment,
@@ -641,6 +641,29 @@ async def _process_message_locked(
         outcome_status = "security_hold"
     else:
         outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
+
+    # Second look before a draft becomes approvable.
+    #
+    # /sanitize skips the quarantined classifier when no heuristic keyword fires,
+    # so an injection written without the obvious phrases reaches the model
+    # unclassified. Running the classifier on every message would put a slow
+    # local model in front of the whole mailbox — which is what parked every
+    # message at security_hold before. Running it only on the messages that
+    # produced a reply narrows the cost to the output that can actually reach a
+    # human and be approved, and it happens before the run is recorded, so there
+    # is never a window where a poisoned draft is sitting there approvable.
+    if (
+        outcome_status == "pending_approval"
+        and settings.security_enabled
+        and settings.security_deep_check_drafts
+        and not security_flagged
+    ):
+        verdict = await classify_content(email_input.get("email_thread", ""))
+        if verdict.get("trust") == "HOSTILE":
+            print(f"🛡️ {msg_id}: draft withdrawn, deep classification returned HOSTILE")
+            security_flagged = True
+            outcome_status = "security_hold"
+            result = {**result, "__interrupt__": None}
 
     record_digest_item(rules_config, outcome_status, email_input, run_id)
     run_email_input = _run_email_input(email_input, result)
