@@ -103,6 +103,8 @@ def _record(
         "workflow_dept": email_input.get("workflow_dept"),
         "assignee": email_input.get("assignee"),
         "error": email_input.get("error"),
+        # Set by the junk gate; None for every run that reached the graph.
+        "junk_reason": email_input.get("junk_reason"),
         "created_at": created_at or now,
         "decision": decision,
         "decision_at": decision_at,
@@ -242,14 +244,14 @@ def _postgres_upsert(record: dict) -> dict:
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
                     workflow_approver, workflow_route_to, workflow_dept, assignee,
-                    created_at, decision, decision_at, error, updated_at
+                    created_at, decision, decision_at, error, junk_reason, updated_at
                 ) VALUES (
                     %(run_id)s, %(user_id)s, %(agent_instance_id)s, %(status)s,
                     %(classification)s, %(pending_action)s, %(subject)s, %(author)s,
                     %(email_id)s, %(gmail_thread_id)s, %(category)s,
                     %(category_display_name)s, %(priority)s, %(template)s, %(workflow_owner)s,
                     %(workflow_approver)s, %(workflow_route_to)s, %(workflow_dept)s, %(assignee)s,
-                    %(created_at)s, %(decision)s, %(decision_at)s, %(error)s, %(updated_at)s
+                    %(created_at)s, %(decision)s, %(decision_at)s, %(error)s, %(junk_reason)s, %(updated_at)s
                 )
                 ON CONFLICT (run_id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
@@ -274,12 +276,13 @@ def _postgres_upsert(record: dict) -> dict:
                     decision = COALESCE(EXCLUDED.decision, agent_runs.decision),
                     decision_at = COALESCE(EXCLUDED.decision_at, agent_runs.decision_at),
                     error = EXCLUDED.error,
+                    junk_reason = COALESCE(EXCLUDED.junk_reason, agent_runs.junk_reason),
                     updated_at = EXCLUDED.updated_at
                 RETURNING run_id, user_id, agent_instance_id, status, classification,
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
                     workflow_approver, workflow_route_to, workflow_dept, assignee,
-                    created_at, decision, decision_at, error, updated_at
+                    created_at, decision, decision_at, error, junk_reason, updated_at
                 """,
                 params,
             )
@@ -319,7 +322,7 @@ def _postgres_list(
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
                     workflow_approver, workflow_route_to, workflow_dept, assignee,
-                    created_at, decision, decision_at, error, updated_at
+                    created_at, decision, decision_at, error, junk_reason, updated_at
                 FROM agent_runs
                 """
                 + where
@@ -354,7 +357,7 @@ def _postgres_get(
                     pending_action, subject, author, email_id, gmail_thread_id,
                     category, category_display_name, priority, template, workflow_owner,
                     workflow_approver, workflow_route_to, workflow_dept, assignee,
-                    created_at, decision, decision_at, error, updated_at
+                    created_at, decision, decision_at, error, junk_reason, updated_at
                 FROM agent_runs
                 WHERE
                 """
