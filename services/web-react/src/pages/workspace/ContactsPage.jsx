@@ -74,6 +74,7 @@ export default function ContactsPage() {
   const [importAudience, setImportAudience] = useState('client');
   const [searchParams] = useSearchParams();
   const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
+  const [search, setSearch] = useState('');
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [bulkCategorizing, setBulkCategorizing] = useState(false);
   const fileInputRef = useRef(null);
@@ -220,7 +221,21 @@ export default function ContactsPage() {
     }
   };
 
-  const filteredContacts = categoryFilter ? contacts.filter((c) => c.category === categoryFilter) : contacts;
+  const filteredContacts = contacts.filter((contact) => {
+    if (categoryFilter && contact.category !== categoryFilter) return false;
+    const needle = search.trim().toLowerCase();
+    if (!needle) return true;
+    const haystack = [
+      contact.email,
+      contact.name,
+      contact.audience,
+      contact.category,
+      contact.fields?.company,
+      contact.fields?.dept,
+      ...(contact.tags || []),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(needle);
+  });
   const pageContacts = filteredContacts.slice(pager.page * PAGE_SIZE, pager.page * PAGE_SIZE + PAGE_SIZE);
   const hasMore = (pager.page + 1) * PAGE_SIZE < filteredContacts.length;
 
@@ -275,6 +290,8 @@ export default function ContactsPage() {
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les contacts</span>
         </button>
+        <input aria-label="Recherche contacts" placeholder="Rechercher un contact" value={search} onChange={(event) => { setSearch(event.target.value); pager.reset(); }} />
+        <span className="counter">{filteredContacts.length} contact{filteredContacts.length > 1 ? 's' : ''}</span>
         <span className="counter">{query.data?.storage || 'contacts-directory'}</span>
       </div>
       <div className="notice"><strong>Source unique :</strong> chaque personne est stockée une seule fois. Les segments et campagnes réutilisent ce répertoire.</div>
@@ -360,19 +377,21 @@ export default function ContactsPage() {
             </div>
           )}
           <div className="rule-list">
-            {!contacts.length ? <div className="empty">Aucun contact enregistré.</div> : (
+            {!filteredContacts.length ? <div className="empty">Aucun contact ne correspond aux filtres.</div> : (
               <>
                 {pageContacts.map((contact) => {
                   const tags = (contact.tags || []).map((t) => `#${t}`);
                   const fields = Object.entries(contact.fields || {}).filter(([key]) => key !== 'gender').map(([key, value]) => `${key}: ${value}`);
                   return (
                     <div className={`directory-row contact-row ${contact.active === false ? 'inactive' : ''}`.trim()} key={contact.email}>
-                      {canManage && (
-                        <label className="bulk-select" title="Sélectionner pour une action groupée">
-                          <input type="checkbox" checked={selectedEmails.has(contact.email)} onChange={() => toggleSelect(contact.email)} />
-                        </label>
-                      )}
-                      <ContactAvatar contact={contact} apiBlob={apiBlob} />
+                      <div className="directory-lead">
+                        {canManage && (
+                          <label className="bulk-select" title="Sélectionner pour une action groupée">
+                            <input type="checkbox" checked={selectedEmails.has(contact.email)} onChange={() => toggleSelect(contact.email)} />
+                          </label>
+                        )}
+                        <ContactAvatar contact={contact} apiBlob={apiBlob} />
+                      </div>
                       <div className="directory-main">
                         <strong>{contact.name || contact.email}</strong>
                         <span title={contact.email}>{compactText(contact.email, 42)}</span>

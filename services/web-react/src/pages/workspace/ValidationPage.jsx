@@ -19,6 +19,7 @@ import {
   useToneRun,
   useBulkDecision,
   useSyncGmail,
+  useCategoriesQuery,
 } from '../../api/queries';
 import { useRunEvents } from '../../hooks/useRunEvents';
 
@@ -36,6 +37,10 @@ export default function ValidationPage() {
   const canApprove = hasRole('approver');
 
   const [page, setPage] = useState(0);
+  const [priority, setPriority] = useState('');
+  const [category, setCategory] = useState('');
+  const [search, setSearch] = useState('');
+  const [since, setSince] = useState('');
   const [selectedRuns, setSelectedRuns] = useState(new Set());
   const [activeRunId, setActiveRunId] = useState(null);
   const [editedFields, setEditedFields] = useState({});
@@ -44,7 +49,9 @@ export default function ValidationPage() {
   const [busyRuns, setBusyRuns] = useState(new Set());
   const announcedInitialLoad = useRef(false);
 
-  const query = usePendingRunsQuery(page);
+  const query = usePendingRunsQuery(page, { category, priority, q: search.trim(), since });
+  const categoriesQuery = useCategoriesQuery();
+  const availableCategories = categoriesQuery.data?.parsed?.categories || [];
   useRunEvents();
   const approveRun = useApproveRun();
   const rejectRun = useRejectRun();
@@ -55,6 +62,8 @@ export default function ValidationPage() {
   const syncGmail = useSyncGmail();
 
   const runs = query.data?.runs || [];
+
+  useEffect(() => { setPage(0); }, [category, priority, search, since]);
 
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
@@ -322,10 +331,29 @@ export default function ValidationPage() {
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
           <span>Actualiser</span>
         </button>
-        <button className="primary" type="button" onClick={handleSync}>
+        <button className="primary" type="button" onClick={handleSync} disabled={syncGmail.isPending}>
           <span className="material-symbols-outlined" aria-hidden="true">mark_email_read</span>
           <span>Vérifier Gmail</span>
         </button>
+        {syncGmail.isPending ? (
+          <div className="progress-track">
+            <span className="progress-track-dot" aria-hidden="true" />
+            <div className="progress-bar-indeterminate" role="progressbar" aria-label="Vérification Gmail en cours" />
+            <span className="progress-track-label">Synchronisation...</span>
+          </div>
+        ) : null}
+        <select aria-label="Filtre de catégorie" value={category} onChange={(event) => setCategory(event.target.value)}>
+          <option value="">Toutes catégories</option>
+          {availableCategories.map((c) => <option key={c.name} value={c.name}>{c.display_name || c.name}</option>)}
+        </select>
+        <select aria-label="Filtre de priorité" value={priority} onChange={(event) => setPriority(event.target.value)}>
+          <option value="">Toutes priorités</option>
+          <option value="urgent">Urgent</option>
+          <option value="normal">Normal</option>
+          <option value="low">Basse</option>
+        </select>
+        <input aria-label="Recherche expéditeur ou sujet" placeholder="Rechercher" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <input aria-label="Depuis le" type="date" value={since} onChange={(event) => setSince(event.target.value)} />
         <span className="counter">{runs.length} en attente</span>
         <span className="kbd-legend">Raccourcis : j/k naviguer · a approuver · r rejeter · e retoucher · x sélectionner</span>
         <span className="toolbar-spacer"></span>

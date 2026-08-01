@@ -1,5 +1,6 @@
 import { NavLink, useParams } from 'react-router-dom';
 import { useInstance } from '../../contexts/InstanceContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { agentTypeLabel } from '../../utils/format';
 import { useAgentTypesQuery, usePendingRunsQuery, useUnreadCountQuery } from '../../api/queries';
 
@@ -26,7 +27,7 @@ const TAB_GROUPS = [
       { to: 'config', icon: 'person', label: 'Persona' },
       { to: 'style', icon: 'edit_note', label: 'Style' },
       { to: 'signature', icon: 'draw', label: 'Signature' },
-      { to: 'categories', icon: 'category', label: 'Workflows' },
+      { to: 'categories', icon: 'category', label: 'Catégories' },
       { to: 'roles', icon: 'groups', label: 'Annuaire des rôles' },
       { to: 'contacts', icon: 'contact_mail', label: 'Contacts' },
       { to: 'segments', icon: 'group_work', label: 'Segments' },
@@ -38,15 +39,16 @@ const TAB_GROUPS = [
   {
     label: 'Contrôle',
     tabs: [
-      { to: 'capabilities', icon: 'shield', label: 'Capacités' },
-      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minRole: 'owner' },
-      { to: 'dlq', icon: 'warning', label: 'DLQ' },
-      { to: 'costs', icon: 'monitoring', label: 'Coûts' },
+      { to: 'capabilities', icon: 'shield', label: 'Capacités', minGlobalRole: 'admin' },
+      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minGlobalRole: 'admin' },
+      { to: 'dlq', icon: 'warning', label: 'DLQ', minGlobalRole: 'admin' },
+      { to: 'costs', icon: 'monitoring', label: 'Coûts', minGlobalRole: 'admin' },
     ],
   },
 ];
 
 export default function WorkspaceSidebar() {
+  const { globalRole } = useAuth();
   const { instanceId, currentInstance, hasRole } = useInstance();
   const params = useParams();
   const typesQuery = useAgentTypesQuery();
@@ -68,10 +70,12 @@ export default function WorkspaceSidebar() {
       </div>
 
       <div id="workspace-sidebar-context">
-        <NavLink to="/" end className="nav-item workspace-back">
-          <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>
-          <span>Retour plateforme</span>
-        </NavLink>
+{globalRole === 'admin' ? (
+          <NavLink to="/" end className="nav-item workspace-back">
+            <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>
+            <span>Retour plateforme</span>
+          </NavLink>
+        ) : null}
         <div className="workspace-sidebar-agent">
           <span>Espace agent</span>
           <strong>{currentInstance?.display_name || id}</strong>
@@ -81,7 +85,7 @@ export default function WorkspaceSidebar() {
 
       <nav className="workspace-tabs" aria-label="Onglets de l'espace de travail">
         {TAB_GROUPS.map((group) => {
-          const tabs = group.tabs.filter((tab) => !tab.minRole || hasRole(tab.minRole));
+          const tabs = group.tabs.filter((tab) => (!tab.minRole || hasRole(tab.minRole)) && (!tab.minGlobalRole || globalRole === tab.minGlobalRole));
           if (!tabs.length) return null;
           return (
             <div className="tab-group" key={group.label}>

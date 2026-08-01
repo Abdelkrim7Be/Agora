@@ -38,6 +38,7 @@ import CampaignsPage from './pages/workspace/CampaignsPage';
 import DlqPage from './pages/workspace/DlqPage';
 import SetupPage from './pages/workspace/SetupPage';
 import NotificationsPage from './pages/workspace/NotificationsPage';
+import OAuthCallbackPage from './pages/OAuthCallbackPage';
 
 const queryClient = new QueryClient();
 
@@ -82,6 +83,7 @@ export default function App() {
                   <BrowserRouter>
                     <Routes>
                       <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
+                      <Route path="/oauth/gmail/callback" element={<OAuthCallbackPage />} />
 
                       {/* Platform views */}
                       <Route path="/" element={<ProtectedRoute><PlatformLayout /></ProtectedRoute>}>

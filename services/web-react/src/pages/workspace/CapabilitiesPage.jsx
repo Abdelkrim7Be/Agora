@@ -106,7 +106,7 @@ export default function CapabilitiesPage() {
             </label>
           ))}
         </Card>
-        <Card>
+        <Card className="security-rules-card">
           <strong>Règles de sécurité</strong>
           <p className="muted">Décision appliquée à chaque action de l'agent avant exécution. <code>allow</code> = automatique, <code>hitl</code> = validation humaine requise, <code>deny</code> = bloqué.</p>
           {!names.length ? (

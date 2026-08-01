@@ -55,13 +55,13 @@ export function useAuditQuery(page, limit) {
   });
 }
 
-export function useUsersQuery() {
+export function useUsersQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   return useQuery({
     queryKey: ['users'],
     queryFn: () => api('/users'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -72,6 +72,23 @@ export function useRenameInstance() {
     mutationFn: ({ id, displayName }) => api(`/agent-instances/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: JSON.stringify({ display_name: displayName }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-instances'] }),
+  });
+}
+
+export function useCreateInstance() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentType, displayName, mailboxIdentity, assignedTo }) => api('/agent-instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        agent_type: agentType,
+        display_name: displayName,
+        mailbox_identity: mailboxIdentity || null,
+        assigned_to: assignedTo || null,
+      }),
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-instances'] }),
   });
@@ -106,13 +123,22 @@ export function useSetUserEnabled() {
 
 // --- Validation (pending-approval queue) ---
 
-export function usePendingRunsQuery(page) {
+export function usePendingRunsQuery(page, filters = {}) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
+  const params = new URLSearchParams({
+    status: 'pending_approval',
+    limit: String(PENDING_PAGE_SIZE),
+    offset: String(page * PENDING_PAGE_SIZE),
+  });
+  if (filters.category) params.set('category', filters.category);
+  if (filters.priority) params.set('priority', filters.priority);
+  if (filters.q) params.set('q', filters.q);
+  if (filters.since) params.set('since', filters.since);
   return useQuery({
-    queryKey: ['pending-runs', instanceId, page],
-    queryFn: () => api(`/api/agent/runs?status=pending_approval&limit=${PENDING_PAGE_SIZE}&offset=${page * PENDING_PAGE_SIZE}`),
+    queryKey: ['pending-runs', instanceId, page, filters.category || '', filters.priority || '', filters.q || '', filters.since || ''],
+    queryFn: () => api(`/api/agent/runs?${params.toString()}`),
     enabled: Boolean(token),
     refetchInterval: 30_000,
   });
@@ -197,22 +223,24 @@ export function useSyncGmail() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api('/api/agent/sync?limit=50', { method: 'POST' }),
+    mutationFn: () => api('/api/agent/sync', { method: 'POST' }),
     onSuccess: () => invalidatePendingRuns(queryClient),
   });
 }
 
 // --- Drafts ---
 
-export function useDraftsQuery(category, priority) {
+export function useDraftsQuery(category, priority, q = '', since = '') {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   const params = new URLSearchParams({ limit: '100' });
   if (category) params.set('category', category);
   if (priority) params.set('priority', priority);
+  if (q) params.set('q', q);
+  if (since) params.set('since', since);
   return useQuery({
-    queryKey: ['drafts', instanceId, category, priority],
+    queryKey: ['drafts', instanceId, category, priority, q, since],
     queryFn: async () => (await api(`/api/agent/drafts?${params.toString()}`)).drafts || [],
     enabled: Boolean(token),
   });
@@ -264,7 +292,8 @@ export function useGmailStatusQuery() {
   return useQuery({
     queryKey: ['gmail-status', instanceId],
     queryFn: () => api('/api/agent/sync/status'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
+    refetchInterval: (query) => (query.state.data?.connection_status === 'connected' ? false : 3000),
   });
 }
 
@@ -273,7 +302,7 @@ export function useGmailSyncNow() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: () => api('/api/agent/sync?limit=20', { method: 'POST' }),
+    mutationFn: () => api('/api/agent/sync', { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] });
       queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
@@ -308,6 +337,28 @@ export function useGmailDisconnect() {
   return useMutation({
     mutationFn: () => api('/api/agent/disconnect/gmail', { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}
+
+
+export function useRuntimeSettingsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['runtime-settings', instanceId],
+    queryFn: () => api('/api/agent/runtime-settings'),
+    enabled: Boolean(token) && Boolean(instanceId),
+  });
+}
+
+export function useSaveRuntimeSettings() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (settings) => api('/api/agent/runtime-settings', { method: 'PUT', body: JSON.stringify(settings) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runtime-settings', instanceId] }),
   });
 }
 
@@ -456,7 +507,7 @@ export function useDeleteSignatureImage() {
 
 // --- Instance setup (onboarding pipeline) ---
 
-const SETUP_TERMINAL_STATUSES = new Set(['ready', 'failed', 'not_started']);
+const SETUP_TERMINAL_STATUSES = new Set(['ready', 'failed']);
 
 export function useInstanceSetupQuery() {
   const { api } = useApi();
@@ -579,7 +630,7 @@ export function useMemorySummaryQuery() {
   return useQuery({
     queryKey: ['memory-summary', instanceId],
     queryFn: () => api('/api/agent/memory/summary'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
   });
 }
 
@@ -590,7 +641,7 @@ export function useMemoryQuery() {
   return useQuery({
     queryKey: ['memory', instanceId],
     queryFn: () => api('/api/agent/memory'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
   });
 }
 
@@ -600,7 +651,10 @@ export function useSaveMemory() {
   const { instanceId } = useInstance();
   return useMutation({
     mutationFn: (body) => api('/api/agent/memory', { method: 'PUT', body: JSON.stringify(body) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['memory', instanceId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['memory', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['memory-summary', instanceId] });
+    },
   });
 }
 
@@ -934,6 +988,29 @@ export function useTestCategoryMatch() {
       method: 'POST',
       body: JSON.stringify({ author, subject, email_thread: '' }),
     }),
+  });
+}
+
+// --- Junk gate ---
+
+export function useJunkQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['junk', instanceId],
+    queryFn: () => api('/api/agent/junk'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveJunk() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/junk', { method: 'PUT', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['junk', instanceId] }),
   });
 }
 

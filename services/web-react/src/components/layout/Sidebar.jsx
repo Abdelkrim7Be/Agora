@@ -1,24 +1,25 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { useInstance } from '../../contexts/InstanceContext';
 import { useI18n } from '../../contexts/I18nContext';
+import { currentUsername } from '../../utils/jwt';
+import { roleAtLeast } from '../../utils/roles';
 
 const NAV_ITEMS = [
-  { to: '/', end: true, icon: 'hub', key: 'nav.instances' },
-  { to: '/agent-types', icon: 'deployed_code', key: 'nav.agentTypes' },
-  { to: '/system-health', icon: 'monitor_heart', key: 'nav.health' },
-  { to: '/access-log', icon: 'receipt_long', key: 'nav.audit' },
-  { to: '/team', icon: 'manage_accounts', key: 'nav.users' },
+  { to: '/', end: true, icon: 'hub', key: 'nav.instances', minRole: 'admin' },
+  { to: '/agent-types', icon: 'deployed_code', key: 'nav.agentTypes', minRole: 'admin' },
+  { to: '/system-health', icon: 'monitor_heart', key: 'nav.health', minRole: 'admin' },
+  { to: '/access-log', icon: 'receipt_long', key: 'nav.audit', minRole: 'admin' },
+  { to: '/team', icon: 'manage_accounts', key: 'nav.users', minRole: 'admin' },
   { to: '/account', icon: 'account_circle', key: 'nav.account' },
 ];
 
 export default function Sidebar() {
-  const { token } = useAuth();
-  const { instanceId, currentInstance } = useInstance();
+  const { token, globalRole } = useAuth();
   const { t } = useI18n();
   const signedIn = Boolean(token);
-  const instanceLabel = currentInstance?.display_name || instanceId || 'Aucune instance sélectionnée';
-  const sessionText = signedIn ? `Espace ${instanceLabel}` : 'Connectez-vous pour contrôler la plateforme';
+  const username = currentUsername(token);
+  const sessionText = signedIn ? username || 'Connecté' : 'Connectez-vous pour contrôler la plateforme';
+  const navItems = NAV_ITEMS.filter((item) => !item.minRole || roleAtLeast(globalRole, item.minRole));
 
   return (
     <aside className="sidebar">
@@ -31,7 +32,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="nav" aria-label="Navigation principale">
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

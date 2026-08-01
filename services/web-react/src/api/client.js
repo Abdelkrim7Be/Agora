@@ -22,8 +22,8 @@ export async function responseError(response, signOut) {
     // Keep raw
   }
   if (response.status === 401 || message === 'unauthorized') {
-    if (signOut) signOut();
-    return new Error("Session unauthorized. Sign in again.");
+    if (typeof signOut === 'function') signOut();
+    return new Error("Session expiree. Reconnectez-vous.");
   }
   if (response.status === 403) {
     return new Error('Interdit pour ce rôle.');

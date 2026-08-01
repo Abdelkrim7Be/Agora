@@ -16,6 +16,7 @@ import {
   useTestCategoryMatch,
   useRolesQuery,
   useContactsQuery,
+  useSaveContact,
 } from '../../api/queries';
 import { compactText } from '../../utils/format';
 import {
@@ -29,10 +30,11 @@ import {
 
 const PAGE_SIZE = 5;
 const EMPTY_FORM = {
-  name: '', keywords: '', policy: 'auto_draft', priority: 'normal', owner: '', approver: '', routeTo: '', template: '',
+  name: '', description: '', keywords: '', policy: 'auto_draft', priority: 'normal', owner: '', approver: '', routeTo: '', template: '',
   sla: '', requiredData: '', escalation: '', blockedCases: '', askForMissing: false,
   requireApproval: false, externalSendAllowed: true,
 };
+const EMPTY_CATEGORY_CONTACT = { email: '', name: '', audience: 'client' };
 
 function instructionsFromForm(form) {
   const requiredData = splitDirectoryValues(form.requiredData);
@@ -62,6 +64,8 @@ export default function CategoriesPage() {
   const [testResult, setTestResult] = useState(null);
   const [testError, setTestError] = useState('');
   const [routeCustomDraft, setRouteCustomDraft] = useState('');
+  const [selectedCategoryName, setSelectedCategoryName] = useState('');
+  const [categoryContactForm, setCategoryContactForm] = useState(EMPTY_CATEGORY_CONTACT);
   const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
@@ -72,6 +76,7 @@ export default function CategoriesPage() {
   const duplicateCategory = useDuplicateCategory();
   const deleteCategory = useDeleteCategory();
   const testMatch = useTestCategoryMatch();
+  const saveContact = useSaveContact();
   const rolesQuery = useRolesQuery();
   const availableRoles = rolesQuery.data?.roles || [];
   const directoryContactsQuery = useContactsQuery();
@@ -80,7 +85,7 @@ export default function CategoriesPage() {
   const parsed = query.data?.parsed;
   const categories = parsed?.categories || [];
   const templates = parsed?.templates || [];
-  const contacts = parsed?.contacts || [];
+  const legacyContacts = parsed?.contacts || [];
 
   const contactCountByCategory = directoryContacts.reduce((acc, contact) => {
     if (contact.category) acc[contact.category] = (acc[contact.category] || 0) + 1;
@@ -101,6 +106,16 @@ export default function CategoriesPage() {
     announcedError.current = query.error.message;
     setStatus(`Impossible de charger les workflows : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!categories.length) {
+      setSelectedCategoryName('');
+      return;
+    }
+    if (!selectedCategoryName || !categories.some((category) => category.name === selectedCategoryName)) {
+      setSelectedCategoryName(categories[0].name);
+    }
+  }, [categories, selectedCategoryName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetForm = () => { setEditingName(''); setForm(EMPTY_FORM); setRouteCustomDraft(''); };
 
@@ -126,11 +141,67 @@ export default function CategoriesPage() {
     setForm({ ...form, routeTo: routeToList.filter((item) => item !== value).join(', ') });
   };
 
+  const contactPayload = (contact, overrides = {}) => ({
+    email: contact.email,
+    name: contact.name || null,
+    audience: contact.audience || 'client',
+    fields: contact.fields || {},
+    tags: contact.tags || [],
+    active: contact.active !== false,
+    category: contact.category || null,
+    category_source: contact.category_source || 'manual',
+    priority: contact.priority || null,
+    ...overrides,
+  });
+
+  const contactsForCategory = (categoryName) => directoryContacts.filter((contact) => contact.category === categoryName);
+
+  const selectedCategory = categories.find((category) => category.name === selectedCategoryName) || categories[0] || null;
+  const selectedCategoryContacts = selectedCategory ? contactsForCategory(selectedCategory.name) : [];
+  const selectedRouteTargets = selectedCategory?.route_to?.filter(Boolean) || [];
+
+  const handleAddCategoryContact = async (e) => {
+    e.preventDefault();
+    if (!selectedCategory || !categoryContactForm.email.trim()) return;
+    const email = categoryContactForm.email.trim().toLowerCase();
+    const existing = directoryContacts.find((contact) => contact.email === email);
+    const payload = existing
+      ? contactPayload(existing, { category: selectedCategory.name, category_source: 'manual' })
+      : {
+          email,
+          name: categoryContactForm.name.trim() || null,
+          audience: categoryContactForm.audience,
+          fields: {},
+          tags: [selectedCategory.name],
+          active: true,
+          category: selectedCategory.name,
+          category_source: 'manual',
+        };
+    try {
+      await saveContact.mutateAsync({ email: existing ? email : '', payload });
+      setCategoryContactForm(EMPTY_CATEGORY_CONTACT);
+      setStatus(`${email} ajouté à ${selectedCategory.display_name || selectedCategory.name}.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d'ajouter l'e-mail à la catégorie : ${error.message}`, 'error');
+    }
+  };
+
+  const handleRemoveCategoryContact = async (contact) => {
+    if (!selectedCategory) return;
+    try {
+      await saveContact.mutateAsync({ email: contact.email, payload: contactPayload(contact, { category: null, category_source: 'manual' }) });
+      setStatus(`${contact.email} retiré de ${selectedCategory.display_name || selectedCategory.name}.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de retirer l'e-mail de la catégorie : ${error.message}`, 'error');
+    }
+  };
+
   const startEdit = (category) => {
     setEditingName(category.name);
     const instructions = category.instructions || {};
     setForm({
       name: category.display_name || category.name,
+      description: category.description || '',
       keywords: (category.when?.subject_contains || []).join(', '),
       policy: category.policy || 'notify',
       priority: category.priority || 'normal',
@@ -156,6 +227,7 @@ export default function CategoriesPage() {
       const currentEnabled = categories.find((item) => item.name === editingName)?.enabled !== false;
       const payload = {
         display_name: form.name.trim() || editingName,
+        description: form.description.trim() || null,
         enabled: currentEnabled,
         priority: form.priority,
         policy: form.policy,
@@ -180,6 +252,7 @@ export default function CategoriesPage() {
     if (!form.name.trim() || !form.keywords.trim()) return;
     const { categoryBlock, templateBlock } = buildWorkflowYamlSnippet({
       name: form.name.trim(),
+      description: form.description.trim(),
       keywords: form.keywords.trim(),
       policy: form.policy,
       priority: form.priority,
@@ -206,6 +279,7 @@ export default function CategoriesPage() {
 
   const categoryUpdatePayload = (category, overrides = {}) => ({
     display_name: category.display_name || category.name,
+    description: category.description || null,
     enabled: category.enabled !== false,
     priority: category.priority || 'normal',
     policy: category.policy || 'notify',
@@ -305,7 +379,7 @@ export default function CategoriesPage() {
         </button>
         <span className="counter">{query.data?.storage || 'default-instance-yaml'}</span>
       </div>
-      <div className="notice"><strong>Ordre de correspondance :</strong> les contacts (e-mail exact, puis domaine) sont évalués avant les prédicats sujet/expéditeur des workflows. Un domaine de contact large peut donc primer sur un mot-clé de sujet ; préférez les e-mails exacts sauf si ce comportement est voulu.</div>
+      <div className="notice"><strong>Catégories et actions :</strong> chaque catégorie définit comment traiter les e-mails qui correspondent. Choisissez Rédiger pour créer un brouillon, Notifier pour validation humaine, Classer pour organiser sans brouillon, ou Ignorer/archiver pour ne pas créer de brouillon.</div>
 
       <Card className="workflow-builder">
         <div className="card-header">
@@ -316,6 +390,7 @@ export default function CategoriesPage() {
         </div>
         <form className="workflow-form" onSubmit={handleSubmit}>
           <label><span>Cas métier</span><input value={form.name} disabled={Boolean(editingName)} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Attestation de travail" required /></label>
+          <label><span>Description</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Demandes RH clients, devis urgents, support fournisseur…" /></label>
           <label><span>Mots-clés déclencheurs</span><input value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} placeholder="attestation, certificat de travail" required /></label>
           <label><span>Action</span>
             <select value={form.policy} onChange={(e) => setForm({ ...form, policy: e.target.value })}>
@@ -436,8 +511,103 @@ export default function CategoriesPage() {
         </div>
       </Card>
 
+      <Card className="category-management-card">
+        <div className="card-header">
+          <div>
+            <h2>Gestion de catégorie</h2>
+            <div className="meta">Visualisez l'action, les responsables et les e-mails rattachés à une catégorie.</div>
+          </div>
+          {categories.length ? (
+            <select value={selectedCategoryName} onChange={(e) => setSelectedCategoryName(e.target.value)}>
+              {categories.map((category) => <option key={category.name} value={category.name}>{category.display_name || category.name}</option>)}
+            </select>
+          ) : null}
+        </div>
+        {!selectedCategory ? <div className="empty">Aucune catégorie à gérer.</div> : (
+          <div className="category-management-grid">
+            <div className="category-profile-panel">
+              <div className="directory-icon"><span className="material-symbols-outlined" aria-hidden="true">category</span></div>
+              <div>
+                <strong>{selectedCategory.display_name || selectedCategory.name}</strong>
+                <span>{selectedCategory.description || 'Aucune description définie.'}</span>
+              </div>
+              <div className="mini-chip-row">
+                <span className="mini-chip">{selectedCategory.enabled === false ? 'désactivée' : 'active'}</span>
+                <span className="mini-chip">{workflowActionLabel(selectedCategory.policy)}</span>
+                <span className="mini-chip">priorité: {selectedCategory.priority || 'normal'}</span>
+                {selectedCategory.owner ? <span className="mini-chip">owner: {selectedCategory.owner}</span> : null}
+                {selectedCategory.approver ? <span className="mini-chip">approver: {selectedCategory.approver}</span> : null}
+                {selectedRouteTargets.map((target) => <span className="mini-chip" key={target}>route: {target}</span>)}
+                {selectedCategory.require_approval ? <span className="mini-chip">validation obligatoire</span> : null}
+                {selectedCategory.external_send_allowed === false ? <span className="mini-chip">envoi externe interdit</span> : null}
+              </div>
+              {selectedCategory.when?.subject_contains?.length ? (
+                <div className="category-rule-block"><strong>Mots-clés</strong><span>{selectedCategory.when.subject_contains.join(', ')}</span></div>
+              ) : null}
+              {workflowInstructionsSummary(selectedCategory.instructions) ? (
+                <div className="category-rule-block"><strong>Consignes</strong><span>{workflowInstructionsSummary(selectedCategory.instructions)}</span></div>
+              ) : null}
+              {canManage && (
+                <div className="toolbar compact-toolbar">
+                  <button type="button" onClick={() => startEdit(selectedCategory)}>
+                    <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier cette catégorie</span>
+                  </button>
+                  <button type="button" onClick={() => navigate(`../contacts?category=${encodeURIComponent(selectedCategory.name)}`)}>
+                    <span className="material-symbols-outlined" aria-hidden="true">group</span><span>Ouvrir les contacts</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="category-members-panel">
+              <div className="card-header compact-card-header">
+                <div>
+                  <h3>E-mails et utilisateurs</h3>
+                  <div className="meta">Ces expéditeurs déclenchent cette catégorie avant les mots-clés.</div>
+                </div>
+                <span className="counter">{selectedCategoryContacts.length}</span>
+              </div>
+              {canManage && (
+                <form className="category-contact-form" onSubmit={handleAddCategoryContact}>
+                  <input type="email" value={categoryContactForm.email} onChange={(e) => setCategoryContactForm({ ...categoryContactForm, email: e.target.value })} placeholder="email@company.com" required />
+                  <input value={categoryContactForm.name} onChange={(e) => setCategoryContactForm({ ...categoryContactForm, name: e.target.value })} placeholder="Nom" />
+                  <select value={categoryContactForm.audience} onChange={(e) => setCategoryContactForm({ ...categoryContactForm, audience: e.target.value })}>
+                    {['client', 'employee', 'supplier', 'prospect', 'candidate', 'partner'].map((audience) => <option key={audience} value={audience}>{audience}</option>)}
+                  </select>
+                  <button className="primary" type="submit" disabled={saveContact.isPending}>
+                    <span className="material-symbols-outlined" aria-hidden="true">person_add</span><span>Ajouter</span>
+                  </button>
+                </form>
+              )}
+              <div className="rule-list category-member-list">
+                {!selectedCategoryContacts.length ? <div className="empty">Aucun e-mail manuel dans cette catégorie.</div> : selectedCategoryContacts.map((contact) => (
+                  <div className="directory-row compact category-member-row" key={contact.email}>
+                    <div className="directory-icon"><span className="material-symbols-outlined" aria-hidden="true">alternate_email</span></div>
+                    <div className="directory-main">
+                      <strong>{contact.name || contact.email}</strong>
+                      <span>{contact.email}</span>
+                      <div className="mini-chip-row">
+                        <span className="mini-chip">{contact.audience}</span>
+                        <span className="mini-chip">{contact.category_source || 'manual'}</span>
+                        {contact.active === false ? <span className="mini-chip">inactive</span> : null}
+                      </div>
+                    </div>
+                    {canManage && (
+                      <div className="directory-actions">
+                        <button className="danger" type="button" onClick={() => handleRemoveCategoryContact(contact)}>
+                          <span className="material-symbols-outlined" aria-hidden="true">link_off</span><span>Retirer</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
       <Card className="editor-card">
-        <strong>Workflows configurés</strong>
+        <strong>Catégories configurées</strong>
         <div className="rules-preview">
           <div className="rules-toggle-row">
             {canManage && (
@@ -451,11 +621,11 @@ export default function CategoriesPage() {
           <div className="summary-grid compact-summary">
             <div><strong>{categories.length}</strong><span>Cas métier</span></div>
             <div><strong>{templates.length}</strong><span>Modèles</span></div>
-            <div><strong>{contacts.length}</strong><span>Acteurs</span></div>
+            <div><strong>{directoryContacts.length + legacyContacts.length}</strong><span>Acteurs</span></div>
             <div><strong>{parsed?.enabled ? 'On' : 'Off'}</strong><span>Correspondance</span></div>
           </div>
           <div className="rule-list directory-list">
-            {!categories.length ? <div className="empty">Aucun workflow configuré.</div> : (
+            {!categories.length ? <div className="empty">Aucune catégorie configurée.</div> : (
               <>
                 {pageCategories.map((category) => {
                   const policy = category.policy || 'notify';
@@ -471,6 +641,7 @@ export default function CategoriesPage() {
                       <div className="directory-main">
                         <strong title={category.display_name || category.name}>{category.display_name || category.name}</strong>
                         <span title={trigger}>{compactText(trigger, 100)}</span>
+                        {category.description ? <span title={category.description}>{compactText(category.description, 140)}</span> : null}
                         <div className="mini-chip-row">
                           <span className="mini-chip">{category.enabled === false ? 'désactivé' : 'actif'}</span>
                           <span className="mini-chip">{category.priority || 'normal'}</span>
@@ -478,16 +649,22 @@ export default function CategoriesPage() {
                           {category.owner && <span className="mini-chip">{`owner: ${category.owner}`}</span>}
                           {category.approver && <span className="mini-chip">{`approver: ${category.approver}`}</span>}
                           {routeTargets.length > 0 && <span className="mini-chip">{`route: ${compactText(routeTargets.join(', '), 42)}`}</span>}
-                          {contactCountByCategory[category.name] > 0 && (
-                            <button
-                              type="button"
-                              className="mini-chip chip-link"
-                              onClick={() => navigate(`../contacts?category=${encodeURIComponent(category.name)}`)}
-                              title="Voir les contacts de cette catégorie"
-                            >
-                              {`${contactCountByCategory[category.name]} contact(s)`}
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className={`mini-chip chip-link ${selectedCategoryName === category.name ? 'selected' : ''}`}
+                            onClick={() => setSelectedCategoryName(category.name)}
+                            title="Gérer les e-mails de cette catégorie"
+                          >
+                            {`${contactCountByCategory[category.name] || 0} e-mail(s)`}
+                          </button>
+                          <button
+                            type="button"
+                            className="mini-chip chip-link"
+                            onClick={() => navigate(`../contacts?category=${encodeURIComponent(category.name)}`)}
+                            title="Ouvrir la vue contacts filtrée"
+                          >
+                            Contacts
+                          </button>
                         </div>
                       </div>
                       {canManage && (

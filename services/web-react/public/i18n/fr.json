@@ -99,9 +99,9 @@
       "description": "Basculez les capacités en direct de l'agent et inspectez la politique de sécurité appliquée en amont."
     },
     "categories": {
-      "title": "Workflows",
-      "kicker": "Playbooks métier",
-      "description": "Définissez comment l'instance reconnaît les cas métiers, rédige des réponses, achemine le travail et applique les règles d'approbation."
+      "title": "Catégories",
+      "kicker": "Gestion des e-mails",
+      "description": "Définissez les catégories, leurs actions, les responsables et les e-mails qui doivent déclencher chaque traitement."
     },
     "roles": {
       "title": "Annuaire des rôles",
