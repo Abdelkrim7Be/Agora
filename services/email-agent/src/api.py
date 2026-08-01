@@ -5,6 +5,9 @@ import base64
 import contextlib
 import html
 import json
+import os
+import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -3184,6 +3187,50 @@ async def delete_memory(request: Request) -> dict:
     return {"cleared": True, "namespaces": ["triage_preferences", "response_preferences", "writing_style"]}
 
 
+# Cached Gmail inbox listings, keyed by (user, instance, limit).
+#
+# Listing the inbox is a network round trip to Google — a list call plus a
+# metadata batch — and it was being paid on every visit to the Messages view.
+# The mailbox itself changes slowly compared to how often the view is opened, so
+# the listing is held briefly and served immediately; verdicts are re-attached
+# from the local registry on every request, and any action that mutates the
+# mailbox drops the entry so the next read is authoritative.
+_INBOX_CACHE: dict[tuple, tuple[float, list[dict]]] = {}
+_INBOX_CACHE_TTL_SECONDS = float(os.getenv("AGENT_INBOX_CACHE_TTL_SECONDS", "60"))
+_INBOX_CACHE_LOCK = threading.Lock()
+
+
+def _inbox_cache_get(key: tuple) -> list[dict] | None:
+    if _INBOX_CACHE_TTL_SECONDS <= 0:
+        return None
+    with _INBOX_CACHE_LOCK:
+        entry = _INBOX_CACHE.get(key)
+        if entry is None:
+            return None
+        stored_at, messages = entry
+        if (time.time() - stored_at) > _INBOX_CACHE_TTL_SECONDS:
+            _INBOX_CACHE.pop(key, None)
+            return None
+        return messages
+
+
+def _inbox_cache_put(key: tuple, messages: list[dict]) -> None:
+    if _INBOX_CACHE_TTL_SECONDS <= 0:
+        return
+    with _INBOX_CACHE_LOCK:
+        _INBOX_CACHE[key] = (time.time(), [dict(message) for message in messages])
+
+
+def _inbox_cache_clear(user_id: str | None = None, agent_instance_id: str | None = None) -> None:
+    """Drop cached listings after the mailbox is mutated."""
+    with _INBOX_CACHE_LOCK:
+        if user_id is None and agent_instance_id is None:
+            _INBOX_CACHE.clear()
+            return
+        for key in [k for k in _INBOX_CACHE if k[0] == user_id and k[1] == agent_instance_id]:
+            _INBOX_CACHE.pop(key, None)
+
+
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
     """Build inbox rows from agent-known runs when Gmail is temporarily unreachable."""
     messages: list[dict] = []
@@ -3214,31 +3261,63 @@ def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
 
 
 @app.get("/inbox")
-async def inbox(request: Request, limit: int = Query(default=25, ge=1, le=100)) -> dict:
+async def inbox(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    refresh: bool = Query(default=False),
+) -> dict:
     """List the tenant's recent inbox messages with the agent's verdict attached.
 
     The Gmail calls are blocking (googleapiclient), so they run in a worker thread to
     keep the event loop free. Each message is matched to an agent run by Gmail message
     id so the UI can show the classification and link straight to the run.
+
+    The Gmail half of that is a network round trip to Google — a list call plus a
+    metadata batch, measured at roughly four seconds for fifty messages — and it
+    was being paid on every single visit to the view, so opening Messages always
+    meant watching a spinner. The listing is cached per instance for a short
+    window and served immediately; `refresh=true` forces a re-read. Run verdicts
+    are re-attached on every request regardless, since those come from the local
+    registry in milliseconds and are what actually changes minute to minute.
     """
     user_id = current_user_id()
     user_dept = _request_user_dept(request)
-    try:
-        resource = await asyncio.to_thread(gmail_resource)
-        messages = await asyncio.to_thread(list_inbox, limit, resource)
-    except Exception as exc:
-        print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
-        runs = await asyncio.to_thread(list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500)
-        if user_dept:
-            runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
-        return {
-            "messages": _fallback_inbox_messages(runs, limit),
-            "warning": (
-                "Gmail inbox is unavailable. Check OAuth credentials and container network access. "
-                "Showing last known agent messages."
-            ),
-        }
-    runs = await asyncio.to_thread(list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500)
+    cache_key = (user_id, current_agent_instance_id(), limit)
+    cached = None if refresh else _inbox_cache_get(cache_key)
+    if cached is not None:
+        messages = [dict(message) for message in cached]
+    else:
+        try:
+            resource = await asyncio.to_thread(gmail_resource)
+            messages = await asyncio.to_thread(list_inbox, limit, resource)
+            _inbox_cache_put(cache_key, messages)
+        except Exception as exc:
+            return await _inbox_unavailable(exc, user_id, user_dept, limit)
+    return await _inbox_with_verdicts(messages, user_dept)
+
+
+async def _inbox_unavailable(exc: Exception, user_id: str, user_dept: str | None, limit: int) -> dict:
+    """Gmail is unreachable: fall back to the last runs this instance recorded."""
+    print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
+    runs = await asyncio.to_thread(
+        list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
+    )
+    if user_dept:
+        runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+    return {
+        "messages": _fallback_inbox_messages(runs, limit),
+        "warning": (
+            "Gmail inbox is unavailable. Check OAuth credentials and container network access. "
+            "Showing last known agent messages."
+        ),
+    }
+
+
+async def _inbox_with_verdicts(messages: list[dict], user_dept: str | None) -> dict:
+    """Attach each message's agent run, so a cached listing still shows fresh verdicts."""
+    runs = await asyncio.to_thread(
+        list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
+    )
     if user_dept:
         runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
     by_email: dict[str, dict] = {}
@@ -3265,6 +3344,9 @@ async def _inbox_action(fn, msg_id: str, action: str) -> dict:
             status_code=503,
             detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
         ) from exc
+    # Archiving, trashing or flipping read state changes what the listing should
+    # show, so the cached copy is dropped rather than left to expire.
+    _inbox_cache_clear(current_user_id(), current_agent_instance_id())
     return {"ok": True, "msg_id": msg_id, "action": action}
 
 
