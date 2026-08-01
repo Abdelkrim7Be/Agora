@@ -45,6 +45,11 @@ class Settings:
     gmail_token_path: str = os.getenv("GMAIL_TOKEN_PATH", "token.json")
     gmail_token_store_path: str = os.getenv("GMAIL_TOKEN_STORE_PATH", "logs/gmail_tokens.json")
     gmail_oauth_redirect_uri: str = os.getenv("GMAIL_OAUTH_REDIRECT_URI", "http://localhost:8080/api/agent/connect/gmail/callback")
+    # Where to send the browser after the Gmail OAuth callback finishes. Empty
+    # means "same origin, relative redirect" — correct in prod, where Traefik
+    # puts the web app and gateway behind one public origin. Local dev splits
+    # them across ports, so the override compose sets this explicitly.
+    app_base_url: str = os.getenv("AGENT_APP_BASE_URL", "").rstrip("/")
     gmail_oauth_state_secret: str = os.getenv("GMAIL_OAUTH_STATE_SECRET", "")
     token_encryption_key_file: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY_FILE", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
@@ -65,6 +70,7 @@ class Settings:
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
+    default_send_mode: str = os.getenv("AGENT_DEFAULT_SEND_MODE", "simulation").strip().lower()
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
     # Durable state files — shared by the API and the poller so a paused run started
@@ -77,7 +83,13 @@ class Settings:
     # Security service integration (off by default — no behavior change until opted in).
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
-    security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "10"))
+    # 10s was tuned for a hosted classifier call; against a single shared local
+    # Ollama instance that's also serving triage/draft/persona generation, the
+    # classifier queues behind whatever else is running and 10s isn't enough —
+    # every email hit classifier_unavailable, got parked at security_hold, and
+    # was reprocessed as a brand-new run every poll cycle, forever, without
+    # ever actually completing.
+    security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "180"))
     # Domains treated as "internal" for a category's external_send_allowed=false
     # guard (comma-separated, case-insensitive). Independent of security_enabled —
     # this is a local workflow-policy rule, not the external security service.
@@ -153,7 +165,9 @@ class Settings:
     setup_enabled: bool = _env_bool("AGENT_SETUP_PIPELINE_ENABLED", "true")
     setup_recent_limit: int = int(os.getenv("AGENT_SETUP_RECENT_LIMIT", "50"))
     setup_backlog_limit: int = int(os.getenv("AGENT_SETUP_BACKLOG_LIMIT", "20"))
-    setup_sent_sample: int = int(os.getenv("AGENT_SETUP_SENT_SAMPLE", "20"))
+    setup_sent_sample: int = int(os.getenv("AGENT_SETUP_SENT_SAMPLE", "50"))
+    setup_llm_step_timeout_seconds: float = float(os.getenv("AGENT_SETUP_LLM_STEP_TIMEOUT_SECONDS", "120"))
+    setup_backlog_message_timeout_seconds: float = float(os.getenv("AGENT_SETUP_BACKLOG_MESSAGE_TIMEOUT_SECONDS", "90"))
     setup_stale_seconds: float = float(os.getenv("AGENT_SETUP_STALE_SECONDS", "300"))
     setup_max_attempts: int = int(os.getenv("AGENT_SETUP_MAX_ATTEMPTS", "3"))
     instance_setup_path: str = os.getenv("AGENT_INSTANCE_SETUP_PATH", "logs/instance_setup.json")

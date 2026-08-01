@@ -8,12 +8,13 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import yaml
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -44,6 +45,7 @@ from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
+from src.junk_config import JunkConfig, load_junk, save_junk
 from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once
 from src.memory import namespace, preferences_text, wrap_preferences
 from src.roles import (
@@ -85,6 +87,7 @@ from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_hi
 from src.health import aggregate_health
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
+from src.runtime_settings import RuntimeSettings, load_runtime_settings, save_runtime_settings
 from src.gdpr import ErasureRequest, erase_subject, preview_erasure
 from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
@@ -402,6 +405,19 @@ class RulesInput(BaseModel):
     rules_yaml: str
 
 
+class JunkInput(BaseModel):
+    """Junk-gate settings edited from the UI (no YAML surface)."""
+
+    enabled: bool | None = None
+    allowed_senders: list[str] | None = None
+    allowed_domains: list[str] | None = None
+    blocked_senders: list[str] | None = None
+    blocked_domains: list[str] | None = None
+    gmail_categories: bool | None = None
+    bulk_headers: bool | None = None
+    sender_heuristics: bool | None = None
+
+
 class RuleToggleInput(BaseModel):
     name: str
     enabled: bool
@@ -459,6 +475,14 @@ class RoleInput(BaseModel):
     display_name: str
     emails: list[str]
     dept: str | None = None
+
+
+class RuntimeSettingsInput(BaseModel):
+    sync_limit: int = Field(ge=1, le=100)
+    setup_recent_limit: int = Field(ge=1, le=200)
+    setup_backlog_limit: int = Field(ge=1, le=100)
+    setup_sent_sample: int = Field(ge=1, le=200)
+    style_sent_sample: int = Field(ge=1, le=50)
 
 
 def _contact_from_input(body: ContactInput) -> Contact:
@@ -1126,6 +1150,20 @@ async def update_retention_settings(request: Request, body: RetentionSettings) -
     return save_retention_settings(body).model_dump()
 
 
+
+
+@app.get("/runtime-settings")
+async def runtime_settings(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return load_runtime_settings(current_agent_instance_id()).model_dump()
+
+
+@app.put("/runtime-settings")
+async def update_runtime_settings(request: Request, body: RuntimeSettingsInput) -> dict:
+    _require_instance_role(request, "owner")
+    config = RuntimeSettings(**body.model_dump())
+    return save_runtime_settings(config, current_agent_instance_id()).model_dump()
+
 @app.get("/instance-setup")
 async def get_instance_setup(request: Request) -> dict:
     _require_instance_role(request, "viewer")
@@ -1273,26 +1311,21 @@ async def gmail_connect_start(instance_id: str, request: Request) -> GmailConnec
     )
 
 
-def _gmail_callback_page(status: str, message: str, payload: dict | None = None) -> HTMLResponse:
-    body = json.dumps({"type": "agora:gmail-oauth", "status": status, "message": message, "payload": payload or {}})
-    code = 200 if status == "connected" else 400
-    page_html = f"""<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Gmail connection</title></head>
-<body style="font-family:system-ui,sans-serif;background:#0b1326;color:#dae2fd;display:grid;place-items:center;min-height:100vh;margin:0">
-  <p>{html.escape(message)}</p>
-  <script>
-    const result = {body};
-    if (window.opener) {{
-      window.opener.postMessage(result, "*");
-      window.close();
-    }} else {{
-      window.location.replace('/');
-    }}
-  </script>
-</body>
-</html>"""
-    return HTMLResponse(page_html, status_code=code)
+def _gmail_callback_redirect(agent_instance_id: str | None, status: str, message: str = "") -> RedirectResponse:
+    """Send OAuth completion back into the app.
+
+    The frontend opens Google in a named popup and keeps the main setup page
+    visible. This redirect may therefore land inside the popup; the main
+    window learns completion through polling, and the query parameters remain
+    useful if the callback ever lands in the main workspace window.
+    """
+    target = "/oauth/gmail/callback"
+    query = f"gmail={status}"
+    if agent_instance_id:
+        query += f"&agent_instance_id={quote(agent_instance_id)}"
+    if message:
+        query += f"&message={quote(message)}"
+    return RedirectResponse(f"{settings.app_base_url}{target}?{query}", status_code=303)
 
 
 def _start_setup_after_connect(background_tasks: BackgroundTasks, user_id: str, agent_instance_id: str) -> None:
@@ -1312,39 +1345,36 @@ def _start_setup_after_connect(background_tasks: BackgroundTasks, user_id: str, 
         print(f"api: failed to start onboarding for {user_id}/{agent_instance_id}: {exc}")
 
 
-@app.get("/connect/gmail/callback", response_class=HTMLResponse)
+@app.get("/connect/gmail/callback")
 async def gmail_connect_callback(
     background_tasks: BackgroundTasks, code: str | None = None, state: str | None = None
-) -> HTMLResponse:
+) -> RedirectResponse:
     if not code or not state:
-        return _gmail_callback_page("error", "Missing Gmail OAuth code or state.")
+        return _gmail_callback_redirect(None, "error", "Missing Gmail OAuth code or state.")
+    payload: dict | None = None
     try:
         payload = validate_gmail_oauth_state(state)
         exchange_gmail_oauth_code(code, payload)
-        record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
+        with user_context(payload["user_id"]):
+            with agent_instance_context(payload["agent_instance_id"]):
+                record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
         if settings.setup_enabled:
             _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
         print(f"api: gmail oauth callback rejected: {exc}")
-        return _gmail_callback_page("error", str(exc))
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _gmail_callback_redirect(instance_id, "error", str(exc))
     except Exception as exc:
         # Token exchange reaches out to Google; a transient network failure (or a
-        # stale/replayed single-use code) must not surface as a raw 500 in the popup.
+        # stale/replayed single-use code) must not surface as a raw 500.
         print(f"api: gmail oauth callback failed: {exc!r}\n{traceback.format_exc()}")
-        return _gmail_callback_page(
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _gmail_callback_redirect(
+            instance_id,
             "error",
-            "Could not finish connecting to Google "
-            f"({type(exc).__name__}: {exc}). Close this window and click Connect Gmail again.",
+            f"Could not finish connecting to Google ({type(exc).__name__}: {exc}). Try again.",
         )
-    return _gmail_callback_page(
-        "connected",
-        "Gmail connected. You can close this window.",
-        {
-            "agent_instance_id": payload["agent_instance_id"],
-            "user_id": payload["user_id"],
-            "mailbox_identity": payload.get("mailbox_identity") or None,
-        },
-    )
+    return _gmail_callback_redirect(payload["agent_instance_id"], "connected")
 
 
 def _serialize_role(role) -> dict:
@@ -1409,6 +1439,7 @@ async def update_categories(body: CategoriesInput) -> dict:
 
 class CategoryUpdateInput(BaseModel):
     display_name: str
+    description: str | None = None
     enabled: bool = True
     priority: str = "normal"
     policy: str = "notify"
@@ -1430,6 +1461,7 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
     for cat in cfg.categories:
         if cat.name == name:
             cat.display_name = body.display_name
+            cat.description = body.description
             cat.enabled = body.enabled
             cat.priority = body.priority
             cat.policy = body.policy
@@ -2106,10 +2138,25 @@ async def approve_campaign(request: Request, campaign_id: str) -> dict:
     return summary
 
 
+def _run_timestamp_at_or_after(record: dict, since_dt: datetime) -> bool:
+    value = record.get("created_at") or record.get("updated_at")
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) >= since_dt
+
+
 @app.get("/drafts")
 async def drafts(
     category: str | None = Query(default=None),
     priority: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    since: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict:
     runs = list_runs(
@@ -2122,12 +2169,54 @@ async def drafts(
         runs = [run for run in runs if run.get("category") == category]
     if priority:
         runs = [run for run in runs if run.get("priority") == priority]
+    if q and q.strip():
+        needle = q.strip().lower()
+        runs = [
+            run for run in runs
+            if needle in str(run.get("author") or "").lower()
+            or needle in str(run.get("subject") or "").lower()
+        ]
+    if since and since.strip():
+        try:
+            since_dt = datetime.fromisoformat(since.strip().replace("Z", "+00:00"))
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            since_dt = since_dt.astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="since must be an ISO date or datetime")
+        runs = [run for run in runs if _run_timestamp_at_or_after(run, since_dt)]
     order = {"urgent": 0, "normal": 1, "low": 2}
     runs.sort(key=lambda run: (order.get(run.get("priority") or "normal", 1), run.get("updated_at", "")))
     return {
         "agent_instance_id": current_agent_instance_id(),
         "drafts": runs[:limit],
         "limit": limit,
+    }
+
+
+@app.get("/junk")
+async def get_junk() -> dict:
+    """Junk-gate settings for this instance, plus the reasons the gate can report."""
+    config = load_junk(agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "junk": config.model_dump(),
+    }
+
+
+@app.put("/junk")
+async def update_junk(body: JunkInput) -> dict:
+    """Patch junk-gate settings; omitted fields keep their current value."""
+    current = load_junk(agent_instance_id=current_agent_instance_id())
+    patch = body.model_dump(exclude_none=True)
+    for key in ("allowed_senders", "allowed_domains", "blocked_senders", "blocked_domains"):
+        if key in patch:
+            patch[key] = [item.strip().lower() for item in patch[key] if item and item.strip()]
+    updated = JunkConfig(**{**current.model_dump(), **patch})
+    save_junk(updated, agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "junk": updated.model_dump(),
     }
 
 
@@ -2784,6 +2873,10 @@ async def analytics(request: Request, period: str = Query(default="week")) -> di
 async def runs(
     request: Request,
     status: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    since: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
@@ -2799,7 +2892,27 @@ async def runs(
     )
     if user_dept:
         all_runs = [r for r in all_runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
-    
+    if category:
+        all_runs = [r for r in all_runs if str(r.get("category") or "") == category]
+    if priority:
+        all_runs = [r for r in all_runs if str(r.get("priority") or "normal") == priority]
+    if q and q.strip():
+        needle = q.strip().lower()
+        all_runs = [
+            r for r in all_runs
+            if needle in str(r.get("author") or "").lower()
+            or needle in str(r.get("subject") or "").lower()
+        ]
+    if since and since.strip():
+        try:
+            since_dt = datetime.fromisoformat(since.strip().replace("Z", "+00:00"))
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            since_dt = since_dt.astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="since must be an ISO date or datetime")
+        all_runs = [r for r in all_runs if _run_timestamp_at_or_after(r, since_dt)]
+
     categories_cfg = load_categories(agent_instance_id=current_agent_instance_id())
     escalation_state = load_escalation_state()
     page = [
@@ -2885,7 +2998,7 @@ async def events_stream(request: Request) -> StreamingResponse:
 
 
 @app.post("/sync")
-async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=100)) -> dict:
+async def sync_unread(request: Request, limit: int | None = Query(default=None, ge=1, le=100)) -> dict:
     """Process unread Gmail messages now so validation reflects fresh mail."""
     user_id = current_user_id()
     # Manual sync must respect the Gmail rate-limit cooldown: calling Gmail
@@ -2926,7 +3039,8 @@ async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=
         ) from exc
 
     try:
-        outcomes = await poll_once(request.app.state.graph, resource=resource, max_results=limit)
+        effective_limit = limit or load_runtime_settings(current_agent_instance_id()).sync_limit
+        outcomes = await poll_once(request.app.state.graph, resource=resource, max_results=effective_limit)
     except Exception as exc:
         print(f"api: gmail sync failed for user {user_id}: {exc}")
         record_sync_failure(str(exc))
@@ -3246,30 +3360,22 @@ async def _approve_run(graph, run_id: str, args) -> RunResponse:
         raise
     response = _format(result, run_id)
     _record_response(response)
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    if response.status == "completed" and record is not None:
+        _record_decision_metadata(response, record, "approved")
     return response
 
 
 async def _reject_run(graph, run_id: str) -> RunResponse:
-    """Resume a paused run with a reject decision. Authorization is the caller's job."""
-    config = await _require_run(graph, run_id)
+    """Resolve a paused run with an ignore/reject decision. Authorization is the caller's job."""
     _require_pending(run_id)
-    try:
-        result = await _invoke_graph(
-            graph,
-            Command(resume={"type": "reject"}), config, reload_runtime_config=False
-        )
-    except Exception as exc:
-        response = _complete_pending_rejection(run_id)
-        if response is not None:
-            print(f"api: reject graph resume failed for run {run_id}; completed pending rejection fallback: {exc}")
-            return response
-        response = _pending_response_after_decision_error(run_id, exc, "reject")
-        if response is not None:
-            return response
-        raise
-    response = _format(result, run_id)
-    _record_response(response)
-    return response
+    response = _complete_pending_rejection(run_id)
+    if response is not None:
+        return response
+    # If a legacy/non-pending run is missing from the registry, fall back to the
+    # old graph validation so callers still get a precise 404.
+    await _require_run(graph, run_id)
+    raise HTTPException(status_code=409, detail="Run is not pending approval")
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)

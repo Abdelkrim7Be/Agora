@@ -11,12 +11,15 @@ from typing import Any, Awaitable, Callable
 
 from src.config import SERVICE_ROOT, settings
 from src.run_registry import selected_run_registry_backend
+from src.runtime_settings import load_runtime_settings
 from src.sync_status import public_error_message as _sync_public_error_message
 from src.tenant import (
+    agent_instance_context,
     current_agent_instance_id,
     current_user_id,
     normalize_agent_instance_id,
     normalize_user_id,
+    user_context,
 )
 
 DEFAULT_INSTANCE_SETUP_PATH = SERVICE_ROOT / "logs" / "instance_setup.json"
@@ -24,11 +27,11 @@ DEFAULT_INSTANCE_SETUP_PATH = SERVICE_ROOT / "logs" / "instance_setup.json"
 SETUP_STEPS: tuple[str, ...] = (
     "verify_provider",
     "fetch_recent",
+    "seed_categories",
     "import_contacts",
     "learn_style",
     "suggest_persona",
     "detect_signature",
-    "seed_categories",
     "triage_backlog",
     "finalize",
 )
@@ -333,6 +336,17 @@ def _pg_get_record(user_id: str, instance_id: str) -> dict | None:
                 (user_id, instance_id),
             )
             setup_row = cur.fetchone()
+            if not setup_row:
+                cur.execute(
+                    """
+                    SELECT * FROM email_agent_instance_setup
+                    WHERE agent_instance_id = %s AND status = 'ready'
+                    ORDER BY finished_at DESC NULLS LAST, updated_at DESC
+                    LIMIT 1
+                    """,
+                    (instance_id,),
+                )
+                setup_row = cur.fetchone()
             if not setup_row:
                 return None
             cur.execute(
@@ -660,6 +674,16 @@ def _extract_sender(message: dict) -> tuple[str, str]:
     return (email or "").strip().lower(), (name or "").strip()
 
 
+async def _to_thread_with_timeout(func, *args, step_label: str):
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(func, *args),
+            timeout=settings.setup_llm_step_timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise SkipStep(f"{step_label} timed out") from exc
+
+
 async def _step_verify_provider(context: SetupContext) -> dict:
     from src.gmail_client import gmail_resource
 
@@ -672,7 +696,8 @@ async def _step_verify_provider(context: SetupContext) -> dict:
 async def _step_fetch_recent(context: SetupContext) -> dict:
     from src.gmail_client import fetch_recent
 
-    messages = await asyncio.to_thread(fetch_recent, settings.setup_recent_limit, context.resource)
+    runtime = load_runtime_settings(context.agent_instance_id)
+    messages = await asyncio.to_thread(fetch_recent, runtime.setup_recent_limit, context.resource)
     context.recent_messages = messages
     return {"messages_fetched": len(messages)}
 
@@ -681,18 +706,39 @@ async def _step_import_contacts(context: SetupContext) -> dict:
     if not context.recent_messages:
         raise SkipStep("no messages fetched")
     from src.contacts import Contact, upsert_contact
+    from src.junk_gate import is_junk
 
-    seen: dict[str, str] = {}
+    seen: dict[str, tuple[str, dict]] = {}
     for message in context.recent_messages:
         email, name = _extract_sender(message)
         if email and "@" in email:
-            seen.setdefault(email, name)
+            seen.setdefault(email, (name, message))
     imported = 0
-    for email, name in seen.items():
+    for email, (name, message) in seen.items():
         try:
+            junk, _reason = is_junk({
+                "author": message.get("from", ""),
+                "labels": message.get("labels", []),
+                "list_unsubscribe": message.get("list_unsubscribe"),
+                "precedence_bulk": message.get("precedence_bulk"),
+                "list_id": message.get("list_id"),
+                "auto_submitted": message.get("auto_submitted"),
+            })
+            contact_payload = {
+                "email": email,
+                "name": name or None,
+                "audience": "prospect",
+                "tags": ["imported"] if not junk else ["imported", "bulk"],
+            }
+            if not junk:
+                contact_payload.update({
+                    "category": "externe",
+                    "category_source": "imported",
+                    "category_confidence": 0.55,
+                })
             await asyncio.to_thread(
                 upsert_contact,
-                Contact(email=email, name=name or None, audience="prospect", tags=["imported"]),
+                Contact(**contact_payload),
                 context.agent_instance_id,
             )
             imported += 1
@@ -711,7 +757,7 @@ async def _step_learn_style(context: SetupContext) -> dict:
 
     if not context.sent_samples:
         context.sent_samples = await asyncio.to_thread(
-            fetch_sent, settings.setup_sent_sample, context.resource
+            fetch_sent, load_runtime_settings(context.agent_instance_id).setup_sent_sample, context.resource
         )
     if not context.sent_samples:
         raise SkipStep("no sent mail sampled")
@@ -719,7 +765,9 @@ async def _step_learn_style(context: SetupContext) -> dict:
     from src.memory import namespace, wrap_preferences
     from src.style_learning import analyze_style, build_style_text
 
-    profile = await asyncio.to_thread(analyze_style, context.sent_samples, graph_module.llm)
+    profile = await _to_thread_with_timeout(
+        analyze_style, context.sent_samples, graph_module.llm, step_label="style learning"
+    )
     text = build_style_text(profile)
     if context.store is not None:
         await context.store.aput(
@@ -740,8 +788,9 @@ async def _step_suggest_persona(context: SetupContext) -> dict:
         raise SkipStep("no mailbox samples available")
     from src import graph as graph_module
 
-    suggestion = await asyncio.to_thread(
-        suggest_persona, context.sent_samples, context.recent_messages, graph_module.llm
+    suggestion = await _to_thread_with_timeout(
+        suggest_persona, context.sent_samples, context.recent_messages, graph_module.llm,
+        step_label="persona suggestion",
     )
     return {"suggestion": suggestion.model_dump()}
 
@@ -761,7 +810,8 @@ async def _step_detect_signature(context: SetupContext) -> dict:
 
 
 async def _step_seed_categories(context: SetupContext) -> dict:
-    from src.categories import Category, DEFAULT_CATEGORIES_PATH, dump_categories, load_categories
+    from src.automation import RuleWhen
+    from src.categories import Category, DEFAULT_CATEGORIES_PATH, Template, dump_categories, load_categories
     from src.instance_config import write_instance_text
 
     cfg = await asyncio.to_thread(load_categories, None, context.agent_instance_id)
@@ -770,26 +820,117 @@ async def _step_seed_categories(context: SetupContext) -> dict:
     cfg.enabled = True
     cfg.categories = [
         Category(
-            name="general",
-            display_name="Général",
+            name="clients",
+            display_name="Clients",
+            enabled=True,
+            priority="normal",
+            policy="auto_draft",
+            template="client_reply",
+            when=RuleWhen(body_contains=["devis", "proposition", "contrat", "rendez-vous", "rdv", "question"]),
+        ),
+        Category(
+            name="externe",
+            display_name="Externe",
+            enabled=True,
+            priority="normal",
+            policy="auto_draft",
+            template="external_reply",
+        ),
+        Category(
+            name="interne",
+            display_name="Interne",
             enabled=True,
             priority="normal",
             policy="notify",
-        )
+            external_send_allowed=False,
+        ),
+        Category(
+            name="fournisseurs",
+            display_name="Fournisseurs",
+            enabled=True,
+            priority="normal",
+            policy="notify",
+            when=RuleWhen(body_contains=["facture", "livraison", "commande", "paiement"]),
+        ),
+        Category(
+            name="general",
+            display_name="Général",
+            enabled=True,
+            priority="low",
+            policy="notify",
+        ),
+    ]
+    cfg.templates = [
+        Template(
+            name="client_reply",
+            subject="Re: {{subject}}",
+            body=(
+                "Bonjour {{prenom}}\n\n"
+                "Merci pour votre message. Je reviens vers vous rapidement avec les éléments adaptés.\n\n"
+                "Cordialement"
+            ),
+            variables=["subject", "prenom"],
+        ),
+        Template(
+            name="external_reply",
+            subject="Re: {{subject}}",
+            body=(
+                "Bonjour {{prenom}}\n\n"
+                "Merci pour votre message. J'ai bien pris connaissance de votre demande et je vous réponds rapidement.\n\n"
+                "Cordialement"
+            ),
+            variables=["subject", "prenom"],
+        ),
     ]
     await asyncio.to_thread(
         write_instance_text, "categories", dump_categories(cfg), DEFAULT_CATEGORIES_PATH, context.agent_instance_id
     )
-    return {"categories_seeded": len(cfg.categories)}
+    return {"categories_seeded": len(cfg.categories), "templates_seeded": len(cfg.templates)}
 
 
 async def _step_triage_backlog(context: SetupContext) -> dict:
+    from src.gmail_client import fetch_unread, gmail_resource
+
+    if context.resource is None:
+        context.resource = await asyncio.to_thread(gmail_resource)
+
     if not settings.job_queue_enabled:
-        raise SkipStep("job queue disabled")
+        from src import graph as graph_module
+        from src.automation import load_rules
+        from src.poller import process_message_with_retry
+
+        refs = await asyncio.to_thread(fetch_unread, load_runtime_settings(context.agent_instance_id).setup_backlog_limit, context.resource)
+        rules_config = load_rules()
+        outcomes = []
+        timed_out = 0
+        for ref in refs:
+            msg_id = ref.get("id")
+            if not msg_id:
+                continue
+            try:
+                outcome = await asyncio.wait_for(
+                    process_message_with_retry(graph_module.graph, msg_id, context.resource, rules_config),
+                    timeout=settings.setup_backlog_message_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                timed_out += 1
+                outcomes.append((msg_id, "setup_timeout", ""))
+                continue
+            outcomes.append(outcome)
+        return {
+            "backlog_seen": len(refs),
+            "backlog_processed": len([outcome for outcome in outcomes if outcome[1] != "setup_timeout"]),
+            "backlog_timed_out": timed_out,
+            "outcomes": [
+                {"message_id": msg_id, "status": status, "run_id": run_id}
+                for msg_id, status, run_id in outcomes
+            ],
+        }
+
     from src.gmail_client import fetch_unread
     from src.job_queue import enqueue_job
 
-    refs = await asyncio.to_thread(fetch_unread, settings.setup_backlog_limit, context.resource)
+    refs = await asyncio.to_thread(fetch_unread, load_runtime_settings(context.agent_instance_id).setup_backlog_limit, context.resource)
     enqueued = 0
     for ref in refs:
         job = await asyncio.to_thread(enqueue_job, context.agent_instance_id, ref["id"])
@@ -867,7 +1008,9 @@ async def run_pipeline_inline(user_id: str | None = None, agent_instance_id: str
             # Another instance's step got claimed first (shared JSON/pg claim pool);
             # nothing to do here for this call, another caller owns it.
             continue
-        await run_step(step, context)
+        with user_context(uid):
+            with agent_instance_context(iid):
+                await run_step(step, context)
         status = get_setup(uid, iid).get("status")
         if status in TERMINAL_STATUSES:
             break

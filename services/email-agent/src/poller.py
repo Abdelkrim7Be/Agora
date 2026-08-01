@@ -83,6 +83,7 @@ from src.automation import (
     workflow_sla_snapshot,
 )
 from src.config import load_config, settings
+from src.runtime_settings import load_runtime_settings
 from src.memory import namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
 from src.security_client import sanitize_email
@@ -109,6 +110,7 @@ from src.gmail_client import (
     watch_mailbox,
 )
 from src.categories import classify_category, load_categories
+from src.junk_config import load_junk
 from src.junk_gate import is_junk
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
@@ -137,6 +139,7 @@ from src.tenant import (
     agent_instance_context,
     current_agent_instance_id,
     normalize_agent_instance_id,
+    user_context,
 )
 
 
@@ -402,6 +405,37 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
     return outcomes
 
 
+async def retry_security_holds(
+    graph,
+    resource,
+    rules_config: RulesConfig,
+    exclude_message_ids: set[str] | None = None,
+) -> list[tuple]:
+    """Re-attempt every security_hold run directly by message id.
+
+    Gmail's incremental history.list diff only surfaces messages that changed
+    since the last saved baseline — a message that was already unread when it
+    got parked at security_hold in an earlier cycle never reappears in that
+    diff on its own, so without this it would sit held forever even though
+    _process_message_locked is now willing to retry it. Bypasses discovery
+    entirely and goes straight to the known message ids from the registry.
+    """
+    held = list_runs(
+        status="security_hold",
+        user_id=None,
+        agent_instance_id=current_agent_instance_id(),
+        limit=500,
+    )
+    exclude_message_ids = exclude_message_ids or set()
+    outcomes: list[tuple] = []
+    for record in held:
+        msg_id = record.get("email_id")
+        if not msg_id or msg_id in exclude_message_ids:
+            continue
+        outcomes.append(await process_message_with_retry(graph, msg_id, resource, rules_config))
+    return outcomes
+
+
 async def process_message(
     graph,
     msg_id: str,
@@ -428,11 +462,19 @@ async def _process_message_locked(
     message: dict | None = None,
 ) -> tuple:
     # An email left UNREAD because it already has a run must not be reprocessed:
-    # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
-    # an approved reply the API sent but couldn't mark read) just needs housekeeping.
+    # a pending run would spawn a duplicate every cycle; a resolved one (e.g. an
+    # approved reply the API sent but couldn't mark read) just needs housekeeping.
     # Checked BEFORE fetching the message: with a short poll interval, re-fetching
     # every known unread email each cycle burns the Gmail per-user quota (429s on
     # sends share the same budget).
+    #
+    # security_hold is the one exception: the registry doesn't distinguish a
+    # genuine detected threat from a transient classifier outage (both set
+    # classifier_unavailable/injection_detected but only the verdict, not which,
+    # survives into the stored run), so treating it as permanently settled meant
+    # a single contended Ollama moment parked a message forever — retried here
+    # every cycle instead; the message stays unread either way, so a real threat
+    # is never any less visible than it already was.
     existing = find_run_by_email(
         msg_id,
         # Runs belong to the mailbox instance, not to the actor who triggered sync.
@@ -440,10 +482,11 @@ async def _process_message_locked(
         agent_instance_id=current_agent_instance_id(),
     )
     if existing:
-        if existing["status"] in ACTIVE_RUN_STATUSES:
+        if existing["status"] == "pending_approval":
             return (msg_id, existing["status"], existing["run_id"])
-        mark_as_read(msg_id, resource=resource)
-        return (msg_id, "skipped", existing["run_id"])
+        if existing["status"] != "security_hold":
+            mark_as_read(msg_id, resource=resource)
+            return (msg_id, "skipped", existing["run_id"])
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
     if message is None:
@@ -460,9 +503,13 @@ async def _process_message_locked(
         "agent_instance_id": current_agent_instance_id(),
     }
     categories_config = load_categories(agent_instance_id=current_agent_instance_id())
-    category_match = classify_category(gate_input, categories_config)
+    category_match = classify_category(
+        gate_input, categories_config, agent_instance_id=current_agent_instance_id()
+    )
     if not category_match.get("category"):
-        junk, junk_reason = is_junk(gate_input)
+        junk, junk_reason = is_junk(
+            gate_input, load_junk(agent_instance_id=current_agent_instance_id())
+        )
         if junk:
             run_id = str(uuid.uuid4())
             upsert_run(
@@ -472,6 +519,7 @@ async def _process_message_locked(
                     **gate_input,
                     "category": "junk_auto",
                     "category_display_name": "Ignoré automatiquement",
+                    "junk_reason": junk_reason,
                 },
                 classification="ignore",
                 pending_action=None,
@@ -664,7 +712,7 @@ async def poll_once(
     keep it visible in the inbox until the human handles it. Returns (msg_id, status, run_id).
     """
     resource = resource or gmail_resource()
-    max_results = max_results or settings.max_emails_per_run
+    max_results = max_results or load_runtime_settings().sync_limit
     rules_config = rules_config or load_rules()
 
     outcomes: list[tuple] = []
@@ -685,6 +733,9 @@ async def poll_once(
     if next_baseline and not truncated:
         set_last_history_id(next_baseline)
 
+    outcomes.extend(await retry_security_holds(
+        graph, resource, rules_config, {msg_id for msg_id, _status, _run_id in outcomes}
+    ))
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
@@ -710,7 +761,7 @@ async def enqueue_once(
     the next detection pass enqueues any resulting unread mail normally.
     """
     resource = resource or gmail_resource()
-    max_results = max_results or settings.max_emails_per_run
+    max_results = max_results or load_runtime_settings().sync_limit
     rules_config = rules_config or load_rules()
     instance_id = current_agent_instance_id()
 
@@ -771,6 +822,32 @@ def active_email_agent_instance_ids() -> list[str]:
     return list(dict.fromkeys(instances)) or [default]
 
 
+def _instance_owner(instance_id: str) -> str | None:
+    """Look up the platform user an instance belongs to (its creator).
+
+    Every run the poller creates needs the tenant context bound to whoever
+    actually owns the mailbox, not a single global default — otherwise every
+    instance's runs get stamped with AGENT_DEFAULT_USER_ID regardless of who
+    created it, and the real owner's Validation/Dashboard views never see
+    them (RLS/tenant-scoped queries filter by the requesting user's id).
+    """
+    if not settings.database_url:
+        return None
+    try:
+        from src.postgres import tenant_connection
+
+        with tenant_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT created_by FROM agent_instance WHERE id = %s", (instance_id,)
+                )
+                row = cur.fetchone()
+    except Exception as exc:
+        print(f"poller: owner lookup failed for {instance_id}: {exc}")
+        return None
+    return row[0] if row and row[0] else None
+
+
 # Above this many active mailboxes, random jitter no longer spreads the load
 # evenly; switch to a strict round-robin rotation + even spacing instead.
 _ROUND_ROBIN_THRESHOLD = 5
@@ -816,7 +893,7 @@ async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
         existing = await store.aget(namespace("writing_style"), "user_preferences")
         if existing:
             return
-        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        samples = await asyncio.to_thread(fetch_sent, load_runtime_settings().style_sent_sample, resource)
         if not samples:
             print(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
             _style_seed_attempted.discard(instance_id)
@@ -849,7 +926,8 @@ async def poll_active_instances_once(
         if index:
             await asyncio.sleep(_instance_stagger_seconds(len(ordered)))
         instance_id = normalize_agent_instance_id(raw_instance_id)
-        with agent_instance_context(instance_id):
+        with user_context(_instance_owner(instance_id)):
+          with agent_instance_context(instance_id):
             try:
                 if get_status().get("paused"):
                     print(f"poller: {instance_id} is paused")
@@ -910,7 +988,8 @@ async def sweep_active_instances_once(
     results: dict[str, list[tuple[str, str]]] = {}
     for raw_instance_id in instances:
         instance_id = normalize_agent_instance_id(raw_instance_id)
-        with agent_instance_context(instance_id):
+        with user_context(_instance_owner(instance_id)):
+          with agent_instance_context(instance_id):
             try:
                 if get_status().get("paused") or not has_stored_token(instance_id):
                     results[instance_id] = []
