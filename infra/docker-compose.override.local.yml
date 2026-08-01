@@ -20,6 +20,9 @@ services:
   email-agent:
     volumes:
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
+      # The live-test harness runs inside this container so the sender's OAuth
+      # token never has to leave it. Not part of the image — test-only surface.
+      - ../services/email-agent/scripts:/app/scripts:ro
     environment:
       <<: *outbound_allowlist
       AGENT_DRY_RUN: "false"
