@@ -1,0 +1,97 @@
+# Capability policy for live end-to-end mail tests.
+#
+# Same shape as policy.yaml, with one difference that matters: every send-style
+# tool carries an address-level allow list holding only the two test mailboxes.
+# Live tests run with AGENT_DRY_RUN=false against a real Gmail account whose
+# inbox also contains mail from real third parties, so a domain allow list is
+# not enough — both test mailboxes are @gmail.com, and allowing that domain
+# would permit writing to any Gmail user the agent happens to read.
+#
+# Point the security service at this file with SECURITY_POLICY_PATH. Never use
+# it as the production policy: the allow list would silently block real work.
+#
+# reply_all takes no `to` argument (recipients are derived from the Gmail
+# thread), so it cannot be constrained here. It is covered by the independent
+# AGENT_OUTBOUND_ALLOWLIST check in the email-agent's Gmail send helpers.
+default: deny
+
+_test_recipients: &test_recipients
+  allow_addresses:
+    - test.inbox@example.com
+    - owner@example.com
+  allow_domains: []
+  deny_domains: []
+  deny_addresses: []
+
+tools:
+  Done:
+    decision: allow
+  write_email:
+    decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
+    recipients: *test_recipients
+    limits:
+      max_content_chars: 20000
+      max_per_run: 50
+      max_per_day: 1000
+
+  # Reversible inbox organization actions.
+  apply_label:
+    decision: allow
+  remove_label:
+    decision: allow
+  mark_read:
+    decision: allow
+  mark_unread:
+    decision: allow
+  archive_email:
+    decision: allow
+
+  trash_email:
+    decision: hitl
+
+  create_draft:
+    decision: allow
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
+    recipients: *test_recipients
+    limits:
+      max_content_chars: 20000
+
+  forward_email:
+    decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
+    recipients: *test_recipients
+    limits:
+      max_content_chars: 20000
+      max_per_run: 20
+      max_per_day: 500
+
+  notify_internal:
+    decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
+    recipients: *test_recipients
+    limits:
+      max_content_chars: 2000
+      max_per_run: 20
+      max_per_day: 500
+
+  reply_all:
+    decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
+    limits:
+      max_content_chars: 20000
+      max_per_run: 20
+      max_per_day: 500
+
+  send_campaign:
+    decision: allow
+    recipients: *test_recipients
+    limits:
+      max_content_chars: 50000
+      max_per_run: 500
+      max_per_day: 2000
