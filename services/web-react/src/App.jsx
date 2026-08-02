@@ -12,6 +12,7 @@ import WorkspaceLayout from './components/layout/WorkspaceLayout';
 import LoginPage from './pages/LoginPage';
 import InviteSetupPage from './pages/InviteSetupPage';
 import InstancesPage from './pages/platform/InstancesPage';
+import MailboxesPage from './pages/platform/MailboxesPage';
 import AgentTypesPage from './pages/platform/AgentTypesPage';
 import HealthPage from './pages/platform/HealthPage';
 import AuditPage from './pages/platform/AuditPage';
@@ -93,6 +94,7 @@ export default function App() {
                       {/* Platform views */}
                       <Route path="/" element={<ProtectedRoute><PlatformLayout /></ProtectedRoute>}>
                         <Route index element={<InstancesPage />} />
+                        <Route path="mailboxes" element={<MailboxesPage />} />
                         <Route path="agent-types" element={<AgentTypesPage />} />
                         {/* Route segments below deliberately avoid "health"/"audit"/"users" as a
                             leading path segment: nginx.conf (and the dev proxy mirroring it) proxy
