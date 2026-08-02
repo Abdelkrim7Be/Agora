@@ -5,7 +5,7 @@ import { useStatus } from '../../contexts/StatusContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { currentUsername } from '../../utils/jwt';
 import { roleLabelFr } from '../../utils/format';
-import { useUsersQuery, useCreateUser, useSetUserEnabled } from '../../api/queries';
+import { useUsersQuery, useCreateUser, useSetUserEnabled, useInviteUser } from '../../api/queries';
 
 export default function UsersPage() {
   const { setStatus } = useStatus();
@@ -13,7 +13,9 @@ export default function UsersPage() {
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
-  const [form, setForm] = useState({ username: '', password: '', role: 'viewer', department: '' });
+  const inviteUser = useInviteUser();
+  const [form, setForm] = useState({ username: '', email: '', password: '', role: 'viewer', department: '' });
+  const [inviteLink, setInviteLink] = useState('');
   const username = currentUsername(token);
   const announcedInitialLoad = useRef(false);
 
@@ -34,19 +36,38 @@ export default function UsersPage() {
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    if (!form.username || !form.password) return;
+    if (!form.username) return;
     try {
-      await createUser.mutateAsync({
+      const payload = {
         username: form.username,
-        password: form.password,
         role: form.role,
         department: form.department || null,
-      });
-      setForm({ username: '', password: '', role: 'viewer', department: '' });
-      setStatus(`Utilisateur ${form.username} créé.`, 'ok');
+      };
+      if (form.email) payload.email = form.email;
+      if (form.password) payload.password = form.password;
+      const result = await createUser.mutateAsync(payload);
+      setInviteLink(result.setupLink || '');
+      setStatus(result.setupLink ? `Utilisateur ${form.username} créé. Lien d’invitation prêt à transmettre.` : `Utilisateur ${form.username} créé.`, 'ok');
+      setForm({ username: '', email: '', password: '', role: 'viewer', department: '' });
     } catch (error) {
       setStatus(`Impossible de créer l’utilisateur : ${error.message}`, 'error');
     }
+  };
+
+  const handleInvite = async (user) => {
+    try {
+      const result = await inviteUser.mutateAsync(user.id);
+      setInviteLink(result.setupLink || '');
+      setStatus(result.setupLink ? `Invitation recréée pour ${user.username}.` : `Invitation envoyée à ${user.email || user.username}.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d’envoyer l’invitation : ${error.message}`, 'error');
+    }
+  };
+
+  const copyInviteLink = async () => {
+    if (!inviteLink) return;
+    await navigator.clipboard?.writeText(inviteLink);
+    setStatus('Lien d’invitation copié.', 'ok');
   };
 
   const handleToggle = async (user) => {
@@ -66,11 +87,11 @@ export default function UsersPage() {
   return (
     <>
       <PageHeading view="users" />
-      <Card>
+      <Card className="users-card">
         <div className="card-header">
           <div>
-            <h2>Utilisateurs</h2>
-            <div className="meta"><span>Annuaire du personnel — admin uniquement</span></div>
+            <h2>Utilisateurs et invitations</h2>
+            <div className="meta"><span>Comptes, rôles et accès initial</span></div>
           </div>
           <button type="button" onClick={async () => { await query.refetch(); setStatus('Utilisateurs chargés.', 'ok'); }}>
             <span className="material-symbols-outlined" aria-hidden="true">sync</span>
@@ -78,11 +99,23 @@ export default function UsersPage() {
           </button>
         </div>
         <div className="notice">
-          Rôles : <strong>administrateur</strong> (utilisateurs, secrets, boîtes mail, config système), <strong>propriétaire</strong> (workflows, personas, toutes les approbations), <strong>validateur</strong> (approbations de son département), <strong>lecteur</strong> (lecture seule). Le département reprend le vocabulaire de l'Annuaire des rôles (RH, Finance, ...).
+          Invitez un collaborateur sans partager de mot de passe temporaire. Si aucun relais SMTP n’est configuré, Agora AI affiche un lien sécurisé à transmettre manuellement.
         </div>
-        <div className="table-wrap">
+        {inviteLink ? (
+          <div className="notice invite-link-notice">
+            <strong>Lien d’invitation à transmettre</strong>
+            <div className="invite-copy-row">
+              <input readOnly value={inviteLink} aria-label="Lien d’invitation" />
+              <button type="button" onClick={copyInviteLink}>
+                <span className="material-symbols-outlined" aria-hidden="true">content_copy</span>
+                <span>Copier</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div className="table-wrap users-table">
           <table className="data-table">
-            <thead><tr><th>Utilisateur</th><th>Rôle</th><th>Département</th><th>Statut</th><th></th></tr></thead>
+            <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle</th><th>Département</th><th>Statut</th><th></th></tr></thead>
             <tbody>
               {users.map((user) => {
                 const selfDisable = user.enabled && user.username === username;
@@ -90,10 +123,14 @@ export default function UsersPage() {
                 return (
                   <tr key={user.id}>
                     <td>{user.username}</td>
+                    <td>{user.email || '—'}</td>
                     <td><span className="status-pill">{roleLabelFr(user.role)}</span></td>
                     <td>{user.department || '—'}</td>
                     <td>{user.enabled ? 'Actif' : 'Désactivé'}</td>
                     <td>
+                      <button type="button" onClick={() => handleInvite(user)}>
+                        Inviter
+                      </button>
                       <button
                         type="button"
                         disabled={selfDisable}
@@ -111,7 +148,7 @@ export default function UsersPage() {
           </table>
         </div>
         {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
-        <form className="toolbar" style={{ marginTop: '1rem' }} onSubmit={handleCreate}>
+        <form className="user-create-form" style={{ marginTop: '1rem' }} onSubmit={handleCreate}>
           <input
             placeholder="Nom d'utilisateur"
             required
@@ -120,9 +157,15 @@ export default function UsersPage() {
             onChange={(event) => setForm({ ...form, username: event.target.value })}
           />
           <input
+            type="email"
+            placeholder="E-mail d'invitation"
+            style={{ flex: 1 }}
+            value={form.email}
+            onChange={(event) => setForm({ ...form, email: event.target.value })}
+          />
+          <input
             type="password"
-            placeholder="Mot de passe temporaire"
-            required
+            placeholder="Mot de passe temporaire (optionnel)"
             style={{ flex: 1 }}
             value={form.password}
             onChange={(event) => setForm({ ...form, password: event.target.value })}

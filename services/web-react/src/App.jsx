@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import PlatformLayout from './components/layout/PlatformLayout';
 import WorkspaceLayout from './components/layout/WorkspaceLayout';
 import LoginPage from './pages/LoginPage';
+import InviteSetupPage from './pages/InviteSetupPage';
 import InstancesPage from './pages/platform/InstancesPage';
 import AgentTypesPage from './pages/platform/AgentTypesPage';
 import HealthPage from './pages/platform/HealthPage';
@@ -85,6 +86,7 @@ export default function App() {
                   <BrowserRouter>
                     <Routes>
                       <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
+                      <Route path="/invite/:token" element={<InviteSetupPage />} />
                       <Route path="/oauth/gmail/callback" element={<OAuthCallbackPage />} />
                       <Route path="/oauth/outlook/callback" element={<OAuthCallbackPage />} />
 

@@ -121,6 +121,15 @@ export function useSetUserEnabled() {
   });
 }
 
+export function useInviteUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/invite`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
 // --- Validation (pending-approval queue) ---
 
 export function usePendingRunsQuery(page, filters = {}) {

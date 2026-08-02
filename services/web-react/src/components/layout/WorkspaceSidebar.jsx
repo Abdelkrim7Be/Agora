@@ -3,6 +3,7 @@ import { useInstance } from '../../contexts/InstanceContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { agentTypeLabel } from '../../utils/format';
 import { useAgentTypesQuery, usePendingRunsQuery, useUnreadCountQuery } from '../../api/queries';
+import AgoraLogo from '../brand/AgoraLogo';
 
 const TAB_GROUPS = [
   {
@@ -19,14 +20,14 @@ const TAB_GROUPS = [
   {
     label: 'Connecteurs',
     tabs: [
-      { to: 'gmail', icon: 'sync', label: 'Synchronisation Gmail' },
+      { to: 'gmail', icon: 'mark_email_read', label: 'Boîte connectée' },
     ],
   },
   {
     label: 'Configuration',
     tabs: [
       { to: 'config', icon: 'person', label: 'Persona' },
-      { to: 'style', icon: 'edit_note', label: 'Style' },
+      { to: 'style', icon: 'edit_note', label: 'Style de réponse' },
       { to: 'signature', icon: 'draw', label: 'Signature' },
       { to: 'memory', icon: 'psychology', label: 'Mémoire' },
       { to: 'rules', icon: 'rule', label: 'Règles' },
@@ -48,7 +49,7 @@ const TAB_GROUPS = [
     tabs: [
       { to: 'capabilities', icon: 'shield', label: 'Capacités', minGlobalRole: 'admin' },
       { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minGlobalRole: 'admin' },
-      { to: 'dlq', icon: 'warning', label: 'DLQ', minGlobalRole: 'admin' },
+      { to: 'dlq', icon: 'warning', label: 'File d’erreurs', minGlobalRole: 'admin' },
       { to: 'costs', icon: 'monitoring', label: 'Coûts', minGlobalRole: 'admin' },
     ],
   },
@@ -68,21 +69,15 @@ export default function WorkspaceSidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">B</div>
-        <div>
-          <strong>Agora AI</strong>
-          <span>Panneau de contrôle</span>
-        </div>
-      </div>
+      <AgoraLogo />
 
       <div id="workspace-sidebar-context">
         <NavLink to={globalRole === 'admin' ? '/' : '/account'} end className="nav-item workspace-back">
           <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>
-          <span>Retour plateforme</span>
+          <span>Plateforme</span>
         </NavLink>
         <div className="workspace-sidebar-agent">
-          <span>Espace agent</span>
+          <span>Espace métier</span>
           <strong>{currentInstance?.display_name || id}</strong>
           <small>{typeLabel}</small>
         </div>

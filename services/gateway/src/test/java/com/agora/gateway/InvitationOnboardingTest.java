@@ -10,9 +10,20 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.agora.gateway.audit.AuditEvent;
+import com.agora.gateway.audit.AuditRepository;
+import com.agora.gateway.user.UserInvitation;
+import com.agora.gateway.user.UserInvitationRepository;
+import com.agora.gateway.user.UserRepository;
+
 import java.net.URI;
+import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -43,6 +54,15 @@ class InvitationOnboardingTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private UserInvitationRepository invitations;
+
+    @Autowired
+    private UserRepository users;
+
+    @Autowired
+    private AuditRepository auditRepository;
 
     private String login(String username, String password) throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("username", username, "password", password));
@@ -121,6 +141,130 @@ class InvitationOnboardingTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(false));
         mockMvc.perform(get("/auth/invite/" + newToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true));
+    }
+
+    @Test
+    void the_clear_token_is_never_stored_or_audited() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "secret@example.test",
+                                "role", "viewer"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString());
+        String token = tokenFromSetupLink(created.get("setupLink").asText());
+
+        // Stored as a SHA-256, so a dump of this table cannot take over the account.
+        long userId = created.get("id").asLong();
+        List<UserInvitation> stored = invitations.findByUserIdAndConsumedAtIsNull(userId);
+        assertEquals(1, stored.size());
+        String storedHash = stored.get(0).getTokenHash();
+        assertNotEquals(token, storedHash);
+        assertTrue(storedHash.matches("[0-9a-f]{64}"), "expected a hex SHA-256, got: " + storedHash);
+
+        mockMvc.perform(post("/auth/invite/" + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("password", "brand-new-password-1"))))
+                .andExpect(status().isOk());
+
+        // The audit trail records that an invitation happened, never the credential.
+        for (AuditEvent event : auditRepository.findAll()) {
+            assertFalse(String.valueOf(event.getPath()).contains(token),
+                    "audit path leaked the invitation token");
+            assertFalse(String.valueOf(event.getUsername()).contains(token),
+                    "audit actor leaked the invitation token");
+            assertFalse(String.valueOf(event.getAction()).contains(token),
+                    "audit action leaked the invitation token");
+        }
+    }
+
+    @Test
+    void an_unknown_token_looks_exactly_like_a_spent_one() throws Exception {
+        // Otherwise the endpoint becomes a way to probe which invitations exist.
+        String unknown = mockMvc.perform(get("/auth/invite/not-a-real-token"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "probe@example.test",
+                                "role", "viewer"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString());
+        String token = tokenFromSetupLink(created.get("setupLink").asText());
+        mockMvc.perform(post("/auth/invite/" + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("password", "spent-this-one-01"))))
+                .andExpect(status().isOk());
+
+        String spent = mockMvc.perform(get("/auth/invite/" + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertEquals(unknown, spent);
+        assertFalse(spent.contains("probe@example.test"));
+    }
+
+    @Test
+    void an_invited_account_cannot_be_logged_into_before_the_password_is_set() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "pending@example.test",
+                                "role", "viewer"
+                        ))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andReturn().getResponse().getContentAsString());
+
+        // The placeholder password is random and disclosed nowhere, so there is
+        // nothing to try; the account is also disabled until the link is used.
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "pending@example.test", "password", ""))))
+                .andExpect(status().is4xxClientError());
+
+        String token = tokenFromSetupLink(created.get("setupLink").asText());
+        mockMvc.perform(post("/auth/invite/" + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("password", "finally-a-password-1"))))
+                .andExpect(status().isOk());
+        login("pending@example.test", "finally-a-password-1");
+    }
+
+    @Test
+    void a_short_password_is_refused() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "weak@example.test",
+                                "role", "viewer"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString());
+        String token = tokenFromSetupLink(created.get("setupLink").asText());
+
+        mockMvc.perform(post("/auth/invite/" + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("password", "short"))))
+                .andExpect(status().isBadRequest());
+
+        // Refusing must not burn the token — the invitee has to be able to retry.
+        mockMvc.perform(get("/auth/invite/" + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(true));
     }
