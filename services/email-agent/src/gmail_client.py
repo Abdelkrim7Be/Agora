@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import html as _html
 from email.message import EmailMessage
-from email.utils import getaddresses
 
 try:
     import pypdf as _pypdf
@@ -12,6 +11,11 @@ except ImportError:
 
 from src.config import SERVICE_ROOT, settings
 from src.gmail_budget import record_gmail_call
+from src.outbound_guard import (  # noqa: F401 — OutboundRecipientBlocked re-exported for callers
+    OutboundRecipientBlocked,
+    email_addresses,
+    enforce_outbound_allowlist as _enforce_outbound_allowlist,
+)
 from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
@@ -499,31 +503,6 @@ def _signature_inline_images(body: str) -> dict[str, tuple[bytes, str]] | None:
     return {SIGNATURE_CID: inline}
 
 
-class OutboundRecipientBlocked(RuntimeError):
-    """Raised when a send targets an address outside the outbound allowlist."""
-
-
-def _enforce_outbound_allowlist(to: str | list[str]) -> None:
-    """Refuse to send to anyone outside AGENT_OUTBOUND_ALLOWLIST, when it is set.
-
-    Last line of defense, below the security service and below dry-run: every
-    real send in this module funnels through _send_email_message, so an allowlist
-    checked here holds even if policy is misconfigured, security is disabled, or
-    the model invents a recipient. Empty setting (the default) disables the check
-    entirely and leaves normal operation untouched.
-    """
-    allowlist = settings.outbound_allowlist
-    if not allowlist:
-        return
-    recipients = _email_addresses(*(to if isinstance(to, list) else [to]))
-    blocked = [addr for addr in recipients if addr.lower() not in allowlist]
-    if blocked or not recipients:
-        raise OutboundRecipientBlocked(
-            f"outbound allowlist blocked recipients {blocked or list(to)}; "
-            f"allowed: {sorted(allowlist)}"
-        )
-
-
 def _send_email_message(
     to: str | list[str],
     subject: str,
@@ -605,15 +584,7 @@ def _prefixed_subject(prefix: str, subject: str) -> str:
 
 
 def _email_addresses(*values: str) -> list[str]:
-    seen: set[str] = set()
-    results: list[str] = []
-    for _name, address in getaddresses([v for v in values if v]):
-        address = address.strip()
-        key = address.lower()
-        if address and key not in seen:
-            seen.add(key)
-            results.append(address)
-    return results
+    return email_addresses(*values)
 
 
 def _self_address(resource) -> str:
