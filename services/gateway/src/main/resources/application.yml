@@ -26,6 +26,17 @@ gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}
   default-agent-instance: ${GATEWAY_DEFAULT_AGENT_INSTANCE:default-email-agent}
+  # Public base URL of the web app; invitation links are built from it.
+  app-url: ${GATEWAY_APP_URL:http://localhost:5173}
+  invite-expiry-hours: ${GATEWAY_INVITE_EXPIRY_HOURS:48}
+  smtp:
+    # Leave host/from blank to run without a relay: the invitation endpoints
+    # then return the setup link for an admin to deliver by hand.
+    host: ${GATEWAY_SMTP_HOST:}
+    port: ${GATEWAY_SMTP_PORT:587}
+    username: ${GATEWAY_SMTP_USERNAME:}
+    password: ${GATEWAY_SMTP_PASSWORD:}
+    from: ${GATEWAY_SMTP_FROM:}
   agent-types:
     - id: email-agent
       display-name: Email Agent
