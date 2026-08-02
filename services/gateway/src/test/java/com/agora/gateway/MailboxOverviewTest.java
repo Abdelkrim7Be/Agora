@@ -141,6 +141,38 @@ class MailboxOverviewTest {
     }
 
     @Test
+    void naming_a_mailbox_you_have_no_access_to_is_refused() throws Exception {
+        // The overview probes a specific instance by header, so that header must
+        // not become a way to act on a mailbox the caller cannot otherwise reach.
+        // Access is the instance's allowed_roles plus any explicit grant; with
+        // neither, ProxyController refuses before anything is forwarded.
+        stubHealthyMailbox("gmail");
+        String created = mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "agent_type", "email-agent",
+                                "display_name", "Direction",
+                                "mailbox_identity", "direction@example.test",
+                                "allowed_roles", "admin"))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String restricted = objectMapper.readTree(created).get("id").asText();
+
+        mockMvc.perform(post("/api/agent/connect/test")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .header("X-Agora-Agent-Instance", restricted))
+                .andExpect(status().isForbidden());
+
+        // ... and it does not appear in that user's overview either.
+        String overview = mockMvc.perform(get("/mailboxes")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertFalse(overview.contains(restricted));
+    }
+
+    @Test
     void an_anonymous_caller_is_rejected() throws Exception {
         mockMvc.perform(get("/mailboxes")).andExpect(status().isUnauthorized());
     }
