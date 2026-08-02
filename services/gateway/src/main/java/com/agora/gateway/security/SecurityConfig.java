@@ -57,11 +57,17 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/auth/mfa/setup").authenticated()
                 .requestMatchers(HttpMethod.POST, "/auth/mfa/confirm").authenticated()
                 .requestMatchers(HttpMethod.POST, "/auth/mfa/disable").authenticated()
+                // The invitee has no account yet, so there is no JWT to present:
+                // the signed single-use token in the path is the credential.
+                // Both legs are throttled globally in InvitationController.
+                .requestMatchers(HttpMethod.GET, "/auth/invite/*").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/invite/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users/*/disable").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users/*/enable").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/users/*/invite").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
