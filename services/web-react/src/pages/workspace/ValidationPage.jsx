@@ -9,7 +9,7 @@ import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
-import { actionArgs } from '../../utils/format';
+import { actionArgs, workflowLabelFr } from '../../utils/format';
 import {
   usePendingRunsQuery,
   useApproveRun,
@@ -79,7 +79,11 @@ export default function ValidationPage() {
   // Prune selection/edits to runs still present.
   useEffect(() => {
     const present = new Set(runs.map((run) => run.run_id));
-    setSelectedRuns((prev) => new Set([...prev].filter((id) => present.has(id))));
+    setSelectedRuns((prev) => {
+      const kept = [...prev].filter((id) => present.has(id));
+      if (kept.length === prev.size) return prev;
+      return new Set(kept);
+    });
   }, [runs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setBusy = (runId, busy) => {
@@ -261,8 +265,8 @@ export default function ValidationPage() {
     });
   };
 
-  const handleBulk = async (decision) => {
-    const runIds = [...selectedRuns];
+  const handleBulk = async (decision, explicitRunIds = null) => {
+    const runIds = explicitRunIds || [...selectedRuns];
     if (!runIds.length) return;
     const confirmed = await confirmDialog({
       title: decision === 'approve' ? 'Approuver la sélection' : 'Rejeter la sélection',
@@ -274,7 +278,12 @@ export default function ValidationPage() {
     try {
       const result = await bulkDecision.mutateAsync({ runIds, decision });
       const errors = (result.results || []).filter((item) => item.status === 'error');
-      setSelectedRuns(new Set());
+      setSelectedRuns((prev) => {
+        if (!explicitRunIds) return new Set();
+        const next = new Set(prev);
+        runIds.forEach((id) => next.delete(id));
+        return next;
+      });
       setStatus(errors.length ? `${errors.length} échec(s) sur ${runIds.length}.` : `${runIds.length} décision(s) appliquée(s).`, errors.length ? 'error' : 'ok');
     } catch (error) {
       setStatus(`Action groupée échouée : ${error.message}`, 'error');
@@ -322,6 +331,19 @@ export default function ValidationPage() {
 
   const hasMore = query.data?.hasMore ?? false;
   const selectedCount = selectedRuns.size;
+  const categoryGroups = runs.reduce((acc, run) => {
+    const label = workflowLabelFr({ display_name: run.category_display_name, category: run.category });
+    (acc[label] ||= []).push(run);
+    return acc;
+  }, {});
+  const categoryGroupEntries = Object.entries(categoryGroups);
+  const selectCategory = (items) => {
+    setSelectedRuns((prev) => {
+      const next = new Set(prev);
+      items.forEach((run) => next.add(run.run_id));
+      return next;
+    });
+  };
 
   return (
     <>
@@ -368,6 +390,31 @@ export default function ValidationPage() {
           <button className="danger" type="button" onClick={() => handleBulk('reject')}>Rejeter la sélection</button>
         </div>
       )}
+
+      {canApprove && categoryGroupEntries.length > 1 ? (
+        <div className="category-bulk-panel" aria-label="Actions groupées par catégorie">
+          {categoryGroupEntries.map(([label, items]) => {
+            const ids = items.map((run) => run.run_id);
+            const allSelected = ids.every((id) => selectedRuns.has(id));
+            return (
+              <div className="category-bulk-row" key={label}>
+                <div>
+                  <strong>{label}</strong>
+                  <span>{items.length} brouillon{items.length > 1 ? 's' : ''}</span>
+                </div>
+                <button type="button" onClick={() => selectCategory(items)} disabled={allSelected}>
+                  <span className="material-symbols-outlined" aria-hidden="true">select_check_box</span>
+                  <span>{allSelected ? 'Sélectionnée' : 'Sélectionner'}</span>
+                </button>
+                <button className="primary" type="button" onClick={() => handleBulk('approve', ids)}>
+                  <span className="material-symbols-outlined" aria-hidden="true">send</span>
+                  <span>Approuver cette catégorie</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div id="pending-list">
         {!runs.length ? (

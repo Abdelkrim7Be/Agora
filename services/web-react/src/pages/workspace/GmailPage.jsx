@@ -4,7 +4,7 @@ import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
-import { statusLabelFr, friendlySyncError } from '../../utils/format';
+import { formatDateTimeFr, statusLabelFr, friendlySyncError } from '../../utils/format';
 import {
   useGmailStatusQuery,
   useGmailSyncNow,
@@ -20,6 +20,13 @@ function connectionStatusClass(status) {
   if (status === 'expired') return 'warn';
   if (status === 'error') return 'error';
   return '';
+}
+
+function hasCurrentSyncFailure(status = {}) {
+  if (!status.last_error) return false;
+  const successAt = status.last_success_at ? new Date(status.last_success_at).getTime() : 0;
+  const failureAt = status.last_failure_at ? new Date(status.last_failure_at).getTime() : 0;
+  return !successAt || !failureAt || failureAt >= successAt;
 }
 
 function barWidth(mode) {
@@ -53,11 +60,12 @@ export default function GmailPage() {
 
   useEffect(() => {
     if (!query.data) return;
-    const lastSuccess = status.last_success_at ? `Dernière synchronisation réussie ${new Date(status.last_success_at).toLocaleTimeString()}.` : 'Aucune synchronisation terminée pour l’instant.';
+    const lastSuccess = status.last_success_at ? `Dernière synchronisation réussie ${new Date(status.last_success_at).toLocaleTimeString('fr-FR')}.` : 'Aucune synchronisation terminée pour l’instant.';
     const lastFailure = status.last_error ? `Dernière synchronisation échouée : ${friendlySyncError(status.last_error)}` : lastSuccess;
+    const currentFailure = hasCurrentSyncFailure(status);
     setVisual({
-      mode: status.connection_status === 'error' || status.last_error ? 'error' : 'idle',
-      message: status.connection_status === 'connected' ? lastSuccess : lastFailure,
+      mode: status.connection_status === 'error' || currentFailure ? 'error' : 'idle',
+      message: status.connection_status === 'connected' && !currentFailure ? lastSuccess : lastFailure,
     });
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -188,9 +196,9 @@ export default function GmailPage() {
         <div className="summary-grid">
           <div><span>Connexion</span><strong className={connectionStatusClass(status.connection_status)}>{status.connection_status ? statusLabelFr(status.connection_status) : '—'}</strong></div>
           <div><span>Mode de synchro</span><strong>{status.sync_mode || '—'}</strong></div>
-          <div><span>Dernier succès</span><strong>{status.last_success_at ? new Date(status.last_success_at).toLocaleString() : '—'}</strong></div>
-          <div><span>Dernier échec</span><strong>{status.last_failure_at ? new Date(status.last_failure_at).toLocaleString() : '—'}</strong></div>
-          <div><span>Expiration du watch</span><strong>{status.watch_expires_at ? new Date(status.watch_expires_at).toLocaleString() : '—'}</strong></div>
+          <div><span>Dernier succès</span><strong>{formatDateTimeFr(status.last_success_at)}</strong></div>
+          <div><span>Dernier échec</span><strong>{formatDateTimeFr(status.last_failure_at)}</strong></div>
+          <div><span>Expiration du watch</span><strong>{formatDateTimeFr(status.watch_expires_at)}</strong></div>
           <div><span>En pause</span><strong>{status.paused ? 'Oui' : 'Non'}</strong></div>
         </div>
         {status.last_error ? (

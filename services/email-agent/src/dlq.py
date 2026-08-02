@@ -61,6 +61,16 @@ def setup_dlq() -> None:
     return
 
 
+def _optional_timestamp(value) -> str | None:
+    """An ISO timestamp, or None — never the empty string a timestamptz rejects."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat(timespec="seconds")
+    text = str(value).strip()
+    return text or None
+
+
 def _normalize_entry(entry: dict) -> dict:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     payload = entry.get("payload") or {}
@@ -78,8 +88,10 @@ def _normalize_entry(entry: dict) -> dict:
         "error": str(entry.get("error") or ""),
         "status": str(entry.get("status") or "dead_letter"),
         "requeue_token": str(entry.get("requeue_token") or ""),
-        "requeued_at": str(entry.get("requeued_at") or ""),
-        "resolved_at": str(entry.get("resolved_at") or ""),
+        # Optional timestamps stay None when unset: Postgres `timestamptz` rejects
+        # an empty string, which made every dead-letter write fail on that backend.
+        "requeued_at": _optional_timestamp(entry.get("requeued_at")),
+        "resolved_at": _optional_timestamp(entry.get("resolved_at")),
         "payload": payload,
     }
 

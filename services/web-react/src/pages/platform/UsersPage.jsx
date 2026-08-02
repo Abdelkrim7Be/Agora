@@ -4,6 +4,7 @@ import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { currentUsername } from '../../utils/jwt';
+import { roleLabelFr } from '../../utils/format';
 import { useUsersQuery, useCreateUser, useSetUserEnabled } from '../../api/queries';
 
 export default function UsersPage() {
@@ -77,7 +78,7 @@ export default function UsersPage() {
           </button>
         </div>
         <div className="notice">
-          Rôles : <strong>admin</strong> (utilisateurs, secrets, boîtes mail, config système), <strong>owner</strong> (workflows, personas, toutes les approbations), <strong>approver</strong> (approbations de son département), <strong>viewer</strong> (lecture seule). Le département reprend le vocabulaire de l'Annuaire des rôles (RH, Finance, ...).
+          Rôles : <strong>administrateur</strong> (utilisateurs, secrets, boîtes mail, config système), <strong>propriétaire</strong> (workflows, personas, toutes les approbations), <strong>validateur</strong> (approbations de son département), <strong>lecteur</strong> (lecture seule). Le département reprend le vocabulaire de l'Annuaire des rôles (RH, Finance, ...).
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -89,7 +90,7 @@ export default function UsersPage() {
                 return (
                   <tr key={user.id}>
                     <td>{user.username}</td>
-                    <td><span className="status-pill">{user.role}</span></td>
+                    <td><span className="status-pill">{roleLabelFr(user.role)}</span></td>
                     <td>{user.department || '—'}</td>
                     <td>{user.enabled ? 'Actif' : 'Désactivé'}</td>
                     <td>
@@ -127,10 +128,10 @@ export default function UsersPage() {
             onChange={(event) => setForm({ ...form, password: event.target.value })}
           />
           <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-            <option value="viewer">viewer</option>
-            <option value="approver">approver</option>
-            <option value="owner">owner</option>
-            <option value="admin">admin</option>
+            <option value="viewer">lecteur</option>
+            <option value="approver">validateur</option>
+            <option value="owner">propriétaire</option>
+            <option value="admin">administrateur</option>
           </select>
           <input
             placeholder="Département (optionnel)"

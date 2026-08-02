@@ -33,6 +33,9 @@ const STATUS_LABELS_FR = {
   idle: 'En veille',
   pending: 'En attente',
   pending_approval: 'À valider',
+  draft: 'Brouillon',
+  scheduled: 'Programmée',
+  sending: "En cours d'envoi",
   syncing: 'Synchronisation',
   synced: 'Synchronisée',
   disabled: 'Désactivée',
@@ -40,6 +43,8 @@ const STATUS_LABELS_FR = {
   security_hold: 'Contrôle sécurité',
   completed: 'Terminé',
   sent: 'Envoyé',
+  cancelled: 'Annulée',
+  denied: 'Refusé',
   ignored: 'Ignoré',
   ignore: 'Ignoré',
   processing: 'En cours',
@@ -51,6 +56,39 @@ const STATUS_LABELS_FR = {
   skipped: 'Ignoré (déjà traité)',
   unclassified: 'Non classé',
 };
+
+const ROLE_LABELS_FR = {
+  admin: 'administrateur',
+  owner: 'propriétaire',
+  approver: 'validateur',
+  viewer: 'lecteur',
+};
+
+export function roleLabelFr(value) {
+  return ROLE_LABELS_FR[String(value || '').toLowerCase()] || value || 'lecteur';
+}
+
+// Capability ids stay English in the API; only the display layer is translated.
+const CAPABILITY_LABELS_FR = {
+  email_triage: 'tri des e-mails',
+  draft_approval: 'validation des brouillons',
+  gmail_sync: 'synchronisation Gmail',
+  style_learning: 'apprentissage du style',
+  cost_observability: 'suivi des coûts',
+  email: 'e-mail',
+  calendar: 'calendrier',
+  inbox: 'gestion de la boîte',
+  draft: 'brouillons',
+};
+
+export function capabilityLabelFr(value) {
+  const key = String(value || '').trim();
+  if (!key) return '';
+  const known = CAPABILITY_LABELS_FR[key.toLowerCase()];
+  if (known) return known;
+  // An unmapped id is still shown, just not as a raw snake_case token.
+  return key.includes('_') ? key.replace(/_/g, ' ') : key;
+}
 
 export function statusLabelFr(value) {
   const raw = String(value || 'unknown').trim();
@@ -164,6 +202,29 @@ export function formatDateTimeFr(value) {
   if (!value) return '—';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('fr-FR');
+}
+
+const HTML_ENTITIES = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  laquo: '«', raquo: '»', hellip: '…', rsquo: '’', lsquo: '‘',
+  ldquo: '“', rdquo: '”', ndash: '–', mdash: '—', eacute: 'é',
+  egrave: 'è', agrave: 'à', ccedil: 'ç', ugrave: 'ù', ocirc: 'ô',
+};
+
+/** Gmail snippets arrive HTML-escaped; they are rendered as text, so decode them. */
+export function decodeHtmlEntities(value) {
+  const text = String(value || '');
+  if (!text.includes('&')) return text;
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity) => {
+    if (entity[0] === '#') {
+      const code = entity[1] === 'x' || entity[1] === 'X'
+        ? parseInt(entity.slice(2), 16)
+        : parseInt(entity.slice(1), 10);
+      return Number.isNaN(code) ? match : String.fromCodePoint(code);
+    }
+    const named = HTML_ENTITIES[entity.toLowerCase()];
+    return named === undefined ? match : named;
+  });
 }
 
 const CONFIDENCE_CLASS = { 'élevée': 'high', moyenne: 'medium', faible: 'low' };

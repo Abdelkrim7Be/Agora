@@ -66,7 +66,7 @@ public class GatewayProperties {
             AgentType type = new AgentType();
             type.setId("email-agent");
             type.setDisplayName("Email Agent");
-            type.setDescription("Autonomous email triage, drafting, validation, style learning, and mailbox operations.");
+            type.setDescription("Trie les e-mails, rédige les réponses, apprend votre style et gère la boîte mail, chaque envoi restant sous validation.");
             type.setCapabilities(List.of("email_triage", "draft_approval", "gmail_sync", "style_learning", "cost_observability"));
             type.setBasePath("/api/agent");
             type.setHealthPath("/health");

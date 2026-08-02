@@ -1,3 +1,5 @@
+import { formatDateTimeFr } from '../../utils/format';
+
 const SEVERITY_LABEL = {
   info: 'Info',
   success: 'Succès',
@@ -21,7 +23,7 @@ export function NotificationItem({ notification, onMarkRead, onDelete, onNavigat
           {notification.occurrence_count > 1 ? <span className="notification-count"> ×{notification.occurrence_count}</span> : null}
         </strong>
         {notification.body ? <p>{notification.body}</p> : null}
-        <span className="notification-time">{notification.created_at}</span>
+        <span className="notification-time">{formatDateTimeFr(notification.created_at)}</span>
       </div>
       <div className="notification-actions">
         {unread && onMarkRead ? (

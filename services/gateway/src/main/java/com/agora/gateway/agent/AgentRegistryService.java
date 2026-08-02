@@ -22,6 +22,8 @@ import java.util.UUID;
 public class AgentRegistryService {
 
     private static final long HEALTH_CACHE_TTL_SECONDS = 5;
+    private static final int SELF_SERVICE_EMAIL_INSTANCE_LIMIT = 5;
+    private static final String EMAIL_AGENT_TYPE = "email-agent";
 
     private final GatewayProperties props;
     private final AgentInstanceRepository instances;
@@ -96,16 +98,27 @@ public class AgentRegistryService {
     }
 
     public boolean canView(AgentInstance instance, String username, String role) {
-        if ("owner".equals(role) || "admin".equals(role)) return true;
+        if ("admin".equals(role)) return true;
         if (username != null && username.equals(instance.getCreatedBy())) return true;
+        if (username != null && grants.findByAgentInstanceIdAndUserId(instance.getId(), username).isPresent()) return true;
         return Arrays.stream(instance.getAllowedRoles().split(","))
                 .map(String::trim)
                 .anyMatch(r -> r.equalsIgnoreCase(role));
     }
 
-    public AgentInstance create(CreateAgentInstanceRequest request, String username) {
+    public AgentInstance create(CreateAgentInstanceRequest request, String username, String role) {
         GatewayProperties.AgentType type = findType(request.agentType())
                 .orElseThrow(() -> new UnknownAgentTypeException(request.agentType()));
+        boolean admin = "admin".equals(role);
+        if (!admin) {
+            if (!EMAIL_AGENT_TYPE.equals(type.getId())) {
+                throw new ForbiddenAgentInstanceOperationException("users can only create email-agent instances");
+            }
+            long ownedEmailAgents = instances.countByCreatedByAndAgentType(username, EMAIL_AGENT_TYPE);
+            if (ownedEmailAgents >= SELF_SERVICE_EMAIL_INSTANCE_LIMIT) {
+                throw new AgentInstanceLimitException(SELF_SERVICE_EMAIL_INSTANCE_LIMIT);
+            }
+        }
         String id = request.id() == null || request.id().isBlank()
                 ? slug(request.displayName()) + "-" + UUID.randomUUID().toString().substring(0, 8)
                 : slug(request.id());
@@ -120,13 +133,13 @@ public class AgentRegistryService {
                 request.description(),
                 request.status() == null || request.status().isBlank() ? "active" : request.status(),
                 type.getBasePath(),
-                request.allowedRoles() == null || request.allowedRoles().isBlank() ? "owner" : request.allowedRoles(),
+                admin && request.allowedRoles() != null && !request.allowedRoles().isBlank() ? request.allowedRoles() : "owner",
                 username,
                 request.color() == null || request.color().isBlank() ? type.getColor() : request.color(),
                 request.icon() == null || request.icon().isBlank() ? type.getIcon() : request.icon()
         );
         AgentInstance saved = instances.save(instance);
-        String assignedTo = request.assignedTo();
+        String assignedTo = admin ? request.assignedTo() : null;
         if (assignedTo != null && !assignedTo.isBlank() && !assignedTo.equals(username)) {
             grants.save(new AgentInstanceGrant(saved.getId(), assignedTo, "owner", username));
         }
@@ -292,6 +305,18 @@ public class AgentRegistryService {
     public static class DuplicateAgentInstanceException extends RuntimeException {
         public DuplicateAgentInstanceException(String id) {
             super("agent instance already exists: " + id);
+        }
+    }
+
+    public static class AgentInstanceLimitException extends RuntimeException {
+        public AgentInstanceLimitException(int limit) {
+            super("email-agent instance limit reached: " + limit);
+        }
+    }
+
+    public static class ForbiddenAgentInstanceOperationException extends RuntimeException {
+        public ForbiddenAgentInstanceOperationException(String message) {
+            super(message);
         }
     }
 }

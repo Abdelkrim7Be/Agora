@@ -18,6 +18,21 @@ const MEMORY_CARDS = [
   { kind: 'writing_style', label: 'Ce que l’agent a appris sur votre style' },
 ];
 
+const ORIGIN_LABELS = {
+  setup: 'appris pendant la configuration',
+  learned: 'appris par l’agent',
+  manual: 'modifié manuellement',
+  default: 'configuration par défaut',
+};
+
+function normalizeSummary(data) {
+  const source = data?.summary || data || {};
+  return MEMORY_CARDS.reduce((acc, card) => {
+    acc[card.kind] = Array.isArray(source[card.kind]) ? source[card.kind] : [];
+    return acc;
+  }, { origins: source.origins || data?.origins || {} });
+}
+
 export default function MemoryPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
@@ -100,7 +115,7 @@ export default function MemoryPage() {
     }
   };
 
-  const summary = summaryQuery.data || {};
+  const summary = normalizeSummary(summaryQuery.data);
   const learnedCount = MEMORY_CARDS.reduce((count, card) => count + (summary[card.kind] || []).length, 0);
 
   return (
@@ -125,7 +140,10 @@ export default function MemoryPage() {
           const items = summary[kind] || [];
           return (
             <Card className="memory-card" key={kind}>
-              <strong>{label}</strong>
+              <div className="memory-card-title">
+                <strong>{label}</strong>
+                <span className="mini-chip">{ORIGIN_LABELS[summary.origins?.[kind]] || 'provenance inconnue'}</span>
+              </div>
               <ul className="memory-items">
                 {items.length ? items.map((item) => (
                   <li className="memory-item" key={item.id}>

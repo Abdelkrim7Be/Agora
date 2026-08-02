@@ -762,7 +762,7 @@ async def _step_learn_style(context: SetupContext) -> dict:
     if not context.sent_samples:
         raise SkipStep("no sent mail sampled")
     from src import graph as graph_module
-    from src.memory import namespace, wrap_preferences
+    from src.memory import ORIGIN_SETUP, namespace, wrap_preferences
     from src.style_learning import analyze_style, build_style_text
 
     profile = await _to_thread_with_timeout(
@@ -773,7 +773,7 @@ async def _step_learn_style(context: SetupContext) -> dict:
         await context.store.aput(
             namespace("writing_style", context.user_id, context.agent_instance_id),
             "user_preferences",
-            wrap_preferences(text),
+            wrap_preferences(text, ORIGIN_SETUP),
         )
     return {"sample_count": len(context.sent_samples), "writing_style": text}
 

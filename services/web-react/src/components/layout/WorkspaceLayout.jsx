@@ -6,7 +6,8 @@ import Topbar from './Topbar';
 import SetupPage from '../../pages/workspace/SetupPage';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
-import { useAgentInstancesQuery, useInstanceSetupQuery } from '../../api/queries';
+import { inboxQueryKey, inboxQueryPath, useAgentInstancesQuery, useInstanceSetupQuery } from '../../api/queries';
+import { useApi } from '../../api/useApi';
 
 export default function WorkspaceLayout() {
   const { instanceId: paramId } = useParams();
@@ -15,6 +16,7 @@ export default function WorkspaceLayout() {
   const { setInstanceId, setInstances } = useInstance();
   const { setStatus } = useStatus();
   const queryClient = useQueryClient();
+  const { api } = useApi();
   // Deep-linking straight into a workspace tab (no prior visit to the Instances
   // page this session) would otherwise leave the sidebar showing the raw id
   // instead of the display name/type — hydrate here too.
@@ -115,6 +117,11 @@ export default function WorkspaceLayout() {
       ['pending-runs', paramId],
     ].forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
     queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
+    queryClient.prefetchQuery({
+      queryKey: inboxQueryKey(paramId, 'inbox'),
+      queryFn: () => api(inboxQueryPath('inbox')),
+      staleTime: 60_000,
+    });
   }, [setupStatus, paramId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (

@@ -858,6 +858,7 @@ def test_memory_put_then_get_roundtrips(monkeypatch):
         assert put.json() == {
             "triage_preferences": "triage",
             "response_preferences": "response",
+            "origin": "manual",
         }
 
         got = client.get("/memory")

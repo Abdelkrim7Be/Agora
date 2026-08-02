@@ -5,7 +5,7 @@ import { StatusBadge } from '../../components/ui/Badge';
 import { MetricTile } from '../../components/ui/MetricTile';
 import { useStatus } from '../../contexts/StatusContext';
 import { useInstance } from '../../contexts/InstanceContext';
-import { HEALTH_STATUS_LABELS, healthPillClass, formatCountFr, formatPercentFr, formatDurationFr } from '../../utils/format';
+import { formatDateTimeFr, HEALTH_STATUS_LABELS, healthPillClass, formatCountFr, formatPercentFr, formatDurationFr } from '../../utils/format';
 import { useHealthQuery } from '../../api/queries';
 
 const COMPONENTS = [
@@ -39,7 +39,7 @@ export default function HealthPage() {
 
   const budget = data?.gmail_budget || {};
   const budgetPct = Number(budget.pct || 0);
-  const lastPoll = data?.poller?.last_poll_at ? new Date(data.poller.last_poll_at).toLocaleString() : '—';
+  const lastPoll = data?.poller?.last_poll_at ? formatDateTimeFr(data.poller.last_poll_at) : '—';
   const notifyEnabled = Boolean(data?.notifications?.enabled);
 
   return (

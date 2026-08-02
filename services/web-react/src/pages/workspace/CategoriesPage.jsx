@@ -11,6 +11,9 @@ import {
   useCategoriesQuery,
   useSaveCategoriesYaml,
   useSaveCategoryEdit,
+  useCategoryProposalsQuery,
+  useAcceptCategoryProposal,
+  useDismissCategoryProposal,
   useDuplicateCategory,
   useDeleteCategory,
   useTestCategoryMatch,
@@ -73,6 +76,9 @@ export default function CategoriesPage() {
   const query = useCategoriesQuery();
   const saveYaml = useSaveCategoriesYaml();
   const saveEdit = useSaveCategoryEdit();
+  const proposalsQuery = useCategoryProposalsQuery();
+  const acceptProposal = useAcceptCategoryProposal();
+  const dismissProposal = useDismissCategoryProposal();
   const duplicateCategory = useDuplicateCategory();
   const deleteCategory = useDeleteCategory();
   const testMatch = useTestCategoryMatch();
@@ -159,6 +165,25 @@ export default function CategoriesPage() {
   const selectedCategory = categories.find((category) => category.name === selectedCategoryName) || categories[0] || null;
   const selectedCategoryContacts = selectedCategory ? contactsForCategory(selectedCategory.name) : [];
   const selectedRouteTargets = selectedCategory?.route_to?.filter(Boolean) || [];
+  const categoryProposals = proposalsQuery.data?.proposals || [];
+
+  const handleAcceptProposal = async (proposal) => {
+    try {
+      await acceptProposal.mutateAsync({ proposal_id: proposal.id });
+      setStatus(`Proposition « ${proposal.display_name} » créée comme workflow désactivé.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d'accepter la proposition : ${error.message}`, 'error');
+    }
+  };
+
+  const handleDismissProposal = async (proposal) => {
+    try {
+      await dismissProposal.mutateAsync(proposal.id);
+      setStatus('Proposition ignorée.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible d'ignorer la proposition : ${error.message}`, 'error');
+    }
+  };
 
   const handleAddCategoryContact = async (e) => {
     e.preventDefault();
@@ -381,6 +406,50 @@ export default function CategoriesPage() {
       </div>
       <div className="notice"><strong>Catégories et actions :</strong> chaque catégorie définit comment traiter les e-mails qui correspondent. Choisissez Rédiger pour créer un brouillon, Notifier pour validation humaine, Classer pour organiser sans brouillon, ou Ignorer/archiver pour ne pas créer de brouillon.</div>
 
+      <Card className="editor-card">
+        <div className="card-header">
+          <div>
+            <h2>Propositions de catégories</h2>
+            <p>Analyse metadata uniquement : expéditeur, domaine, objet, extrait et libellés Gmail. Les catégories existantes ne sont pas reproposées.</p>
+          </div>
+          <button type="button" onClick={() => proposalsQuery.refetch()}>
+            <span className="material-symbols-outlined" aria-hidden="true">manage_search</span><span>Scanner 500 messages</span>
+          </button>
+        </div>
+        {proposalsQuery.isError ? (
+          <p className="empty-cell">Propositions indisponibles : {proposalsQuery.error.message}</p>
+        ) : !categoryProposals.length ? (
+          <div className="empty">Aucune nouvelle catégorie détectée pour le moment.</div>
+        ) : (
+          <div className="rule-list">
+            {categoryProposals.slice(0, 6).map((proposal) => (
+              <div className="directory-row compact" key={proposal.id}>
+                <div className="directory-icon"><span className="material-symbols-outlined" aria-hidden="true">auto_awesome</span></div>
+                <div className="directory-main">
+                  <strong>{proposal.display_name}</strong>
+                  <span>{proposal.description}</span>
+                  <div className="mini-chip-row">
+                    <span className="mini-chip">{proposal.suggested_name}</span>
+                    <span className="mini-chip">{proposal.kind === 'domain' ? 'domaine' : 'objet'}</span>
+                    {(proposal.sample_subjects || []).slice(0, 2).map((subject) => <span className="mini-chip" key={subject}>{compactText(subject, 42)}</span>)}
+                  </div>
+                </div>
+                {canManage ? (
+                  <div className="directory-actions">
+                    <button className="primary" type="button" onClick={() => handleAcceptProposal(proposal)}>
+                      <span className="material-symbols-outlined" aria-hidden="true">check</span><span>Créer désactivée</span>
+                    </button>
+                    <button type="button" onClick={() => handleDismissProposal(proposal)}>
+                      <span className="material-symbols-outlined" aria-hidden="true">close</span><span>Ignorer</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Card className="workflow-builder">
         <div className="card-header">
           <div>
@@ -535,8 +604,8 @@ export default function CategoriesPage() {
                 <span className="mini-chip">{selectedCategory.enabled === false ? 'désactivée' : 'active'}</span>
                 <span className="mini-chip">{workflowActionLabel(selectedCategory.policy)}</span>
                 <span className="mini-chip">priorité: {selectedCategory.priority || 'normal'}</span>
-                {selectedCategory.owner ? <span className="mini-chip">owner: {selectedCategory.owner}</span> : null}
-                {selectedCategory.approver ? <span className="mini-chip">approver: {selectedCategory.approver}</span> : null}
+                {selectedCategory.owner ? <span className="mini-chip">Propriétaire : {selectedCategory.owner}</span> : null}
+                {selectedCategory.approver ? <span className="mini-chip">Approbateur : {selectedCategory.approver}</span> : null}
                 {selectedRouteTargets.map((target) => <span className="mini-chip" key={target}>route: {target}</span>)}
                 {selectedCategory.require_approval ? <span className="mini-chip">validation obligatoire</span> : null}
                 {selectedCategory.external_send_allowed === false ? <span className="mini-chip">envoi externe interdit</span> : null}
@@ -588,7 +657,7 @@ export default function CategoriesPage() {
                       <div className="mini-chip-row">
                         <span className="mini-chip">{contact.audience}</span>
                         <span className="mini-chip">{contact.category_source || 'manual'}</span>
-                        {contact.active === false ? <span className="mini-chip">inactive</span> : null}
+                        {contact.active === false ? <span className="mini-chip">inactif</span> : null}
                       </div>
                     </div>
                     {canManage && (
@@ -646,8 +715,8 @@ export default function CategoriesPage() {
                           <span className="mini-chip">{category.enabled === false ? 'désactivé' : 'actif'}</span>
                           <span className="mini-chip">{category.priority || 'normal'}</span>
                           <span className="mini-chip">{workflowActionLabel(policy)}</span>
-                          {category.owner && <span className="mini-chip">{`owner: ${category.owner}`}</span>}
-                          {category.approver && <span className="mini-chip">{`approver: ${category.approver}`}</span>}
+                          {category.owner && <span className="mini-chip">{`Propriétaire : ${category.owner}`}</span>}
+                          {category.approver && <span className="mini-chip">{`Approbateur : ${category.approver}`}</span>}
                           {routeTargets.length > 0 && <span className="mini-chip">{`route: ${compactText(routeTargets.join(', '), 42)}`}</span>}
                           <button
                             type="button"

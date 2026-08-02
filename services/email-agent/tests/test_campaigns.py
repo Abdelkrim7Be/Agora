@@ -9,6 +9,7 @@ from src.campaigns import (
     CampaignTemplate,
     Group,
     GroupMember,
+    load_campaign_runs,
     audience_guard,
     contacts_for_segment,
     load_campaigns,
@@ -106,6 +107,8 @@ def _seed(tmp_path, monkeypatch):
     campaigns_path = tmp_path / 'campaigns.yaml'
     campaigns_path.write_text(SEED_CAMPAIGNS_YAML, encoding='utf-8')
     monkeypatch.setattr(campaigns_module, 'DEFAULT_CAMPAIGNS_PATH', campaigns_path)
+    campaign_runs_path = tmp_path / 'campaign_runs.json'
+    monkeypatch.setattr(campaigns_module, 'DEFAULT_CAMPAIGN_RUNS_PATH', campaign_runs_path)
 
     contacts_path = tmp_path / 'contacts.yaml'
     contacts_path.write_text(SEED_CONTACTS_YAML, encoding='utf-8')
@@ -152,6 +155,24 @@ def test_render_flags_unresolved_vars():
     )
     rendered = render_for_member(template, member)
     assert 'amount' in rendered.unresolved
+
+
+def test_campaign_preview_strips_missing_name_cleanly():
+    member = GroupMember(email='x@corp.com')
+    template = CampaignTemplate(
+        name='t',
+        subject='Information interne : {{name}}',
+        body_markdown='Bonjour {{name}},\n\nSociété : {{company}}.\n\n{{missing}}',
+        variables=['name', 'company', 'missing'],
+        audience=['employee'],
+    )
+
+    rendered = render_for_member(template, member)
+
+    assert '{{' not in rendered.subject
+    assert rendered.subject == 'Information interne :'
+    assert rendered.text.startswith('Bonjour,\n')
+    assert '{{' not in rendered.text
 
 
 def test_loader_roundtrip(tmp_path, monkeypatch):
@@ -251,15 +272,61 @@ def test_campaign_prepare_and_approve_dry_run(tmp_path, monkeypatch):
         assert result['dry_run'] is True
         assert len(result['sent']) == 2
         assert result['denied'] == [] and result['failed'] == []
-        assert all(c['campaign_id'] != cid for c in client.get('/campaigns').json()['campaigns'])
+        campaigns = {c['campaign_id']: c for c in client.get('/campaigns').json()['campaigns']}
+        assert campaigns[cid]['status'] == 'sent'
+        assert [r['status'] for r in campaigns[cid]['recipients']] == ['sent', 'sent']
 
 
-def test_campaign_reject_removes_pending(tmp_path, monkeypatch):
+def test_campaign_reject_marks_cancelled(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     with TestClient(app) as client:
         cid = client.post('/campaigns/prepare', json={'segment_id': 'team', 'template_name': 'announce'}).json()['campaign_id']
-        assert client.post(f'/campaigns/{cid}/reject').status_code == 200
-        assert client.post(f'/campaigns/{cid}/approve').status_code == 404
+        rejected = client.post(f'/campaigns/{cid}/reject')
+        assert rejected.status_code == 200
+        assert rejected.json()['status'] == 'cancelled'
+        assert client.post(f'/campaigns/{cid}/approve').status_code == 409
+
+
+def test_campaign_prepare_persists_draft(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        response = client.post('/campaigns/prepare', json={
+            'segment_id': 'team',
+            'template_name': 'broken',
+            'name': 'Brouillon RH',
+            'save_as_draft': True,
+        })
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body['status'] == 'draft'
+        assert body['missing_variables']
+
+        stored = load_campaign_runs()
+        assert body['campaign_id'] in stored
+        assert stored[body['campaign_id']]['campaign_name'] == 'Brouillon RH'
+
+
+def test_campaign_scheduled_send_swept_by_poller(tmp_path, monkeypatch):
+    from src import poller as poller_module
+
+    _seed(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        response = client.post('/campaigns/prepare', json={
+            'segment_id': 'team',
+            'template_name': 'announce',
+            'scheduled_at': '2000-01-01T09:00:00+00:00',
+        })
+        assert response.status_code == 200, response.text
+        cid = response.json()['campaign_id']
+        approved = client.post(f'/campaigns/{cid}/approve')
+        assert approved.status_code == 200
+        assert approved.json()['status'] == 'scheduled'
+
+        outcomes = poller_module.sweep_due_campaigns()
+        assert outcomes == [(cid, 'sent', 'campaign')]
+        stored = load_campaign_runs()
+        assert stored[cid]['status'] == 'sent'
+        assert len(stored[cid]['result']['sent']) == 2
 
 
 def test_group_and_template_crud(tmp_path, monkeypatch):
@@ -290,3 +357,39 @@ def test_group_and_template_crud(tmp_path, monkeypatch):
         templates = {x['name']: x for x in client.get('/campaigns/templates').json()['templates']}
         assert templates['promo_bis']['audience'] == ['client']
         assert templates['promo_bis']['category'] == 'newsletter'
+
+
+def test_campaign_send_holds_back_anything_but_an_explicit_allow(monkeypatch):
+    """A policy tightened to hitl must stop the send, not fall through to it."""
+    from src import campaigns as mod
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "security_enabled", True, raising=False)
+    monkeypatch.setattr("src.gmail_client.effective_dry_run", lambda: True)
+
+    sent_calls = []
+
+    def _fake_send(**kwargs):
+        sent_calls.append(kwargs["to"])
+        return {"id": "m1", "dry_run": True}
+
+    monkeypatch.setattr("src.gmail_client.send_html_message", _fake_send)
+
+    decisions = iter([{"decision": "hitl"}, {"decision": "allow"}])
+    monkeypatch.setattr(
+        "src.security_client.authorize_action",
+        lambda *a, **kw: next(decisions),
+    )
+
+    record = {
+        "subject": "S",
+        "rendered": [
+            {"email": "held@example.test", "subject": "S", "html": "<p>x</p>", "text": "x"},
+            {"email": "ok@example.test", "subject": "S", "html": "<p>x</p>", "text": "x"},
+        ],
+    }
+    result = mod.send_campaign_run("c1", record)
+
+    assert [d["email"] for d in result["denied"]] == ["held@example.test"]
+    assert [s["email"] for s in result["sent"]] == ["ok@example.test"]
+    assert sent_calls == ["ok@example.test"]

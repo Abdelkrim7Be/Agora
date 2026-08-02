@@ -5,8 +5,8 @@ import { currentUsername } from '../../utils/jwt';
 import { roleAtLeast } from '../../utils/roles';
 
 const NAV_ITEMS = [
-  { to: '/', end: true, icon: 'hub', key: 'nav.instances', minRole: 'admin' },
-  { to: '/agent-types', icon: 'deployed_code', key: 'nav.agentTypes', minRole: 'admin' },
+  { to: '/', end: true, icon: 'hub', key: 'nav.instances' },
+  { to: '/agent-types', icon: 'deployed_code', key: 'nav.agentTypes' },
   { to: '/system-health', icon: 'monitor_heart', key: 'nav.health', minRole: 'admin' },
   { to: '/access-log', icon: 'receipt_long', key: 'nav.audit', minRole: 'admin' },
   { to: '/team', icon: 'manage_accounts', key: 'nav.users', minRole: 'admin' },
@@ -49,7 +49,7 @@ export default function Sidebar() {
         <div className="agent-card" id="sidebar-status-card" data-testid="sidebar-status">
           <span className="pulse" id="sidebar-status-dot"></span>
           <div>
-            <strong id="agent-connection">{signedIn ? 'Passerelle connectée' : 'Passerelle inactive'}</strong>
+            <strong id="agent-connection">{signedIn ? 'Session active' : 'Session inactive'}</strong>
             <span id="agent-session">{sessionText}</span>
             <button className="ghost sidebar-action" type="button" hidden>Reconnecter</button>
             <button className="ghost sidebar-action" type="button" hidden></button>

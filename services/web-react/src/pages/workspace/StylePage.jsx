@@ -30,6 +30,19 @@ function styleFieldsFromText(text) {
   return fields;
 }
 
+function profileFromText(text) {
+  const parsed = styleFieldsFromText(text || '');
+  return {
+    greeting: parsed.greeting,
+    tone: parsed.tone,
+    sign_off: parsed.signoff,
+    typical_length: parsed.length,
+    recurring_phrases: parsed.phrases,
+    dos: parsed.dos,
+    donts: parsed.donts,
+  };
+}
+
 function bullets(value) {
   const lines = (value || '').split('\n').map((l) => l.trim()).filter(Boolean);
   return lines.length ? lines.map((l) => `- ${l}`).join('\n') : '- none observed';
@@ -47,8 +60,15 @@ function styleTextFromFields(fields, phrases) {
   );
 }
 
+function profileIsEmpty(profile) {
+  if (!profile) return true;
+  const scalars = [profile.greeting, profile.tone, profile.sign_off, profile.typical_length];
+  const lists = [profile.recurring_phrases, profile.dos, profile.donts];
+  return !scalars.some((value) => (value || '').trim()) && !lists.some((items) => items?.length);
+}
+
 function StyleProfile({ profile }) {
-  if (!profile) return <div className="empty">Aucun profil appris chargé.</div>;
+  if (profileIsEmpty(profile)) return <div className="empty">Aucun profil appris chargé.</div>;
   const list = (items) => (items?.length ? items.map((item, i) => <li key={i}>{item}</li>) : <li className="muted">rien observé</li>);
   return (
     <>
@@ -65,6 +85,13 @@ function StyleProfile({ profile }) {
   );
 }
 
+const ORIGIN_LABELS = {
+  setup: 'appris pendant la configuration',
+  learned: 'appris par l’agent',
+  manual: 'modifié manuellement',
+  default: 'configuration par défaut',
+};
+
 export default function StylePage() {
   const { instanceId } = useInstance();
   const { setStatus } = useStatus();
@@ -74,6 +101,7 @@ export default function StylePage() {
   const [rawText, setRawText] = useState('');
   const [phrases, setPhrases] = useState([]);
   const [profile, setProfile] = useState(null);
+  const [origin, setOrigin] = useState('');
   const [visual, setVisual] = useState({ mode: 'idle', message: 'Apprentissage du style en veille.' });
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
@@ -86,7 +114,9 @@ export default function StylePage() {
   useEffect(() => {
     if (!query.data) return;
     const data = query.data;
-    setProfile(data.profile || null);
+    const textProfile = profileFromText(data.writing_style || '');
+    setProfile(profileIsEmpty(data.profile) ? textProfile : data.profile);
+    setOrigin(data.origin || (data.source === 'learned' ? 'learned' : data.source || 'default'));
     const parsed = styleFieldsFromText(data.writing_style || '');
     setPhrases(parsed.phrases);
     setFields({ greeting: parsed.greeting, tone: parsed.tone, signoff: parsed.signoff, length: parsed.length, dos: parsed.dos.join('\n'), donts: parsed.donts.join('\n') });
@@ -114,7 +144,8 @@ export default function StylePage() {
     try {
       const data = await saveStyle.mutateAsync(writing_style);
       setStatus('Style enregistré.', 'ok');
-      setProfile(data.profile || profile);
+      setProfile(profileIsEmpty(data.profile) ? profileFromText(data.writing_style || writing_style) : data.profile);
+      setOrigin(data.origin || 'manual');
     } catch (error) {
       setStatus(`Impossible d’enregistrer le style : ${error.message}`, 'error');
     }
@@ -168,6 +199,7 @@ export default function StylePage() {
         </button>
         <span className="counter">{instanceId}</span>
         <span className="counter">{learningEnabled ? 'apprentissage actif' : 'apprentissage désactivé'}</span>
+        <span className="counter">{ORIGIN_LABELS[origin] || 'provenance inconnue'}</span>
       </div>
       <div className="notice">Les mails envoyés sont analysés par le LLM configuré. Agora AI conserve le profil de style distillé, pas le contenu brut des e-mails.</div>
       <SyncProgressBar label="Apprentissage du style" mode={visual.mode} message={visual.message} />
@@ -195,7 +227,10 @@ export default function StylePage() {
           </details>
         </Card>
         <Card>
-          <strong>Profil appris</strong>
+          <div className="memory-card-title">
+            <strong>Profil appris</strong>
+            <span className="mini-chip">{ORIGIN_LABELS[origin] || 'provenance inconnue'}</span>
+          </div>
           <div className={`profile-panel ${profile ? '' : 'empty'}`.trim()}>
             <StyleProfile profile={profile} />
           </div>

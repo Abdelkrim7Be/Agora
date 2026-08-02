@@ -17,6 +17,8 @@ import {
   useDismissSuggestion,
   useJunkQuery,
   useSaveJunk,
+  useStarterRulesQuery,
+  useApplyStarterRules,
 } from '../../api/queries';
 
 const EMPTY_RULE = {
@@ -240,6 +242,28 @@ export default function RulesPage() {
     }
   };
 
+  const starterQuery = useStarterRulesQuery();
+  const applyStarter = useApplyStarterRules();
+  const [starterPicks, setStarterPicks] = useState([]);
+
+  const starterRules = starterQuery.data?.starter_rules || [];
+  const availableStarters = starterRules.filter((entry) => !entry.applied);
+
+  const toggleStarterPick = (id) => {
+    setStarterPicks((picks) => (picks.includes(id) ? picks.filter((p) => p !== id) : [...picks, id]));
+  };
+
+  const handleApplyStarter = async () => {
+    if (!starterPicks.length) return;
+    try {
+      const result = await applyStarter.mutateAsync(starterPicks);
+      setStarterPicks([]);
+      setStatus(`${(result.added || []).length} règle(s) recommandée(s) ajoutée(s).`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d'ajouter les règles recommandées : ${error.message}`, 'error');
+    }
+  };
+
   const handleSaveYaml = async () => {
     try {
       await saveYaml.mutateAsync(yamlText);
@@ -289,6 +313,49 @@ export default function RulesPage() {
   return (
     <>
       <PageHeading view="rules" />
+      <div className="notice">
+        Pipeline : filtre indésirable → règles → routage par catégorie → tri IA → brouillon. Le filtre jette, les règles rangent.
+      </div>
+
+      {canManage && availableStarters.length > 0 && (
+        <Card className="starter-rules">
+          <div className="card-header">
+            <div>
+              <h2>Règles recommandées</h2>
+              <div className="meta">Proposées, jamais imposées : cochez celles qui vous conviennent.</div>
+            </div>
+            <button
+              className="primary"
+              type="button"
+              disabled={!starterPicks.length || applyStarter.isPending}
+              onClick={handleApplyStarter}
+            >
+              <span className="material-symbols-outlined" aria-hidden="true">playlist_add</span>
+              <span>Ajouter la sélection</span>
+            </button>
+          </div>
+          <ul className="starter-list">
+            {availableStarters.map((entry) => (
+              <li className="starter-item" key={entry.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={starterPicks.includes(entry.id)}
+                    onChange={() => toggleStarterPick(entry.id)}
+                  />
+                  <span className="starter-copy">
+                    <strong>{entry.title}</strong>
+                    <small>{entry.explanation}</small>
+                    {entry.needs_input ? (
+                      <small className="starter-note">À compléter après ajout : {entry.needs_input}.</small>
+                    ) : null}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       <div className="toolbar">
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les règles</span>

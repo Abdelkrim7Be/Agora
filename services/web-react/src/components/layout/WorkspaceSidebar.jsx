@@ -77,12 +77,10 @@ export default function WorkspaceSidebar() {
       </div>
 
       <div id="workspace-sidebar-context">
-{globalRole === 'admin' ? (
-          <NavLink to="/" end className="nav-item workspace-back">
-            <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>
-            <span>Retour plateforme</span>
-          </NavLink>
-        ) : null}
+        <NavLink to={globalRole === 'admin' ? '/' : '/account'} end className="nav-item workspace-back">
+          <span className="material-symbols-outlined" aria-hidden="true">arrow_back</span>
+          <span>Retour plateforme</span>
+        </NavLink>
         <div className="workspace-sidebar-agent">
           <span>Espace agent</span>
           <strong>{currentInstance?.display_name || id}</strong>
