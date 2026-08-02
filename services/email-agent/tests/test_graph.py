@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from conftest import ai_tool_call
+from conftest import ai_tool_call, patch_provider
 
 from src.graph import _recover_tool_call_from_failed_generation, email_assistant
 from src.config import AutoOrganizeConfig
@@ -149,11 +149,13 @@ def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, r
     assert request["action_request"]["args"]["to"] == ["ops@example.com", "quality@example.com"]
 
     sent_to = []
-    monkeypatch.setattr(
-        "src.gmail_client.notify_internal_message",
-        lambda to, subject, note: sent_to.append(to) or {"id": "sent-notify"},
-    )
     from src.capabilities import email_tools
+
+    patch_provider(
+        monkeypatch,
+        email_tools,
+        notify_internal_message=lambda to, subject, note: sent_to.append(to) or {"id": "sent-notify"},
+    )
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
 
     done = email_assistant.invoke(Command(resume={"type": "approve", "args": None}), run_cfg)
@@ -226,21 +228,18 @@ def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
     calls: list[tuple] = []
-    monkeypatch.setattr(
-        inbox_tools,
-        "ensure_label",
-        lambda label: calls.append(("ensure_label", label)) or "Label_auto",
-    )
 
     def _modify(message_id, **kwargs):
         calls.append(("modify_labels", message_id, kwargs))
         return {"id": message_id}
 
-    monkeypatch.setattr(inbox_tools, "modify_labels", _modify)
-    monkeypatch.setattr(
+    patch_provider(
+        monkeypatch,
         inbox_tools,
-        "archive_message",
-        lambda message_id: calls.append(("archive_message", message_id)) or {"id": message_id},
+        ensure_label=lambda label: calls.append(("ensure_label", label)) or "Label_auto",
+        modify_labels=_modify,
+        archive_message=lambda message_id: calls.append(("archive_message", message_id))
+        or {"id": message_id},
     )
 
     email = {**ignore_email, "email_id": "msg-auto"}
@@ -268,9 +267,13 @@ def test_auto_organize_uses_authorization_when_security_enabled(
     monkeypatch.setattr(g.settings, "security_enabled", True)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_auto")
-    monkeypatch.setattr(inbox_tools, "modify_labels", lambda *a, **k: {"id": a[0]})
-    monkeypatch.setattr(inbox_tools, "archive_message", lambda message_id: {"id": message_id})
+    patch_provider(
+        monkeypatch,
+        inbox_tools,
+        ensure_label=lambda label: "Label_auto",
+        modify_labels=lambda *a, **k: {"id": a[0]},
+        archive_message=lambda message_id: {"id": message_id},
+    )
 
     authz_calls: list[dict] = []
 
@@ -315,11 +318,12 @@ def test_automation_label_only_plan_runs_without_notify(monkeypatch):
     monkeypatch.setattr(g.settings, "security_enabled", False)
     monkeypatch.setitem(g.tools_by_name_map, "apply_label", inbox_tools.apply_label)
     applied: list[tuple] = []
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_x")
-    monkeypatch.setattr(
+    patch_provider(
+        monkeypatch,
         inbox_tools,
-        "modify_labels",
-        lambda message_id, **k: applied.append((message_id, k)) or {"id": message_id},
+        ensure_label=lambda label: "Label_x",
+        modify_labels=lambda message_id, **k: applied.append((message_id, k))
+        or {"id": message_id},
     )
 
     email = {
@@ -347,8 +351,12 @@ def test_automation_notify_rule_tags_classification(monkeypatch):
 
     monkeypatch.setattr(g.settings, "security_enabled", False)
     monkeypatch.setitem(g.tools_by_name_map, "apply_label", inbox_tools.apply_label)
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_x")
-    monkeypatch.setattr(inbox_tools, "modify_labels", lambda message_id, **k: {"id": message_id})
+    patch_provider(
+        monkeypatch,
+        inbox_tools,
+        ensure_label=lambda label: "Label_x",
+        modify_labels=lambda message_id, **k: {"id": message_id},
+    )
 
     email = {
         "author": "a@example.com", "to": "me@example.com", "subject": "Hi",

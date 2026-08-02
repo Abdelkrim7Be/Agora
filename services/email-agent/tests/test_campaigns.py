@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from src import campaigns as campaigns_module
@@ -365,7 +367,7 @@ def test_campaign_send_holds_back_anything_but_an_explicit_allow(monkeypatch):
     from src.config import settings
 
     monkeypatch.setattr(settings, "security_enabled", True, raising=False)
-    monkeypatch.setattr("src.gmail_client.effective_dry_run", lambda: True)
+    monkeypatch.setattr("src.send_mode.effective_dry_run", lambda agent_instance_id=None: True)
 
     sent_calls = []
 
@@ -373,7 +375,10 @@ def test_campaign_send_holds_back_anything_but_an_explicit_allow(monkeypatch):
         sent_calls.append(kwargs["to"])
         return {"id": "m1", "dry_run": True}
 
-    monkeypatch.setattr("src.gmail_client.send_html_message", _fake_send)
+    monkeypatch.setattr(
+        "src.mail.get_provider",
+        lambda *a, **kw: SimpleNamespace(send_html_message=_fake_send),
+    )
 
     decisions = iter([{"decision": "hitl"}, {"decision": "allow"}])
     monkeypatch.setattr(

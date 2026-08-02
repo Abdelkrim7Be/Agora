@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from src.capabilities import current_email_id, hitl_approved
 from src.config import settings  # noqa: F401 — tests patch dry_run through this module
+from src.mail import get_provider
 from src.send_mode import SIMULATED_NOTE, effective_dry_run
 
 
@@ -30,9 +31,7 @@ def write_email(to: str, subject: str, content: str) -> str:
     if effective_dry_run():
         return f"Email sent to {to} with subject '{subject}' ({SIMULATED_NOTE})"
     _require_approval("write_email")
-    from src.gmail_client import send_message
-
-    result = send_message(to=to, subject=subject, body=content)
+    result = get_provider().send_message(to=to, subject=subject, body=content)
     sent_id = result.get("id") if isinstance(result, dict) else None
     return f"Email sent to {to} with subject '{subject}'" + (
         f" (message id: {sent_id})" if sent_id else ""
@@ -53,11 +52,10 @@ def forward_email(to: str | list[str], note: str = "") -> str:
         return f"Forwarded current email to {', '.join(recipients)} ({SIMULATED_NOTE})"
     _require_approval("forward_email")
 
-    from src.gmail_client import forward_message
-
+    provider = get_provider()
     sent_ids = []
     for recipient in recipients:
-        result = forward_message(message_id, to=recipient, note=note)
+        result = provider.forward_message(message_id, to=recipient, note=note)
         sent_id = result.get("id") if isinstance(result, dict) else None
         if sent_id:
             sent_ids.append(sent_id)
@@ -80,9 +78,7 @@ def notify_internal(to: str | list[str], subject: str, note: str) -> str:
         return f"Notified {', '.join(recipients)} ({SIMULATED_NOTE})"
     _require_approval("notify_internal")
 
-    from src.gmail_client import notify_internal_message
-
-    result = notify_internal_message(to=recipients, subject=subject, note=note)
+    result = get_provider().notify_internal_message(to=recipients, subject=subject, note=note)
     sent_id = result.get("id") if isinstance(result, dict) else None
     return f"Notified {', '.join(recipients)}" + (
         f" (message id: {sent_id})" if sent_id else ""
@@ -97,9 +93,7 @@ def reply_all(content: str) -> str:
         return f"Reply-all sent on the current thread ({SIMULATED_NOTE})"
     _require_approval("reply_all")
 
-    from src.gmail_client import reply_all_message
-
-    result = reply_all_message(message_id, body=content)
+    result = get_provider().reply_all_message(message_id, body=content)
     sent_id = result.get("id") if isinstance(result, dict) else None
     return "Reply-all sent on the current thread" + (
         f" (message id: {sent_id})" if sent_id else ""

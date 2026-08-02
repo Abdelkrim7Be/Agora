@@ -3,14 +3,14 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from src.capabilities import current_gmail_thread_id
-from src.gmail_client import create_draft as create_gmail_draft
+from src.mail import get_provider
 
 
 @tool
 def create_draft(to: str, subject: str, content: str) -> str:
     """Create a Gmail draft for the current email thread without sending it."""
     thread_id = current_gmail_thread_id.get()
-    result = create_gmail_draft(to=to, subject=subject, body=content, thread_id=thread_id)
+    result = get_provider().create_draft(to=to, subject=subject, body=content, thread_id=thread_id)
     draft_id = result.get("id") if isinstance(result, dict) else None
     if draft_id:
         return f"Created draft '{draft_id}' to {to} with subject '{subject}'."

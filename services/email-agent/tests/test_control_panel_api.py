@@ -11,6 +11,7 @@ from src.api import app, _require_run, _run_detail
 from src.categories import CategoriesConfig, Category, CategoryInstructions
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
 from src.tenant import current_agent_instance_id, current_user_id
+from tests.conftest import patch_provider
 
 
 def test_rule_and_section_toggle(monkeypatch, tmp_path):
@@ -578,11 +579,8 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
     )
 
     monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=True))
-    monkeypatch.setattr(api, "gmail_resource", lambda user_id=None: "gmail-resource")
-
-    def fake_fetch_sent(max_messages, resource=None):
+    def fake_fetch_sent(max_messages):
         captured["max_messages"] = max_messages
-        captured["resource"] = resource
         return [{"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}]
 
     def fake_analyze_style(samples, llm):
@@ -590,7 +588,7 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
         captured["llm"] = llm
         return profile
 
-    monkeypatch.setattr(api, "fetch_sent", fake_fetch_sent)
+    patch_provider(monkeypatch, api, fetch_sent=fake_fetch_sent)
     monkeypatch.setattr(api, "analyze_style", fake_analyze_style)
 
     with TestClient(app) as client:
@@ -611,7 +609,6 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
     assert "Tone: warm and direct" in body["writing_style"]
     assert stored["writing_style"] == body["writing_style"]
     assert captured["max_messages"] == 2
-    assert captured["resource"] == "gmail-resource"
 
 
 
@@ -620,10 +617,13 @@ def test_style_learn_returns_retryable_rate_limit_error(monkeypatch):
     import src.api as api
 
     monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=True))
-    monkeypatch.setattr(api, "gmail_resource", lambda user_id=None: "gmail-resource")
-    monkeypatch.setattr(api, "fetch_sent", lambda max_messages, resource=None: [
-        {"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}
-    ])
+    patch_provider(
+        monkeypatch,
+        api,
+        fetch_sent=lambda max_messages: [
+            {"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}
+        ],
+    )
 
     def fake_analyze_style(samples, llm):
         raise RuntimeError("Error code: 429 - rate_limit_exceeded")
@@ -775,19 +775,19 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
     captured = {}
     graph = object()
 
-    def fake_gmail_resource(user_id=None):
-        captured["gmail_user_id"] = user_id
-        return "gmail"
-
-    async def fake_poll_once(graph_arg, resource=None, max_results=None):
+    async def fake_poll_once(graph_arg, provider=None, max_results=None):
         captured["graph"] = graph_arg
-        captured["resource"] = resource
+        captured["provider"] = provider
         captured["max_results"] = max_results
         captured["current_user"] = current_user_id()
         captured["current_agent_instance"] = current_agent_instance_id()
         return [("msg-1", "pending_approval", "run-1")]
 
-    monkeypatch.setattr(api, "gmail_resource", fake_gmail_resource)
+    provider = patch_provider(
+        monkeypatch,
+        api,
+        probe=lambda: {"ok": True, "mailbox": "ceo@example.com", "error": ""},
+    )
     monkeypatch.setattr(api, "poll_once", fake_poll_once)
 
     with TestClient(app) as client:
@@ -800,9 +800,8 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"outcomes": [["msg-1", "pending_approval", "run-1"]]}
     assert captured == {
-        "gmail_user_id": None,
         "graph": graph,
-        "resource": "gmail",
+        "provider": provider,
         "max_results": 7,
         "current_user": "owner",
         "current_agent_instance": "ceo-email-agent",
@@ -1284,7 +1283,7 @@ def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
 def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
     import src.api as api
 
-    def unavailable(_user_id=None):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("network unavailable")
 
     def runs(**_kwargs):
@@ -1301,7 +1300,7 @@ def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(api, "gmail_resource", unavailable)
+    patch_provider(monkeypatch, api, list_inbox=unavailable)
     monkeypatch.setattr(api, "list_runs", runs)
 
     with TestClient(app) as client:
@@ -1334,10 +1333,10 @@ def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
 def test_inbox_action_returns_503_when_gmail_unavailable(monkeypatch):
     import src.api as api
 
-    def unavailable(_user_id=None):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("network unavailable")
 
-    monkeypatch.setattr(api, "gmail_resource", unavailable)
+    patch_provider(monkeypatch, api, archive_message=unavailable)
 
     with TestClient(app) as client:
         response = client.post("/inbox/msg-1/archive", headers={"X-Agora-User": "owner"})

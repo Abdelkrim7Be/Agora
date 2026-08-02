@@ -210,12 +210,13 @@ def due_campaign_ids(now=None, agent_instance_id: str | None = None) -> list[str
 def send_campaign_run(campaign_id: str, record: dict) -> dict:
     """Send one approved campaign record through the normal guarded Gmail path."""
     from src.config import settings
-    from src.gmail_client import effective_dry_run, gmail_resource, send_html_message
+    from src.mail import get_provider
     from src.security_client import authorize_action
+    from src.send_mode import effective_dry_run
 
     record["status"] = "sending"
     campaign_dry_run = effective_dry_run()
-    resource = None if campaign_dry_run else gmail_resource()
+    provider = get_provider()
     sent, denied, failed = [], [], []
     for index, email in enumerate(record.get("rendered") or []):
         recipient = email.get("email")
@@ -233,12 +234,11 @@ def send_campaign_run(campaign_id: str, record: dict) -> dict:
                 denied.append({"email": recipient, "reason": verdict.get("reason") or verdict.get("decision")})
                 continue
         try:
-            result = send_html_message(
+            result = provider.send_html_message(
                 to=recipient,
                 subject=email.get("subject") or record.get("subject") or "",
                 html=email.get("html") or "",
                 text=email.get("text") or "",
-                resource=resource,
             )
             sent.append({"email": recipient, "dry_run": bool(result.get("dry_run")), "message_id": result.get("id")})
         except Exception as exc:

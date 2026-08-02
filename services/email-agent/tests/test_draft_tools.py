@@ -6,7 +6,7 @@ from langgraph.store.memory import InMemoryStore
 
 from src.capabilities import current_gmail_thread_id
 from src.capabilities import draft_tools
-from tests.conftest import ai_tool_call
+from tests.conftest import ai_tool_call, patch_provider
 
 
 @contextmanager
@@ -25,7 +25,7 @@ def test_create_draft_uses_trusted_thread_context(monkeypatch):
         calls.append(kwargs)
         return {"id": "draft-1"}
 
-    monkeypatch.setattr(draft_tools, "create_gmail_draft", _create)
+    patch_provider(monkeypatch, draft_tools, create_draft=_create)
 
     with _thread_context("thread-1"):
         result = draft_tools.create_draft.invoke({
@@ -50,7 +50,7 @@ def test_create_draft_allows_standalone_draft_without_thread(monkeypatch):
         calls.append(kwargs)
         return {"dry_run": True, "action": "create_draft"}
 
-    monkeypatch.setattr(draft_tools, "create_gmail_draft", _create)
+    patch_provider(monkeypatch, draft_tools, create_draft=_create)
 
     with _thread_context(None):
         result = draft_tools.create_draft.invoke({
@@ -84,7 +84,7 @@ def test_tool_node_injects_current_thread_id_for_draft_tools(monkeypatch):
         calls.append(kwargs)
         return {"id": "draft-context"}
 
-    monkeypatch.setattr(draft_tools, "create_gmail_draft", _create)
+    patch_provider(monkeypatch, draft_tools, create_draft=_create)
 
     state = {
         "email_input": {"gmail_thread_id": "thread-context"},

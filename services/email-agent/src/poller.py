@@ -87,28 +87,8 @@ from src.runtime_settings import load_runtime_settings
 from src.memory import ORIGIN_LEARNED, namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
 from src.security_client import classify_content, sanitize_email
-from src.gmail_client import (
-    current_history_id,
-    download_attachment,
-    extract_pdf_text,
-    fetch_history_message_refs,
-    fetch_messages_batch,
-    fetch_sender_correspondence,
-    fetch_sent,
-    fetch_thread,
-    fetch_unread,
-    format_sender_correspondence,
-    get_message,
-    gmail_resource,
-    gmail_to_email_input,
-    is_stale_history_error,
-    list_labels,
-    list_messages_by_label,
-    mark_as_read,
-    modify_labels,
-    search_messages,
-    watch_mailbox,
-)
+from src.gmail_client import extract_pdf_text
+from src.mail import get_provider
 from src.categories import classify_category, load_categories
 from src.junk_config import load_junk
 from src.junk_gate import is_junk
@@ -182,7 +162,7 @@ def _backoff_seconds(attempt: int) -> float:
 async def process_message_with_retry(
     graph,
     msg_id: str,
-    resource,
+    provider,
     rules_config: RulesConfig,
     message: dict | None = None,
 ) -> tuple:
@@ -190,7 +170,7 @@ async def process_message_with_retry(
     attempt = 0
     while True:
         try:
-            return await process_message(graph, msg_id, resource, rules_config, message=message)
+            return await process_message(graph, msg_id, provider, rules_config, message=message)
         except Exception as exc:
             if not _is_transient_error(exc):
                 print(f"poller: {msg_id} failed without retry: {exc}")
@@ -204,9 +184,9 @@ async def process_message_with_retry(
                 print(f"poller: {msg_id} exhausted retries: {exc}")
                 record_failure(str(exc))
                 try:
-                    message = get_message(msg_id, resource=resource)
-                    thread = fetch_thread(message["threadId"], resource=resource)
-                    payload = gmail_to_email_input(message, thread_messages=thread)
+                    message = provider.get_message(msg_id)
+                    thread = provider.fetch_thread(message["threadId"])
+                    payload = provider.to_email_input(message, thread_messages=thread)
                 except Exception:
                     payload = {"email_id": msg_id}
                 record_dead_letter({"message_id": msg_id, "reason": "retry_exhausted", "error": str(exc), "payload": payload})
@@ -289,7 +269,7 @@ def sweep_due_campaigns(now: datetime | None = None) -> list[tuple[str, str, str
     return outcomes
 
 
-def ensure_watch(resource=None) -> dict | None:
+def ensure_watch(provider=None) -> dict | None:
     """Register/renew the Gmail push watch and seed the sync baseline.
 
     Seeding the baseline at watch time is what makes the first push processable:
@@ -298,8 +278,8 @@ def ensure_watch(resource=None) -> dict | None:
     """
     if not settings.gmail_webhook_enabled:
         return None
-    resource = resource or gmail_resource()
-    result = watch_mailbox(resource=resource)
+    provider = provider or get_provider()
+    result = provider.watch_mailbox()
     history_id = str(result.get("historyId") or "")
     if history_id:
         set_last_history_id(history_id)
@@ -370,45 +350,42 @@ def ensure_watches(
     return results
 
 
-def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
+def resurface_due_snoozed(provider, rules_config: RulesConfig) -> list[tuple[str, str]]:
     """Move due snoozed messages back to INBOX/UNREAD."""
     surfaced: list[tuple[str, str]] = []
-    for label in due_snooze_labels(list_labels(resource=resource), rules_config):
+    for label in due_snooze_labels(provider.list_labels(), rules_config):
         label_id = label["id"]
         label_name = label.get("name", label_id)
-        refs = list_messages_by_label(
+        refs = provider.list_messages_by_label(
             label_id,
             rules_config.snooze.max_resurface_per_run,
-            resource=resource,
         )
         for ref in refs:
             msg_id = ref["id"]
-            modify_labels(
+            provider.modify_labels(
                 msg_id,
                 add_label_ids=["INBOX", "UNREAD"],
                 remove_label_ids=[label_id],
-                resource=resource,
             )
             surfaced.append((msg_id, label_name))
     return surfaced
 
 
-async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tuple]:
+async def poll_follow_ups(graph, provider, rules_config: RulesConfig) -> list[tuple]:
     """Find old awaiting-reply threads and propose a nudge through HITL."""
     if not rules_config.follow_ups.enabled:
         return []
 
     outcomes: list[tuple] = []
-    refs = search_messages(
+    refs = provider.search_messages(
         follow_up_query(rules_config),
         rules_config.follow_ups.max_results,
-        resource=resource,
     )
     for ref in refs:
         msg_id = ref["id"]
-        message = get_message(msg_id, resource=resource)
-        thread = fetch_thread(message["threadId"], resource=resource)
-        email_input = gmail_to_email_input(message, thread_messages=thread)
+        message = provider.get_message(msg_id)
+        thread = provider.fetch_thread(message["threadId"])
+        email_input = provider.to_email_input(message, thread_messages=thread)
         plan = build_follow_up_plan(email_input, rules_config)
         if not plan:
             continue
@@ -434,7 +411,7 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
 
 async def retry_security_holds(
     graph,
-    resource,
+    provider,
     rules_config: RulesConfig,
     exclude_message_ids: set[str] | None = None,
 ) -> list[tuple]:
@@ -461,7 +438,7 @@ async def retry_security_holds(
             continue
         if not _security_hold_retry_due(record, now):
             continue
-        outcomes.append(await process_message_with_retry(graph, msg_id, resource, rules_config))
+        outcomes.append(await process_message_with_retry(graph, msg_id, provider, rules_config))
     return outcomes
 
 
@@ -513,7 +490,7 @@ def _security_hold_retry_due(record: dict, now: datetime | None = None) -> bool:
 async def process_message(
     graph,
     msg_id: str,
-    resource,
+    provider,
     rules_config: RulesConfig,
     message: dict | None = None,
 ) -> tuple:
@@ -525,13 +502,13 @@ async def process_message(
     with try_claim_message(current_agent_instance_id(), msg_id) as claimed:
         if not claimed:
             return (msg_id, "skipped", "")
-        return await _process_message_locked(graph, msg_id, resource, rules_config, message)
+        return await _process_message_locked(graph, msg_id, provider, rules_config, message)
 
 
 async def _process_message_locked(
     graph,
     msg_id: str,
-    resource,
+    provider,
     rules_config: RulesConfig,
     message: dict | None = None,
 ) -> tuple:
@@ -564,13 +541,13 @@ async def _process_message_locked(
         if existing["status"] == "pending_approval":
             return (msg_id, existing["status"], existing["run_id"])
         if existing["status"] != "security_hold":
-            mark_as_read(msg_id, resource=resource)
+            provider.mark_as_read(msg_id)
             return (msg_id, "skipped", existing["run_id"])
         retry_run_id = existing["run_id"]
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
     if message is None:
-        message = get_message(msg_id, resource=resource)
+        message = provider.get_message(msg_id)
     labels = message.get("labelIds")
     if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
         return (msg_id, "skipped", "")
@@ -589,7 +566,7 @@ async def _process_message_locked(
     # loses to the junk verdict, and the junk allowlist remains the way to
     # exempt a sender wholesale.
     gate_input = {
-        **gmail_to_email_input(message),
+        **provider.to_email_input(message),
         "agent_instance_id": current_agent_instance_id(),
     }
     categories_config = load_categories(agent_instance_id=current_agent_instance_id())
@@ -631,30 +608,29 @@ async def _process_message_locked(
             pending_action=None,
             agent_instance_id=current_agent_instance_id(),
         )
-        mark_as_read(msg_id, resource=resource)
+        provider.mark_as_read(msg_id)
         print(f"poller: junk-gated {msg_id} ({junk_reason})")
         return (msg_id, "completed", run_id)
 
-    thread = fetch_thread(message["threadId"], resource=resource)
+    thread = provider.fetch_thread(message["threadId"])
     email_input = {
-        **gmail_to_email_input(message, thread_messages=thread),
+        **provider.to_email_input(message, thread_messages=thread),
         "agent_instance_id": current_agent_instance_id(),
     }
 
     # Relationship context: how the owner previously wrote to this sender
     # (outside this thread) so replies match the established register. Runs
     # before sanitization so the block passes the same security boundary.
-    correspondence = fetch_sender_correspondence(
+    correspondence = provider.fetch_sender_correspondence(
         email_input.get("author", ""),
         exclude_thread_id=message.get("threadId", ""),
-        resource=resource,
     )
     if correspondence:
         email_input = {
             **email_input,
             "email_thread": email_input["email_thread"]
             + "\n\n"
-            + format_sender_correspondence(correspondence),
+            + provider.format_sender_correspondence(correspondence),
         }
 
     if settings.extract_attachments:
@@ -662,7 +638,7 @@ async def _process_message_locked(
         for att in email_input.get("attachments", []):
             if att["mime_type"] == "application/pdf" and att.get("attachment_id"):
                 try:
-                    raw = download_attachment(msg_id, att["attachment_id"], resource=resource)
+                    raw = provider.download_attachment(msg_id, att["attachment_id"])
                     text = extract_pdf_text(raw, settings.attachment_max_chars)
                     if text:
                         pdf_blocks.append(f"--- {att['filename']} ---\n{text}")
@@ -754,22 +730,22 @@ async def _process_message_locked(
         # affect the approval that was just created.
         notify_pending_approval(run_id, email_input, result)
     if outcome_status in {"completed", "notify"}:
-        mark_as_read(msg_id, resource=resource)
+        provider.mark_as_read(msg_id)
     return (msg_id, outcome_status, run_id)
 
 
 async def poll_history(
     graph,
     start_history_id: str,
-    resource=None,
+    provider=None,
     rules_config: RulesConfig | None = None,
 ) -> list[tuple]:
     """Process Gmail messages referenced by push-notification history events."""
-    resource = resource or gmail_resource()
+    provider = provider or get_provider()
     rules_config = rules_config or load_rules()
     outcomes: list[tuple] = []
-    for ref in fetch_history_message_refs(start_history_id, resource=resource):
-        outcome = await process_message_with_retry(graph, ref["id"], resource, rules_config)
+    for ref in provider.fetch_changes_since(start_history_id):
+        outcome = await process_message_with_retry(graph, ref["id"], provider, rules_config)
         if outcome[1] != "skipped":
             outcomes.append(outcome)
     maybe_emit_daily_digest(rules_config)
@@ -807,7 +783,7 @@ def _messages_awaiting_approval() -> set[str]:
 
 
 async def _discover_unread_refs(
-    resource,
+    provider,
     max_results: int,
     prefetch: bool = True,
 ) -> tuple[list[dict], dict[str, dict], str, bool]:
@@ -826,19 +802,19 @@ async def _discover_unread_refs(
     baseline = get_last_history_id()
     if baseline:
         try:
-            history_refs = fetch_history_message_refs(baseline, resource=resource)
+            history_refs = provider.fetch_changes_since(baseline)
             truncated = len(history_refs) > max_results
             refs = history_refs[:max_results]
         except Exception as exc:
-            if not is_stale_history_error(exc):
+            if not provider.is_stale_cursor_error(exc):
                 raise
             print(f"poller: history window stale; falling back to full unread scan: {exc}")
     try:
-        next_baseline = current_history_id(resource=resource)
+        next_baseline = provider.current_sync_cursor()
     except Exception:
         next_baseline = ""
     if refs is None:
-        refs = fetch_unread(max_results, resource=resource)
+        refs = provider.fetch_unread(max_results)
     elif not refs:
         # An empty history window means "nothing changed since the baseline",
         # which is not the same as "nothing is waiting". Anything that became
@@ -847,7 +823,7 @@ async def _discover_unread_refs(
         # diff forever after. This mailbox sat on unread mail for hours that way.
         # A full unread list is one call, and the run registry dedups whatever it
         # returns, so reconcile whenever the incremental path comes back empty.
-        refs = fetch_unread(max_results, resource=resource)
+        refs = provider.fetch_unread(max_results)
 
     # history.list reports one record per change, so the same message shows up
     # several times in a window where it was e.g. delivered and then labelled.
@@ -871,7 +847,7 @@ async def _discover_unread_refs(
     if prefetch and len(refs) > 3:
         try:
             prefetched = await asyncio.to_thread(
-                fetch_messages_batch, [ref["id"] for ref in refs], resource
+                provider.fetch_messages_batch, [ref["id"] for ref in refs]
             )
         except Exception as exc:
             print(f"poller: batch message fetch failed, using serial: {exc}")
@@ -880,7 +856,7 @@ async def _discover_unread_refs(
 
 async def poll_once(
     graph,
-    resource=None,
+    provider=None,
     max_results: int | None = None,
     rules_config: RulesConfig | None = None,
 ) -> list[tuple]:
@@ -893,22 +869,22 @@ async def poll_once(
     forced-notify has no delivery surface yet, so don't archive a threat silently —
     keep it visible in the inbox until the human handles it. Returns (msg_id, status, run_id).
     """
-    resource = resource or gmail_resource()
+    provider = provider or get_provider()
     max_results = max_results or load_runtime_settings().sync_limit
     rules_config = rules_config or load_rules()
 
     outcomes: list[tuple] = []
     if rules_config.snooze.enabled:
-        for msg_id, label_name in resurface_due_snoozed(resource, rules_config):
+        for msg_id, label_name in resurface_due_snoozed(provider, rules_config):
             outcomes.append((msg_id, "snoozed_resurfaced", label_name))
 
     refs, prefetched, next_baseline, truncated = await _discover_unread_refs(
-        resource, max_results
+        provider, max_results
     )
 
     for ref in refs:
         outcomes.append(await process_message_with_retry(
-            graph, ref["id"], resource, rules_config, message=prefetched.get(ref["id"])
+            graph, ref["id"], provider, rules_config, message=prefetched.get(ref["id"])
         ))
     # A truncated history batch keeps the old baseline so the overflow is picked
     # up next cycle (already-processed overlap is deduped, never re-run).
@@ -916,9 +892,9 @@ async def poll_once(
         set_last_history_id(next_baseline)
 
     outcomes.extend(await retry_security_holds(
-        graph, resource, rules_config, {msg_id for msg_id, _status, _run_id in outcomes}
+        graph, provider, rules_config, {msg_id for msg_id, _status, _run_id in outcomes}
     ))
-    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    outcomes.extend(await poll_follow_ups(graph, provider, rules_config))
     outcomes.extend(await asyncio.to_thread(sweep_due_campaigns))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
@@ -929,7 +905,7 @@ async def poll_once(
 
 async def enqueue_once(
     graph,
-    resource=None,
+    provider=None,
     max_results: int | None = None,
     rules_config: RulesConfig | None = None,
 ) -> list[tuple]:
@@ -943,16 +919,16 @@ async def enqueue_once(
     both just flip a message back to UNREAD / propose a nudge run directly, and
     the next detection pass enqueues any resulting unread mail normally.
     """
-    resource = resource or gmail_resource()
+    provider = provider or get_provider()
     max_results = max_results or load_runtime_settings().sync_limit
     rules_config = rules_config or load_rules()
     instance_id = current_agent_instance_id()
 
     if rules_config.snooze.enabled:
-        resurface_due_snoozed(resource, rules_config)
+        resurface_due_snoozed(provider, rules_config)
 
     refs, _prefetched, next_baseline, truncated = await _discover_unread_refs(
-        resource, max_results, prefetch=False
+        provider, max_results, prefetch=False
     )
     outcomes: list[tuple] = []
     for ref in refs:
@@ -964,7 +940,7 @@ async def enqueue_once(
     if next_baseline and not truncated:
         set_last_history_id(next_baseline)
 
-    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    outcomes.extend(await poll_follow_ups(graph, provider, rules_config))
     outcomes.extend(await asyncio.to_thread(sweep_due_campaigns))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
@@ -1066,7 +1042,7 @@ def _instance_stagger_seconds(count: int) -> float:
 _style_seed_attempted: set[str] = set()
 
 
-async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
+async def maybe_seed_style_profile(instance_id: str, store, provider) -> None:
     if store is None or instance_id in _style_seed_attempted:
         return
     _style_seed_attempted.add(instance_id)
@@ -1077,7 +1053,7 @@ async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
         existing = await store.aget(namespace("writing_style"), "user_preferences")
         if existing:
             return
-        samples = await asyncio.to_thread(fetch_sent, load_runtime_settings().style_sent_sample, resource)
+        samples = await asyncio.to_thread(provider.fetch_sent, load_runtime_settings().style_sent_sample)
         if not samples:
             print(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
             _style_seed_attempted.discard(instance_id)
@@ -1125,12 +1101,12 @@ async def poll_active_instances_once(
                     continue
                 try:
                     reload_config()
-                    resource = gmail_resource()
-                    await maybe_seed_style_profile(instance_id, store, resource)
+                    provider = get_provider()
+                    await maybe_seed_style_profile(instance_id, store, provider)
                     if settings.job_queue_enabled:
-                        outcomes = await enqueue_once(graph, resource=resource)
+                        outcomes = await enqueue_once(graph, provider=provider)
                     else:
-                        outcomes = await poll_once(graph, resource=resource)
+                        outcomes = await poll_once(graph, provider=provider)
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))

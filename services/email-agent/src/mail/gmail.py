@@ -36,6 +36,18 @@ class GmailProvider:
             self._resource = gmail_client.gmail_resource(self._user_id)
         return self._resource
 
+    @property
+    def _deferred(self):
+        """The resource *if already built*, otherwise None.
+
+        Used by every dry-run-guarded call. Those `gmail_client` functions check
+        dry-run before touching the network and only then do
+        `resource or gmail_resource()`, so handing them an unbuilt None keeps
+        simulation from loading a token at all — passing `self.resource` here
+        would force an OAuth read on a path that never sends anything.
+        """
+        return self._resource
+
     # --- discovery -------------------------------------------------------
     def fetch_unread(self, max_results: int) -> list[dict]:
         return gmail_client.fetch_unread(max_results, resource=self.resource)
@@ -128,7 +140,7 @@ class GmailProvider:
             message_id,
             add_label_ids=add_label_ids,
             remove_label_ids=remove_label_ids,
-            resource=self.resource,
+            resource=self._deferred,
             respect_dry_run=respect_dry_run,
         )
 
@@ -142,40 +154,40 @@ class GmailProvider:
         return gmail_client.archive_message(msg_id, resource=self.resource)
 
     def trash_message(self, msg_id: str) -> dict:
-        return gmail_client.trash_message(msg_id, resource=self.resource)
+        return gmail_client.trash_message(msg_id, resource=self._deferred)
 
     def list_labels(self) -> list[dict]:
         return gmail_client.list_labels(resource=self.resource)
 
     def ensure_label(self, name: str) -> str:
-        return gmail_client.ensure_label(name, resource=self.resource)
+        return gmail_client.ensure_label(name, resource=self._deferred)
 
     # --- send ------------------------------------------------------------
     def send_message(self, to: str, subject: str, body: str) -> dict:
-        return gmail_client.send_message(to, subject, body, resource=self.resource)
+        return gmail_client.send_message(to, subject, body, resource=self._deferred)
 
     def send_html_message(
         self, to: str, subject: str, html: str, text: str, respect_dry_run: bool = True
     ) -> dict:
         return gmail_client.send_html_message(
-            to, subject, html, text, resource=self.resource, respect_dry_run=respect_dry_run
+            to, subject, html, text, resource=self._deferred, respect_dry_run=respect_dry_run
         )
 
     def create_draft(
         self, to: str, subject: str, body: str, thread_id: str | None = None
     ) -> dict:
         return gmail_client.create_draft(
-            to, subject, body, thread_id=thread_id, resource=self.resource
+            to, subject, body, thread_id=thread_id, resource=self._deferred
         )
 
     def forward_message(self, message_id: str, to: str, note: str) -> dict:
-        return gmail_client.forward_message(message_id, to, note, resource=self.resource)
+        return gmail_client.forward_message(message_id, to, note, resource=self._deferred)
 
     def notify_internal_message(self, to: str | list[str], subject: str, note: str) -> dict:
-        return gmail_client.notify_internal_message(to, subject, note, resource=self.resource)
+        return gmail_client.notify_internal_message(to, subject, note, resource=self._deferred)
 
     def reply_all_message(self, message_id: str, body: str) -> dict:
-        return gmail_client.reply_all_message(message_id, body, resource=self.resource)
+        return gmail_client.reply_all_message(message_id, body, resource=self._deferred)
 
     # --- identity --------------------------------------------------------
     def self_address(self) -> str:
