@@ -19,7 +19,7 @@ async def test_run_worker_once_processes_the_claimed_job_in_its_own_instance_con
     job = {"id": 7, "instance_id": "agent-b", "message_id": "m1"}
     monkeypatch.setattr(worker, "claim_job", lambda worker_id: job)
     monkeypatch.setattr(worker, "load_rules", lambda: RulesConfig())
-    monkeypatch.setattr(worker, "gmail_resource", lambda: "gmail:agent-b")
+    monkeypatch.setattr(worker, "get_provider", lambda: "provider:agent-b")
 
     seen_instance = {}
     marked_done = []
@@ -27,7 +27,7 @@ async def test_run_worker_once_processes_the_claimed_job_in_its_own_instance_con
     async def fake_process(graph, message_id, resource, rules_config):
         seen_instance["id"] = current_agent_instance_id()
         assert message_id == "m1"
-        assert resource == "gmail:agent-b"
+        assert resource == "provider:agent-b"
         return (message_id, "completed", "run-1")
 
     monkeypatch.setattr(worker, "process_message_with_retry", fake_process)
@@ -47,7 +47,7 @@ async def test_run_worker_once_leaves_job_processing_on_exception(monkeypatch):
     job = {"id": 9, "instance_id": "agent-c", "message_id": "m2"}
     monkeypatch.setattr(worker, "claim_job", lambda worker_id: job)
     monkeypatch.setattr(worker, "load_rules", lambda: RulesConfig())
-    monkeypatch.setattr(worker, "gmail_resource", lambda: "gmail:agent-c")
+    monkeypatch.setattr(worker, "get_provider", lambda: "provider:agent-c")
 
     async def boom(*args, **kwargs):
         raise RuntimeError("gmail auth blip")

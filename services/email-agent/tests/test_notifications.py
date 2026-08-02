@@ -4,6 +4,7 @@ import pytest
 
 from src import notifications
 from src.config import settings
+from tests.conftest import patch_provider
 
 
 @pytest.fixture(autouse=True)
@@ -15,10 +16,13 @@ def _enable_notify(monkeypatch):
 @pytest.fixture
 def sent(monkeypatch):
     calls: list[dict] = []
-    monkeypatch.setattr(
+    patch_provider(
+        monkeypatch,
         notifications,
-        "send_message",
-        lambda to, subject, body: calls.append({"to": to, "subject": subject, "body": body}) or {"id": "sent"},
+        send_message=lambda to, subject, body: calls.append(
+            {"to": to, "subject": subject, "body": body}
+        )
+        or {"id": "sent"},
     )
     return calls
 
@@ -92,7 +96,7 @@ def test_notify_send_failure_does_not_raise(monkeypatch):
     def _boom(**kwargs):
         raise RuntimeError("smtp exploded")
 
-    monkeypatch.setattr(notifications, "send_message", _boom)
+    patch_provider(monkeypatch, notifications, send_message=_boom)
     # Must not raise — a notification failure can never break approval creation.
     notifications.notify_pending_approval("run-7", {"subject": "S", "author": "a@b.com"}, _result())
 

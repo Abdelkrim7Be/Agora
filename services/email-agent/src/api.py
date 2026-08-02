@@ -127,17 +127,8 @@ from src.gmail_oauth import (
     revoke_gmail_token,
     validate_state as validate_gmail_oauth_state,
 )
-from src.gmail_client import (
-    GMAIL_SCOPES,
-    archive_message,
-    fetch_sent,
-    gmail_resource,
-    is_stale_history_error,
-    list_inbox,
-    mark_as_read,
-    mark_as_unread,
-    trash_message,
-)
+from src.gmail_client import GMAIL_SCOPES
+from src.mail import get_provider
 from src.campaigns import (
     CampaignTemplate,
     CampaignsConfig,
@@ -1031,7 +1022,15 @@ def _decode_pubsub_data(message: dict) -> dict:
     return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
 
 
-_is_stale_history_error = is_stale_history_error
+def _is_stale_history_error(exc: Exception) -> bool:
+    """Whether the stored sync cursor is too old to replay.
+
+    Resolved per call rather than at import: the answer is provider-specific
+    (Gmail purges history after ~a week, Graph answers 410 resyncRequired), and
+    building a provider at import time would read instance config before any
+    tenant context exists.
+    """
+    return get_provider().is_stale_cursor_error(exc)
 
 
 def _require_webhook_secret(request: Request) -> None:
@@ -1663,8 +1662,7 @@ async def _build_category_proposals(limit: int = 500) -> dict:
     _yaml_text, cfg = _current_categories()
     existing_names = {category.name for category in cfg.categories}
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        messages = await asyncio.to_thread(list_inbox, limit, resource)
+        messages = await asyncio.to_thread(get_provider().list_inbox, limit)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Gmail metadata scan unavailable: {exc}") from exc
     dismissed = _dismissed_category_proposals()
@@ -2526,8 +2524,7 @@ async def junk_suggestions(request: Request, limit: int = Query(default=200, ge=
     _require_instance_role(request, "viewer")
     config = load_junk(agent_instance_id=current_agent_instance_id())
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        messages = await asyncio.to_thread(list_inbox, limit, resource)
+        messages = await asyncio.to_thread(get_provider().list_inbox, limit)
     except Exception as exc:
         print(f"api: junk suggestions unavailable: {exc}")
         raise HTTPException(
@@ -2942,9 +2939,9 @@ async def suggest_persona_endpoint(request: Request) -> dict:
     cfg = load_config()
     user_id = current_user_id()
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        sent_samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
-        received = await asyncio.to_thread(list_inbox, 25, resource)
+        provider = get_provider()
+        sent_samples = await asyncio.to_thread(provider.fetch_sent, cfg.style_learning.max_samples)
+        received = await asyncio.to_thread(provider.list_inbox, 25)
     except Exception as exc:
         print(f"api: persona suggestion Gmail read unavailable for user {user_id}: {exc}")
         raise HTTPException(
@@ -3196,8 +3193,7 @@ async def learn_style(request: Request) -> dict:
         raise HTTPException(status_code=409, detail="Style learning is disabled for this agent instance")
     user_id = current_user_id()
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        samples = await asyncio.to_thread(get_provider().fetch_sent, cfg.style_learning.max_samples)
     except Exception as exc:
         print(f"api: style learning Gmail read unavailable for user {user_id}: {exc}")
         raise HTTPException(
@@ -3430,19 +3426,20 @@ async def sync_unread(request: Request, limit: int | None = Query(default=None, 
                 f"reprendra automatiquement dans environ {int(pause_remaining // 60) + 1} min."
             ),
         )
-    try:
-        resource = await asyncio.to_thread(gmail_resource)
-    except Exception as exc:
-        print(f"api: gmail sync unavailable for user {user_id}: {exc}")
-        record_sync_failure(str(exc))
+    provider = get_provider()
+    reachable = await asyncio.to_thread(provider.probe)
+    if not reachable.get("ok"):
+        error = reachable.get("error") or "mailbox unreachable"
+        print(f"api: gmail sync unavailable for user {user_id}: {error}")
+        record_sync_failure(error)
         raise HTTPException(
             status_code=503,
             detail="Gmail sync is unavailable. Check OAuth credentials and container network access.",
-        ) from exc
+        )
 
     try:
         effective_limit = limit or load_runtime_settings(current_agent_instance_id()).sync_limit
-        outcomes = await poll_once(request.app.state.graph, resource=resource, max_results=effective_limit)
+        outcomes = await poll_once(request.app.state.graph, provider=provider, max_results=effective_limit)
     except Exception as exc:
         print(f"api: gmail sync failed for user {user_id}: {exc}")
         record_sync_failure(str(exc))
@@ -3615,9 +3612,9 @@ async def inbox(
         messages = [dict(message) for message in cached]
     else:
         try:
-            resource = await asyncio.to_thread(gmail_resource)
+            provider = get_provider()
             if mailbox == "sent":
-                sent = await asyncio.to_thread(fetch_sent, limit, resource)
+                sent = await asyncio.to_thread(provider.fetch_sent, limit)
                 messages = [
                     {
                         "id": item.get("id"),
@@ -3633,7 +3630,7 @@ async def inbox(
                     if item.get("id")
                 ]
             else:
-                messages = await asyncio.to_thread(list_inbox, limit, resource)
+                messages = await asyncio.to_thread(provider.list_inbox, limit)
                 for message in messages:
                     message["mailbox"] = "inbox"
             _inbox_cache_put(cache_key, messages)
@@ -3680,10 +3677,10 @@ async def _inbox_with_verdicts(messages: list[dict], user_dept: str | None) -> d
     return {"messages": messages}
 
 
-async def _inbox_action(fn, msg_id: str, action: str) -> dict:
+async def _inbox_action(method_name: str, msg_id: str, action: str) -> dict:
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        await asyncio.to_thread(fn, msg_id, resource)
+        provider = get_provider()
+        await asyncio.to_thread(getattr(provider, method_name), msg_id)
     except Exception as exc:
         print(f"api: gmail inbox action {action} unavailable for {msg_id}: {exc}")
         raise HTTPException(
@@ -3698,30 +3695,30 @@ async def _inbox_action(fn, msg_id: str, action: str) -> dict:
 
 @app.post("/inbox/{msg_id}/archive")
 async def inbox_archive(msg_id: str) -> dict:
-    return await _inbox_action(archive_message, msg_id, "archive")
+    return await _inbox_action("archive_message", msg_id, "archive")
 
 
 @app.post("/inbox/{msg_id}/trash")
 async def inbox_trash(msg_id: str) -> dict:
-    return await _inbox_action(trash_message, msg_id, "trash")
+    return await _inbox_action("trash_message", msg_id, "trash")
 
 
 @app.post("/inbox/{msg_id}/read")
 async def inbox_read(msg_id: str) -> dict:
-    return await _inbox_action(mark_as_read, msg_id, "read")
+    return await _inbox_action("mark_as_read", msg_id, "read")
 
 
 @app.post("/inbox/{msg_id}/unread")
 async def inbox_unread(msg_id: str) -> dict:
-    return await _inbox_action(mark_as_unread, msg_id, "unread")
+    return await _inbox_action("mark_as_unread", msg_id, "unread")
 
 
 @app.post("/inbox/{msg_id}/force-agent")
 async def inbox_force_agent(request: Request, msg_id: str) -> dict:
     """Mark a message unread, clear its previous run, and process it immediately."""
+    provider = get_provider()
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        await asyncio.to_thread(mark_as_unread, msg_id, resource)
+        await asyncio.to_thread(provider.mark_as_unread, msg_id)
     except Exception as exc:
         print(f"api: gmail force-agent unavailable for {msg_id}: {exc}")
         raise HTTPException(
@@ -3743,7 +3740,7 @@ async def inbox_force_agent(request: Request, msg_id: str) -> dict:
             agent_instance_id=current_agent_instance_id(),
         )
     graph = getattr(request.app.state, "graph", graph_module.graph)
-    outcome = await process_message_with_retry(graph, msg_id, resource, load_rules())
+    outcome = await process_message_with_retry(graph, msg_id, provider, load_rules())
     _inbox_cache_clear(current_user_id(), current_agent_instance_id())
     return {
         "ok": True,

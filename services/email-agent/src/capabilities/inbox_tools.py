@@ -5,13 +5,7 @@ from langchain_core.tools import tool
 from src.capabilities import current_email_id
 from src.config import settings  # noqa: F401 — tests patch dry_run through this module
 from src.send_mode import effective_dry_run
-from src.gmail_client import (
-    archive_message,
-    ensure_label,
-    list_labels,
-    modify_labels,
-    trash_message,
-)
+from src.mail import get_provider
 
 
 def _message_id() -> str:
@@ -24,7 +18,7 @@ def _message_id() -> str:
 def _label_id(label: str) -> str:
     if effective_dry_run():
         return f"dry-run-label:{label}"
-    for existing in list_labels():
+    for existing in get_provider().list_labels():
         if label in (existing.get("id"), existing.get("name")):
             return existing["id"]
     raise ValueError(f"Gmail label not found: {label}")
@@ -34,8 +28,9 @@ def _label_id(label: str) -> str:
 def apply_label(label: str) -> str:
     """Apply a Gmail label to the current email."""
     message_id = _message_id()
-    label_id = ensure_label(label)
-    modify_labels(message_id, add_label_ids=[label_id])
+    provider = get_provider()
+    label_id = provider.ensure_label(label)
+    provider.modify_labels(message_id, add_label_ids=[label_id])
     return f"Applied label '{label}' to the current email."
 
 
@@ -44,35 +39,35 @@ def remove_label(label: str) -> str:
     """Remove a Gmail label from the current email."""
     message_id = _message_id()
     label_id = _label_id(label)
-    modify_labels(message_id, remove_label_ids=[label_id])
+    get_provider().modify_labels(message_id, remove_label_ids=[label_id])
     return f"Removed label '{label}' from the current email."
 
 
 @tool
 def archive_email() -> str:
     """Archive the current email."""
-    archive_message(_message_id())
+    get_provider().archive_message(_message_id())
     return "Archived the current email."
 
 
 @tool
 def mark_read() -> str:
     """Mark the current email as read."""
-    modify_labels(_message_id(), remove_label_ids=["UNREAD"])
+    get_provider().modify_labels(_message_id(), remove_label_ids=["UNREAD"])
     return "Marked the current email as read."
 
 
 @tool
 def mark_unread() -> str:
     """Mark the current email as unread."""
-    modify_labels(_message_id(), add_label_ids=["UNREAD"])
+    get_provider().modify_labels(_message_id(), add_label_ids=["UNREAD"])
     return "Marked the current email as unread."
 
 
 @tool
 def trash_email() -> str:
     """Move the current email to trash."""
-    trash_message(_message_id())
+    get_provider().trash_message(_message_id())
     return "Moved the current email to trash."
 
 

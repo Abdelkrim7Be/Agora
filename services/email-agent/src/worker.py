@@ -9,7 +9,7 @@ import time
 from src.automation import load_rules
 from src.config import settings
 from src.dlq import setup_dlq
-from src.gmail_client import gmail_resource
+from src.mail import get_provider
 from src.gmail_sync import setup_gmail_sync
 from src.graph import overall_workflow
 from src.instance_setup import (
@@ -61,9 +61,8 @@ async def run_worker_once(graph) -> bool:
     with agent_instance_context(job["instance_id"]):
         try:
             rules_config = load_rules()
-            resource = gmail_resource()
             await process_message_with_retry(
-                graph, job["message_id"], resource, rules_config
+                graph, job["message_id"], get_provider(), rules_config
             )
         except Exception as exc:
             # Left 'processing' on purpose: requeue_stale_jobs recovers it after

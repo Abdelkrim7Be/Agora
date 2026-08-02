@@ -13,6 +13,7 @@ import inspect
 import pytest
 
 from src import gmail_client
+from src.config import settings
 from src.mail import get_provider
 from src.mail.base import MailProvider
 from src.mail.gmail import GmailProvider
@@ -150,6 +151,40 @@ def test_resource_is_built_lazily_and_reused(monkeypatch):
     second = p.resource
     assert first is second
     assert built == ["owner@example.com"]
+
+
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("send_message", ("a@b.c", "s", "b")),
+        ("send_html_message", ("a@b.c", "s", "<p>h</p>", "h")),
+        ("create_draft", ("a@b.c", "s", "b")),
+        ("forward_message", ("m1", "a@b.c", "n")),
+        ("notify_internal_message", ("a@b.c", "s", "n")),
+        ("reply_all_message", ("m1", "b")),
+        ("modify_labels", ("m1",)),
+        ("trash_message", ("m1",)),
+        ("ensure_label", ("Devis",)),
+    ],
+)
+def test_dry_run_paths_never_load_a_token(monkeypatch, method, args):
+    """Simulation must not reach the token store.
+
+    These `gmail_client` functions return early on dry-run and only then do
+    `resource or gmail_resource()`. Passing an eagerly-built resource would make
+    a simulated campaign or a dry-run label edit perform an OAuth read — which
+    fails outright on an instance that has never connected.
+    """
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    def explode(user_id=None):
+        raise AssertionError("dry-run must not build a Gmail resource")
+
+    monkeypatch.setattr(gmail_client, "gmail_resource", explode)
+
+    result = getattr(GmailProvider(), method)(*args)
+    if isinstance(result, dict):
+        assert result["dry_run"] is True
 
 
 def test_probe_reports_the_mailbox(provider, monkeypatch):

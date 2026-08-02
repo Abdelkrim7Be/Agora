@@ -2,6 +2,7 @@ import pytest
 
 from src.capabilities import current_email_id, hitl_approved
 from src.capabilities.email_tools import forward_email, notify_internal, reply_all, write_email
+from tests.conftest import patch_provider
 
 
 def test_write_email_dry_run():
@@ -16,9 +17,10 @@ def test_write_email_live_path_invokes_rich_gmail_helper_after_approval(monkeypa
 
     calls: list[dict] = []
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
-    monkeypatch.setattr(
-        "src.gmail_client.send_message",
-        lambda to, subject, body: calls.append({"to": to, "subject": subject, "body": body})
+    patch_provider(
+        monkeypatch,
+        email_tools,
+        send_message=lambda to, subject, body: calls.append({"to": to, "subject": subject, "body": body})
         or {"id": "sent-write"},
     )
 
@@ -106,9 +108,10 @@ def test_forward_email_live_path_invokes_gmail_helper_after_approval(monkeypatch
 
     calls: list[dict] = []
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
-    monkeypatch.setattr(
-        "src.gmail_client.forward_message",
-        lambda message_id, to, note: calls.append({"message_id": message_id, "to": to, "note": note})
+    patch_provider(
+        monkeypatch,
+        email_tools,
+        forward_message=lambda message_id, to, note: calls.append({"message_id": message_id, "to": to, "note": note})
         or {"id": "sent-forward"},
     )
 
@@ -129,9 +132,10 @@ def test_reply_all_live_path_invokes_gmail_helper_after_approval(monkeypatch):
 
     calls: list[dict] = []
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
-    monkeypatch.setattr(
-        "src.gmail_client.reply_all_message",
-        lambda message_id, body: calls.append({"message_id": message_id, "body": body})
+    patch_provider(
+        monkeypatch,
+        email_tools,
+        reply_all_message=lambda message_id, body: calls.append({"message_id": message_id, "body": body})
         or {"id": "sent-reply"},
     )
 
@@ -172,9 +176,10 @@ def test_notify_internal_live_path_invokes_gmail_helper_after_approval(monkeypat
 
     calls: list[dict] = []
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
-    monkeypatch.setattr(
-        "src.gmail_client.notify_internal_message",
-        lambda to, subject, note: calls.append({"to": to, "subject": subject, "note": note})
+    patch_provider(
+        monkeypatch,
+        email_tools,
+        notify_internal_message=lambda to, subject, note: calls.append({"to": to, "subject": subject, "note": note})
         or {"id": "sent-notify"},
     )
 

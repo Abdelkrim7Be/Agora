@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+
+from tests.conftest import patch_provider
 from fastapi.testclient import TestClient
 
 import src.api as api_module
@@ -71,9 +73,12 @@ def test_suggest_persona_drops_invalid_tone_and_language():
 
 @pytest.fixture
 def suggest_env(monkeypatch):
-    monkeypatch.setattr(api_module, "gmail_resource", lambda: object())
-    monkeypatch.setattr(api_module, "fetch_sent", lambda max_samples, resource: SENT)
-    monkeypatch.setattr(api_module, "list_inbox", lambda limit, resource: RECEIVED)
+    patch_provider(
+        monkeypatch,
+        api_module,
+        fetch_sent=lambda max_samples: SENT,
+        list_inbox=lambda limit: RECEIVED,
+    )
     monkeypatch.setattr(graph_module, "llm", _FakeStructuredLLM(SUGGESTION))
 
 
@@ -99,7 +104,7 @@ def test_suggest_endpoint_reports_gmail_outage(monkeypatch):
     def boom():
         raise RuntimeError("no token")
 
-    monkeypatch.setattr(api_module, "gmail_resource", boom)
+    patch_provider(monkeypatch, api_module, fetch_sent=boom)
     with TestClient(app) as client:
         response = client.post("/persona/suggest")
     assert response.status_code == 503

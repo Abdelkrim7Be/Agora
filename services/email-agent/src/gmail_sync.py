@@ -22,7 +22,16 @@ def _path() -> Path:
 
 
 def _is_newer(candidate: str, existing: str | None) -> bool:
-    """Gmail historyIds increase monotonically; never move a baseline backwards."""
+    """Never move a sync baseline backwards.
+
+    The stored value is an opaque cursor, not necessarily a number: Gmail's
+    historyId increases monotonically, while Graph's deltaLink is a URL with no
+    ordering at all. The numeric compare is therefore best-effort, and anything
+    unparseable falls back to "different means newer" — the same answer
+    `OutlookProvider.cursor_is_newer` gives. Callers that need the
+    provider-correct comparison should ask the provider; this stays here for the
+    Gmail Pub/Sub webhook, which is Gmail-only by construction.
+    """
     if existing is None:
         return True
     try:

@@ -7,7 +7,7 @@ from langgraph.store.memory import InMemoryStore
 
 from src.capabilities import current_email_id
 from src.capabilities import inbox_tools
-from tests.conftest import ai_tool_call
+from tests.conftest import ai_tool_call, patch_provider
 
 
 @contextmanager
@@ -26,13 +26,14 @@ def test_inbox_tools_require_graph_email_context():
 
 def test_apply_label_uses_context_email_id(monkeypatch):
     calls: list[tuple[str, dict]] = []
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_123")
 
     def _modify(message_id, **kwargs):
         calls.append((message_id, kwargs))
         return {"id": message_id}
 
-    monkeypatch.setattr(inbox_tools, "modify_labels", _modify)
+    patch_provider(
+        monkeypatch, inbox_tools, ensure_label=lambda label: "Label_123", modify_labels=_modify
+    )
 
     with _email_context("msg-1"):
         result = inbox_tools.apply_label.invoke({"label": "Clients"})
@@ -44,17 +45,17 @@ def test_apply_label_uses_context_email_id(monkeypatch):
 def test_remove_label_resolves_existing_label(monkeypatch):
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(inbox_tools.settings, "dry_run", False)
-    monkeypatch.setattr(
-        inbox_tools,
-        "list_labels",
-        lambda: [{"id": "Label_123", "name": "Clients"}],
-    )
 
     def _modify(message_id, **kwargs):
         calls.append((message_id, kwargs))
         return {"id": message_id}
 
-    monkeypatch.setattr(inbox_tools, "modify_labels", _modify)
+    patch_provider(
+        monkeypatch,
+        inbox_tools,
+        list_labels=lambda: [{"id": "Label_123", "name": "Clients"}],
+        modify_labels=_modify,
+    )
 
     with _email_context("msg-2"):
         result = inbox_tools.remove_label.invoke({"label": "Clients"})
@@ -65,7 +66,7 @@ def test_remove_label_resolves_existing_label(monkeypatch):
 
 def test_remove_label_fails_when_label_is_missing(monkeypatch):
     monkeypatch.setattr(inbox_tools.settings, "dry_run", False)
-    monkeypatch.setattr(inbox_tools, "list_labels", lambda: [])
+    patch_provider(monkeypatch, inbox_tools, list_labels=lambda: [])
 
     with _email_context("msg-3"):
         with pytest.raises(ValueError, match="Gmail label not found"):
@@ -79,7 +80,7 @@ def test_mark_read_and_unread_use_context_email_id(monkeypatch):
         calls.append((message_id, kwargs))
         return {"id": message_id}
 
-    monkeypatch.setattr(inbox_tools, "modify_labels", _modify)
+    patch_provider(monkeypatch, inbox_tools, modify_labels=_modify)
 
     with _email_context("msg-4"):
         assert inbox_tools.mark_read.invoke({}) == "Marked the current email as read."
@@ -94,8 +95,12 @@ def test_mark_read_and_unread_use_context_email_id(monkeypatch):
 def test_archive_and_trash_use_context_email_id(monkeypatch):
     archived: list[str] = []
     trashed: list[str] = []
-    monkeypatch.setattr(inbox_tools, "archive_message", lambda message_id: archived.append(message_id))
-    monkeypatch.setattr(inbox_tools, "trash_message", lambda message_id: trashed.append(message_id))
+    patch_provider(
+        monkeypatch,
+        inbox_tools,
+        archive_message=lambda message_id: archived.append(message_id),
+        trash_message=lambda message_id: trashed.append(message_id),
+    )
 
     with _email_context("msg-5"):
         assert inbox_tools.archive_email.invoke({}) == "Archived the current email."
@@ -111,7 +116,9 @@ def test_tool_node_injects_current_email_id_for_inbox_tools(monkeypatch):
     archived: list[str] = []
     monkeypatch.setattr(g.settings, "security_enabled", False)
     monkeypatch.setitem(g.tools_by_name_map, "archive_email", inbox_tools.archive_email)
-    monkeypatch.setattr(inbox_tools, "archive_message", lambda message_id: archived.append(message_id))
+    patch_provider(
+        monkeypatch, inbox_tools, archive_message=lambda message_id: archived.append(message_id)
+    )
 
     state = {
         "email_input": {"email_id": "msg-context"},

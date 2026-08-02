@@ -127,6 +127,31 @@ def _send_mode_follows_dry_run(monkeypatch):
     monkeypatch.setattr(sm, "get_send_mode", lambda agent_instance_id=None: "live")
 
 
+class FakeProvider:
+    """Stand-in for a MailProvider, built from the handful of methods a test cares about.
+
+    Any method the test did not supply raises, so a call site reaching for a
+    mailbox operation the test did not expect fails loudly instead of silently
+    returning a Mock.
+    """
+
+    name = "gmail"
+
+    def __init__(self, **methods):
+        for attribute, value in methods.items():
+            setattr(self, attribute, value)
+
+    def __getattr__(self, item):
+        raise AssertionError(f"FakeProvider was asked for an unstubbed method: {item}")
+
+
+def patch_provider(monkeypatch, module, **methods) -> FakeProvider:
+    """Point one module's `get_provider` at a FakeProvider and return it."""
+    provider = FakeProvider(**methods)
+    monkeypatch.setattr(module, "get_provider", lambda *args, **kwargs: provider)
+    return provider
+
+
 @pytest.fixture
 def fake_llms(monkeypatch):
     """Patch the graph's router, tool LLM, and memory LLM for offline deterministic tests."""

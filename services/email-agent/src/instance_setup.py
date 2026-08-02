@@ -54,7 +54,7 @@ class SkipStep(Exception):
 class SetupContext:
     user_id: str
     agent_instance_id: str
-    resource: Any = None
+    provider: Any = None
     recent_messages: list[dict] = field(default_factory=list)
     sent_samples: list[dict] = field(default_factory=list)
     store: Any = None
@@ -684,20 +684,33 @@ async def _to_thread_with_timeout(func, *args, step_label: str):
         raise SkipStep(f"{step_label} timed out") from exc
 
 
-async def _step_verify_provider(context: SetupContext) -> dict:
-    from src.gmail_client import gmail_resource
+def _provider(context: SetupContext):
+    """The mail provider for this setup run, built once and reused across steps.
 
-    resource = await asyncio.to_thread(gmail_resource)
-    profile = await asyncio.to_thread(lambda: resource.users().getProfile(userId="me").execute())
-    context.resource = resource
-    return {"email_address": profile.get("emailAddress")}
+    `_step_verify_provider` normally fills it in first; steps can still be
+    retried individually, so this rebuilds rather than assuming it is set.
+    """
+    from src.mail import get_provider
+
+    if context.provider is None:
+        context.provider = get_provider(agent_instance_id=context.agent_instance_id)
+    return context.provider
+
+
+async def _step_verify_provider(context: SetupContext) -> dict:
+    from src.mail import get_provider
+
+    provider = get_provider(agent_instance_id=context.agent_instance_id)
+    result = await asyncio.to_thread(provider.probe)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or "Could not reach the mailbox.")
+    context.provider = provider
+    return {"email_address": result.get("mailbox")}
 
 
 async def _step_fetch_recent(context: SetupContext) -> dict:
-    from src.gmail_client import fetch_recent
-
     runtime = load_runtime_settings(context.agent_instance_id)
-    messages = await asyncio.to_thread(fetch_recent, runtime.setup_recent_limit, context.resource)
+    messages = await asyncio.to_thread(_provider(context).fetch_recent, runtime.setup_recent_limit)
     context.recent_messages = messages
     return {"messages_fetched": len(messages)}
 
@@ -753,11 +766,10 @@ async def _step_learn_style(context: SetupContext) -> dict:
     cfg = load_config()
     if not cfg.style_learning.enabled:
         raise SkipStep("style learning disabled")
-    from src.gmail_client import fetch_sent
-
     if not context.sent_samples:
         context.sent_samples = await asyncio.to_thread(
-            fetch_sent, load_runtime_settings(context.agent_instance_id).setup_sent_sample, context.resource
+            _provider(context).fetch_sent,
+            load_runtime_settings(context.agent_instance_id).setup_sent_sample,
         )
     if not context.sent_samples:
         raise SkipStep("no sent mail sampled")
@@ -889,17 +901,16 @@ async def _step_seed_categories(context: SetupContext) -> dict:
 
 
 async def _step_triage_backlog(context: SetupContext) -> dict:
-    from src.gmail_client import fetch_unread, gmail_resource
-
-    if context.resource is None:
-        context.resource = await asyncio.to_thread(gmail_resource)
+    provider = _provider(context)
 
     if not settings.job_queue_enabled:
         from src import graph as graph_module
         from src.automation import load_rules
         from src.poller import process_message_with_retry
 
-        refs = await asyncio.to_thread(fetch_unread, load_runtime_settings(context.agent_instance_id).setup_backlog_limit, context.resource)
+        refs = await asyncio.to_thread(
+            provider.fetch_unread, load_runtime_settings(context.agent_instance_id).setup_backlog_limit
+        )
         rules_config = load_rules()
         outcomes = []
         timed_out = 0
@@ -909,7 +920,7 @@ async def _step_triage_backlog(context: SetupContext) -> dict:
                 continue
             try:
                 outcome = await asyncio.wait_for(
-                    process_message_with_retry(graph_module.graph, msg_id, context.resource, rules_config),
+                    process_message_with_retry(graph_module.graph, msg_id, provider, rules_config),
                     timeout=settings.setup_backlog_message_timeout_seconds,
                 )
             except asyncio.TimeoutError:
@@ -927,10 +938,11 @@ async def _step_triage_backlog(context: SetupContext) -> dict:
             ],
         }
 
-    from src.gmail_client import fetch_unread
     from src.job_queue import enqueue_job
 
-    refs = await asyncio.to_thread(fetch_unread, load_runtime_settings(context.agent_instance_id).setup_backlog_limit, context.resource)
+    refs = await asyncio.to_thread(
+        provider.fetch_unread, load_runtime_settings(context.agent_instance_id).setup_backlog_limit
+    )
     enqueued = 0
     for ref in refs:
         job = await asyncio.to_thread(enqueue_job, context.agent_instance_id, ref["id"])
