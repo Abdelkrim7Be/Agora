@@ -51,6 +51,17 @@ class Settings:
     # them across ports, so the override compose sets this explicitly.
     app_base_url: str = os.getenv("AGENT_APP_BASE_URL", "").rstrip("/")
     gmail_oauth_state_secret: str = os.getenv("GMAIL_OAUTH_STATE_SECRET", "")
+    # Microsoft Graph. Unset by default — an instance only reaches this path
+    # once its provider setting says "outlook", so Gmail-only deployments never
+    # need an Azure app registration. "common" accepts both work/school and
+    # personal accounts; pin it to a directory id for single-tenant.
+    outlook_client_id: str = os.getenv("OUTLOOK_CLIENT_ID", "")
+    outlook_client_secret: str = os.getenv("OUTLOOK_CLIENT_SECRET", "")
+    outlook_tenant: str = os.getenv("OUTLOOK_TENANT", "common").strip() or "common"
+    outlook_oauth_redirect_uri: str = os.getenv(
+        "OUTLOOK_OAUTH_REDIRECT_URI",
+        "http://localhost:8080/api/agent/connect/outlook/callback",
+    )
     token_encryption_key_file: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY_FILE", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     token_encryption_required: bool = _env_bool("AGENT_TOKEN_ENCRYPTION_REQUIRED", "false")
