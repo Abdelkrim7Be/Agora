@@ -291,12 +291,17 @@ def render_template_text(text: str, email_input: dict, contact: "Contact | None"
     rendered = text
     for key, value in values.items():
         rendered = rendered.replace("{{" + key + "}}", str(value))
-    # A variable that resolved to nothing leaves its punctuation stranded:
-    # "Bonjour {{prenom}}," renders as "Bonjour ," for a contact with no name.
-    rendered = re.sub(r"[ \t]+([,.])", r"\1", rendered)
-    # Same case without punctuation: a greeting line reduced to just the word.
-    rendered = re.sub(r"(?m)^([A-Za-zÀ-ÿ]+)[ \t]+$", r"\1,", rendered)
-    return rendered
+    # Unknown or empty variables must never reach a draft surface. Remove the
+    # placeholder, then clean punctuation it would have owned.
+    rendered = re.sub(r"\{\{\s*\w+\s*\}\}", "", rendered)
+    rendered = re.sub(r"[ \t]+([,.;])", r"\1", rendered)
+    rendered = re.sub(r"([,.;:!?]){2,}", r"\1", rendered)
+    rendered = re.sub(r"[ \t]{2,}", " ", rendered)
+    rendered = re.sub(r"(?m)^[ \t]*[,.;:!?]+[ \t]*$", "", rendered)
+    rendered = re.sub(r"(?m)^Bonjour[ \t]*$", "Bonjour,", rendered)
+    rendered = re.sub(r"(?m)^Bonjour[ \t]*[,;:][ \t]*$", "Bonjour,", rendered)
+    rendered = re.sub(r"(?m)^(.+?)[ \t]+[,;][ \t]*$", r"\1,", rendered)
+    return rendered.strip()
 
 
 def auto_draft_tool_call(

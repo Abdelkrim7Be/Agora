@@ -277,6 +277,48 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   gap: 8px;
 }
 
+.identity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(280px, 34vw);
+  min-height: 42px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+  background: var(--surface-container);
+}
+
+.identity-avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.identity-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.identity-copy strong,
+.identity-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-copy strong { font-size: 13px; }
+.identity-copy small { color: var(--muted); font-size: 11px; }
+
 .inbox-switcher {
   display: flex;
   align-items: center;
@@ -683,6 +725,17 @@ p {
   margin-top: 16px;
 }
 
+/* Stacked cards need that margin; cards laid out by a grid do not — there it
+   offsets every card after the first inside its own track, so a row of cards
+   stops sharing a top edge and stops stretching to equal height. */
+.type-grid > .card + .card,
+.instance-grid > .card + .card,
+.memory-cards-grid > .card + .card,
+.campaigns-grid > .card + .card,
+.editor-grid > .card + .card {
+  margin-top: 0;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -765,6 +818,39 @@ p {
 }
 
 .bulk-select input { width: 18px; height: 18px; margin: 0; }
+
+.category-bulk-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.category-bulk-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  background: var(--surface-container);
+}
+
+.category-bulk-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.category-bulk-row strong,
+.category-bulk-row span {
+  min-width: 0;
+}
+
+.category-bulk-row > div > span {
+  color: var(--muted);
+  font-size: 12px;
+}
 
 .card-tags {
   display: inline-flex;
@@ -1006,7 +1092,7 @@ pre {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
-  padding: 12px 0;
+  padding: 10px 0;
   border-bottom: 1px solid var(--outline);
 }
 
@@ -1014,8 +1100,8 @@ pre {
 
 .toggle-row input {
   appearance: none;
-  width: 42px;
-  height: 24px;
+  width: 38px;
+  height: 22px;
   border-radius: 999px;
   border: 1px solid var(--outline);
   background: var(--surface-lowest);
@@ -1026,8 +1112,8 @@ pre {
 .toggle-row input::after {
   content: "";
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   top: 3px;
   left: 3px;
@@ -1041,7 +1127,7 @@ pre {
 }
 
 .toggle-row input:checked::after {
-  transform: translateX(18px);
+  transform: translateX(16px);
   background: var(--secondary);
 }
 
@@ -1610,7 +1696,20 @@ body:not(.workspace-mode) .instance-context { display: none; }
 }
 
 .instance-card,
-.type-card { min-height: 220px; }
+.type-card {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+}
+
+.type-card .chip-row {
+  margin-top: auto;
+}
+
+.type-card.active-healthy {
+  border-color: color-mix(in srgb, var(--secondary) 70%, var(--outline));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--secondary) 30%, transparent), 0 14px 28px color-mix(in srgb, var(--secondary) 12%, transparent);
+}
 .compact-summary { margin-top: 14px; }
 .chip-row {
   display: flex;
@@ -1985,7 +2084,9 @@ button.is-busy .material-symbols-outlined {
   padding: 10px 12px;
   border: 1px solid var(--outline);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--secondary) 7%, white);
+  /* Mixing toward the surface token, not a literal white: on the dark theme a
+     white band left the near-white text on it unreadable. */
+  background: color-mix(in srgb, var(--secondary) 7%, var(--surface-container));
 }
 
 .route-preview strong {
@@ -2142,8 +2243,27 @@ button.is-busy .material-symbols-outlined {
 
 .campaigns-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Three fixed columns squeezed the segment and template rows so hard that their
+     names ellipsed to "internal..."; reflow instead of truncating. The composer
+     is the primary surface, so it keeps the widest track. */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
+}
+
+@media (min-width: 1500px) {
+  .campaigns-grid { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+/* Inside a narrow campaign card the row action would otherwise eat the space the
+   name needs; let it drop under the text rather than crush it. */
+.campaign-list .directory-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  row-gap: 8px;
+}
+
+.campaign-list .directory-row > :last-child {
+  grid-column: 2;
+  justify-self: start;
 }
 
 .campaign-list,
@@ -2199,7 +2319,10 @@ button.is-busy .material-symbols-outlined {
   border: 1px solid var(--outline);
   border-radius: 10px;
   padding: 12px;
+  /* This is the mail canvas, so it stays white in both themes — but it must pin
+     its own dark text, or the dark theme's near-white text lands on it. */
   background: #fff;
+  color: #0f172a;
 }
 
 .campaign-preview-html p:first-child,
@@ -2211,6 +2334,35 @@ button.is-busy .material-symbols-outlined {
 
 .campaign-pending-card {
   min-width: 0;
+}
+
+.campaign-recipient-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.campaign-recipient-results .mini-chip {
+  max-width: min(100%, 360px);
+}
+
+.mini-chip.ok {
+  color: var(--secondary);
+  background: var(--secondary-bg);
+  border-color: color-mix(in srgb, var(--secondary) 45%, transparent);
+}
+
+.mini-chip.warn {
+  color: var(--tertiary);
+  background: var(--tertiary-bg);
+  border-color: color-mix(in srgb, var(--tertiary) 45%, transparent);
+}
+
+.mini-chip.error {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 
@@ -3252,16 +3404,13 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 .profile-form label { font-weight: 600; }
 .profile-form input { min-height: 40px; }
 
-/* Santé — tuiles composant avec accent d'état */
+/* Santé — tuiles plateforme */
 #health-tiles .metric {
-  border-left: 3px solid var(--outline-strong);
+  border: 1px solid var(--outline);
   border-radius: 8px;
   padding: 14px 16px;
+  background: var(--surface-container);
 }
-
-#health-tiles .metric:has(.status-pill.ok) { border-left-color: var(--secondary); }
-#health-tiles .metric:has(.status-pill.warn) { border-left-color: var(--tertiary); }
-#health-tiles .metric:has(.status-pill.error) { border-left-color: var(--danger); }
 
 /* Activité */
 #activity-tiles div strong { font-size: 22px; }
@@ -3492,6 +3641,23 @@ h1 { font: 700 26px/32px var(--font-heading); }
 .notification-popover-list li span { color: var(--muted); font-size: 11px; }
 
 .notification-list { list-style: none; margin: 0; padding: 0; }
+.notification-select-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  border-bottom: 1px solid var(--outline);
+}
+
+.notification-select-row > input {
+  margin-top: 16px;
+  justify-self: center;
+}
+
+.notification-select-row .notification-item {
+  border-bottom: none;
+}
+
 .notification-item {
   display: flex;
   align-items: flex-start;
@@ -3507,6 +3673,40 @@ h1 { font: 700 26px/32px var(--font-heading); }
 .notification-count { color: var(--muted); font-weight: 400; }
 .notification-time { font-size: 11px; color: var(--muted); }
 .notification-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.memory-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Three narrow cards side by side: the provenance chip drops to its own line
+     rather than being squeezed until its label is cut off. */
+  flex-wrap: wrap;
+}
+
+.memory-card-title .mini-chip {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.capability-toggle {
+  align-items: flex-start;
+  padding: 10px 0;
+}
+
+.capability-toggle > span {
+  display: grid;
+  gap: 3px;
+}
+
+.capability-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.capability-toggle.disabled {
+  opacity: .62;
+}
 
 .category-chip.manual { border-color: var(--primary); color: var(--primary); }
 .category-chip.inferred { border-color: var(--outline-strong); color: var(--muted); font-style: italic; }
@@ -3583,7 +3783,14 @@ h1 { font: 700 26px/32px var(--font-heading); }
 }
 
 .signature-grid .editor-card {
-  gap: 20px;
+  gap: 16px;
+  padding: 18px;
+}
+
+.signature-grid .toggle-row {
+  grid-template-columns: 38px minmax(0, 1fr);
+  min-height: 42px;
+  padding: 4px 0 12px;
 }
 
 .signature-grid .persona-grid {
@@ -3825,13 +4032,24 @@ h1 { font: 700 26px/32px var(--font-heading); }
 .junk-lists {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  /* Three rows shared by every field so a two-line hint and a three-line hint
+     still put their textareas on the same baseline. */
+  grid-auto-rows: auto auto 1fr;
   gap: 14px;
 }
 
 .junk-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
   gap: 4px;
+}
+
+/* Browsers without subgrid keep the old stacking; the hint takes the slack so
+   the textareas still line up. */
+@supports not (grid-template-rows: subgrid) {
+  .junk-lists { grid-auto-rows: auto; }
+  .junk-list { grid-row: auto; grid-template-rows: auto 1fr auto; }
 }
 
 .junk-list textarea {
@@ -3847,4 +4065,83 @@ h1 { font: 700 26px/32px var(--font-heading); }
 
 .data-table tr.row-selected {
   background: color-mix(in srgb, var(--accent, #4f7cff) 12%, transparent);
+}
+
+/* Starter rules offered at onboarding (Règles) and mailbox-derived block
+   candidates (Filtre indésirable). Both are opt-in lists, so they share a
+   compact row layout rather than the heavier card grids. */
+.starter-list,
+.junk-suggestion-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.starter-item > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.starter-item > label:hover {
+  background: color-mix(in srgb, var(--primary) 4%, var(--surface-container));
+}
+
+.starter-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.starter-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.starter-note {
+  color: var(--tertiary);
+}
+
+.junk-suggestions {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--outline);
+}
+
+.junk-suggestions .sync-progress {
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+.junk-suggestion-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+}
+
+.junk-suggestion-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.junk-suggestion-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.junk-suggestion-copy small {
+  color: var(--muted);
+  font-size: 12px;
 }

@@ -8,10 +8,30 @@ import { compactText } from '../../utils/format';
 import { useCapabilitiesQuery, useSaveCapabilities, usePolicyQuery } from '../../api/queries';
 
 const CAPABILITY_LABELS = [
-  { key: 'email', label: 'E-mail' },
-  { key: 'calendar', label: 'Calendrier' },
-  { key: 'inbox', label: 'Messages' },
-  { key: 'drafts', label: 'Brouillons' },
+  {
+    key: 'email',
+    label: 'E-mail',
+    wired: true,
+    description: 'Autorise l’envoi, la réponse, le transfert et la notification interne. La politique de sécurité peut encore bloquer ou demander une validation.',
+  },
+  {
+    key: 'calendar',
+    label: 'Calendrier',
+    wired: false,
+    description: 'Documenté pour plus tard : aucun outil calendrier n’est branché dans cette version.',
+  },
+  {
+    key: 'inbox',
+    label: 'Messages',
+    wired: true,
+    description: 'Autorise les actions de rangement sur le message courant : libellé, archive, lecture/non-lu et corbeille.',
+  },
+  {
+    key: 'drafts',
+    label: 'Brouillons',
+    wired: true,
+    description: 'Autorise la création de brouillons Gmail sur le fil courant, toujours soumise aux règles de sécurité applicables.',
+  },
 ];
 
 const POLICY_PAGE_SIZE = 8;
@@ -99,10 +119,15 @@ export default function CapabilitiesPage() {
       <div className="editor-grid">
         <Card className="editor-card capability-card">
           <strong>Interrupteurs de capacités</strong>
-          {CAPABILITY_LABELS.map(({ key, label }) => (
-            <label className="toggle-row" key={key}>
-              <input type="checkbox" checked={Boolean(capabilities[key])} onChange={() => toggle(key)} />
-              <span>{label}</span>
+          <p className="muted">Une capacité expose des outils à l’agent. La politique de sécurité reste appliquée au-dessus de ces interrupteurs.</p>
+          {CAPABILITY_LABELS.map(({ key, label, wired, description }) => (
+            <label className={`toggle-row capability-toggle ${wired ? '' : 'disabled'}`.trim()} key={key}>
+              <input type="checkbox" checked={Boolean(capabilities[key]) && wired} disabled={!wired} onChange={() => toggle(key)} />
+              <span>
+                <strong>{label}</strong>
+                <small>{wired ? 'branché' : 'bientôt disponible'}</small>
+                <span className="muted">{description}</span>
+              </span>
             </label>
           ))}
         </Card>

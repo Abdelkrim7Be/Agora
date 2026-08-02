@@ -1441,3 +1441,59 @@ async def test_the_deep_check_can_be_turned_off(mocked_gmail, fake_llms, monkeyp
 
     assert called == []
     assert [status for _id, status, _run in outcomes] == ["pending_approval"]
+
+
+# --- security_hold retry backoff ---
+
+def test_security_hold_retry_backs_off_between_attempts():
+    """A permanently held message must not consume every poll cycle."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.poller import SECURITY_HOLD_RETRY_BACKOFF_MIN, _security_hold_retry_due
+
+    now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    just_tried = (now - timedelta(minutes=1)).isoformat()
+    long_ago = (now - timedelta(minutes=SECURITY_HOLD_RETRY_BACKOFF_MIN + 1)).isoformat()
+
+    assert _security_hold_retry_due({"updated_at": just_tried}, now) is False
+    assert _security_hold_retry_due({"updated_at": long_ago}, now) is True
+
+
+def test_security_hold_retry_runs_when_the_timestamp_is_unusable():
+    """Never silently strand a held run because its timestamp is missing or odd."""
+    from datetime import datetime, timezone
+
+    from src.poller import _security_hold_retry_due
+
+    now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    assert _security_hold_retry_due({}, now) is True
+    assert _security_hold_retry_due({"updated_at": ""}, now) is True
+    assert _security_hold_retry_due({"updated_at": "not a date"}, now) is True
+
+
+def test_security_hold_retry_falls_back_to_created_at():
+    from datetime import datetime, timedelta, timezone
+
+    from src.poller import _security_hold_retry_due
+
+    now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    recent = (now - timedelta(minutes=2)).isoformat()
+    assert _security_hold_retry_due({"created_at": recent}, now) is False
+
+
+def test_security_hold_retry_is_per_message_not_per_run_row():
+    """537 held rows for 3 messages must mean 3 retries, not 537."""
+    from src.poller import _newest_hold_per_message
+
+    held = [
+        {"email_id": "m1", "run_id": f"r{i}", "updated_at": f"2026-08-01T10:{i:02d}:00+00:00"}
+        for i in range(30)
+    ] + [
+        {"email_id": "m2", "run_id": "r-a", "updated_at": "2026-08-01T09:00:00+00:00"},
+        {"email_id": None, "run_id": "r-orphan"},
+    ]
+    newest = _newest_hold_per_message(held)
+
+    assert set(newest) == {"m1", "m2"}
+    # The most recent row wins, so the backoff sees the latest attempt.
+    assert newest["m1"]["updated_at"] == "2026-08-01T10:29:00+00:00"

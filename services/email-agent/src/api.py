@@ -6,11 +6,13 @@ import contextlib
 import html
 import json
 import os
+import re
 import threading
 import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from email.utils import parseaddr
 from urllib.parse import quote
 
 import yaml
@@ -28,6 +30,7 @@ from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, recor
 from src.metrics import render_metrics
 from src.categories import (
     CategoriesConfig,
+    Category,
     Contact as LegacyCategoryContact,
     DEFAULT_CATEGORIES_PATH,
     classify_category,
@@ -38,8 +41,10 @@ from src.automation import (
     AutomationRule,
     DEFAULT_RULES_PATH,
     RulesConfig,
+    apply_starter_rules,
     load_escalation_state,
     load_rules,
+    starter_rule_catalogue,
     workflow_sla_snapshot,
 )
 from src.analytics import summarize as summarize_analytics
@@ -48,9 +53,17 @@ from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
-from src.junk_config import JunkConfig, load_junk, save_junk
-from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once
-from src.memory import namespace, preferences_text, wrap_preferences
+from src.junk_config import JunkConfig, load_junk, save_junk, suggest_junk_senders
+from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once, process_message_with_retry
+from src.memory import (
+    ORIGIN_DEFAULT,
+    ORIGIN_LEARNED,
+    ORIGIN_MANUAL,
+    namespace,
+    preferences_origin,
+    preferences_text,
+    wrap_preferences,
+)
 from src.roles import (
     RoleConflictError,
     RoleNotFoundError,
@@ -85,7 +98,7 @@ from src.contacts import (
 )
 from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
-from src.run_registry import list_runs, setup_run_registry, upsert_run
+from src.run_registry import delete_runs, find_run_by_email, list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
 from src.health import aggregate_health
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
@@ -123,7 +136,6 @@ from src.gmail_client import (
     list_inbox,
     mark_as_read,
     mark_as_unread,
-    send_html_message,
     trash_message,
 )
 from src.campaigns import (
@@ -136,12 +148,16 @@ from src.campaigns import (
     contacts_for_segment,
     find_group,
     find_template,
+    load_campaign_runs,
     load_campaigns,
     members_for_group,
     missing_variable_warnings,
     render_campaign,
     render_campaign_for_segment,
     save_campaigns,
+    save_campaign_runs,
+    send_campaign_run,
+    upsert_campaign_run,
 )
 from src.tenant import (
     agent_instance_context,
@@ -150,9 +166,9 @@ from src.tenant import (
     resolve_user_id,
     user_context,
 )
-from src.security_client import authorize_action, fetch_policy
+from src.security_client import fetch_policy
 from src.storage import open_graph_storage
-from src.style_learning import analyze_style, build_style_text
+from src.style_learning import analyze_style, build_style_text, parse_style_text
 from src.media import (
     delete_contact_photo,
     delete_signature_image,
@@ -339,6 +355,11 @@ class CampaignPrepareInput(BaseModel):
     segment_id: str | None = None
     group_id: str | None = None
     template_name: str
+    name: str | None = None
+    subject: str | None = None
+    body_markdown: str | None = None
+    scheduled_at: str | None = None
+    save_as_draft: bool = False
 
 
 class ContactInput(BaseModel):
@@ -373,10 +394,7 @@ class CategorizeContactInput(BaseModel):
     domain_only: bool = False
 
 
-# Prepared-but-unapproved campaigns live in-process (single API worker). A
-# broadcast is only ever sent after an explicit owner approval, so losing these
-# on restart just means re-preparing — no email escapes the human gate.
-_pending_campaigns: dict[str, dict] = {}
+DEFAULT_CATEGORY_PROPOSAL_STATE_PATH = SERVICE_ROOT / "logs" / "category_proposal_state.json"
 
 
 def _now_iso() -> str:
@@ -1529,6 +1547,178 @@ class CategoryUpdateInput(BaseModel):
     external_send_allowed: bool = True
 
 
+class CategoryProposalActionInput(BaseModel):
+    proposal_id: str
+    name: str | None = None
+    display_name: str | None = None
+
+
+def _slugify_category(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "nouvelle_categorie"
+
+
+def _proposal_subject_token(subject: str, snippet: str = "") -> tuple[str, str] | None:
+    text = f"{subject} {snippet}".lower()
+    patterns = [
+        ("factures", ("facture", "invoice", "reçu", "receipt", "paiement", "payment")),
+        ("candidatures", ("candidature", "cv", "stage", "emploi", "recrutement", "candidate")),
+        ("rendez_vous", ("rendez-vous", "rdv", "meeting", "calendrier", "appointment")),
+        ("support", ("incident", "problème", "bug", "support", "panne", "erreur")),
+        ("contrats", ("contrat", "contract", "signature", "devis", "quote")),
+    ]
+    for name, needles in patterns:
+        if any(needle in text for needle in needles):
+            return name, needles[0]
+    return None
+
+
+def _proposal_key(kind: str, value: str) -> str:
+    return f"{kind}:{value}".lower()
+
+
+def _dismissed_category_proposals() -> set[str]:
+    raw = read_instance_text("category_proposal_state", DEFAULT_CATEGORY_PROPOSAL_STATE_PATH)
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        data = {}
+    return {str(item) for item in data.get("dismissed", [])}
+
+
+def _save_dismissed_category_proposals(dismissed: set[str]) -> None:
+    write_instance_text(
+        "category_proposal_state",
+        json.dumps({"dismissed": sorted(dismissed)}, indent=2, sort_keys=True),
+        DEFAULT_CATEGORY_PROPOSAL_STATE_PATH,
+    )
+
+
+# Clustering by sender domain only says something when the domain belongs to an
+# organisation. A consumer mailbox provider groups unrelated people, and accepting
+# it would create a `sender_domain` rule that swallows most personal mail.
+CONSUMER_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.fr",
+    "live.com", "live.fr", "msn.com", "yahoo.com", "yahoo.fr", "ymail.com",
+    "icloud.com", "me.com", "mac.com", "aol.com", "protonmail.com", "proton.me",
+    "gmx.com", "gmx.fr", "gmx.net", "mail.com", "zoho.com", "yandex.com",
+    "orange.fr", "wanadoo.fr", "free.fr", "sfr.fr", "laposte.net", "bbox.fr",
+})
+
+
+def _category_proposals_from_messages(messages: list[dict], existing_names: set[str], dismissed: set[str]) -> list[dict]:
+    by_domain: dict[str, list[dict]] = {}
+    by_subject: dict[str, dict] = {}
+    for msg in messages:
+        _name, address = parseaddr(msg.get("from") or msg.get("author") or "")
+        domain = address.rsplit("@", 1)[1].lower() if "@" in address else ""
+        if domain and domain not in CONSUMER_MAIL_DOMAINS:
+            by_domain.setdefault(domain, []).append(msg)
+        token = _proposal_subject_token(str(msg.get("subject") or ""), str(msg.get("snippet") or ""))
+        if token:
+            category_name, keyword = token
+            bucket = by_subject.setdefault(category_name, {"keyword": keyword, "messages": []})
+            bucket["messages"].append(msg)
+
+    proposals: list[dict] = []
+    for domain, bucket in by_domain.items():
+        if len(bucket) < 3:
+            continue
+        name = _slugify_category(domain.split(".")[-2] if "." in domain else domain)
+        key = _proposal_key("domain", domain)
+        if name in existing_names or key in dismissed:
+            continue
+        proposals.append({
+            "id": key,
+            "kind": "domain",
+            "suggested_name": name,
+            "display_name": domain,
+            "description": f"{len(bucket)} messages récents depuis {domain}",
+            "message_count": len(bucket),
+            "when": {"sender_domain": [domain]},
+            "sample_subjects": [m.get("subject") or "(sans objet)" for m in bucket[:3]],
+        })
+
+    for name, bucket in by_subject.items():
+        key = _proposal_key("subject", name)
+        messages = bucket["messages"]
+        if len(messages) < 2 or name in existing_names or key in dismissed:
+            continue
+        proposals.append({
+            "id": key,
+            "kind": "subject_pattern",
+            "suggested_name": name,
+            "display_name": name.replace("_", " ").capitalize(),
+            "description": f"{len(messages)} messages récents autour de « {bucket['keyword']} »",
+            "message_count": len(messages),
+            "when": {"subject_contains": [bucket["keyword"]]},
+            "sample_subjects": [m.get("subject") or "(sans objet)" for m in messages[:3]],
+        })
+
+    proposals.sort(key=lambda item: (-item["message_count"], item["suggested_name"]))
+    return proposals[:20]
+
+
+async def _build_category_proposals(limit: int = 500) -> dict:
+    _yaml_text, cfg = _current_categories()
+    existing_names = {category.name for category in cfg.categories}
+    try:
+        resource = await asyncio.to_thread(gmail_resource)
+        messages = await asyncio.to_thread(list_inbox, limit, resource)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Gmail metadata scan unavailable: {exc}") from exc
+    dismissed = _dismissed_category_proposals()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "scanned": len(messages),
+        "proposals": _category_proposals_from_messages(messages, existing_names, dismissed),
+    }
+
+
+@app.get("/categories/proposals")
+async def category_proposals(limit: int = Query(default=500, ge=25, le=500)) -> dict:
+    """Discover category proposals from recent Gmail metadata only."""
+    return await _build_category_proposals(limit)
+
+
+@app.post("/categories/proposals/accept")
+async def accept_category_proposal(body: CategoryProposalActionInput, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    proposals = (await _build_category_proposals()).get("proposals", [])
+    proposal = next((item for item in proposals if item["id"] == body.proposal_id), None)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Category proposal not found")
+    _yaml_text, cfg = _current_categories()
+    name = _slugify_category(body.name or proposal["suggested_name"])
+    if any(category.name == name for category in cfg.categories):
+        raise HTTPException(status_code=409, detail="Category already exists")
+    from src.automation import RuleWhen
+
+    cfg.categories.append(Category(
+        name=name,
+        display_name=(body.display_name or proposal["display_name"]).strip(),
+        description=proposal["description"],
+        enabled=False,
+        priority="normal",
+        policy="notify",
+        when=RuleWhen(**proposal["when"]),
+    ))
+    write_instance_text("categories", dump_categories(cfg), DEFAULT_CATEGORIES_PATH)
+    dismissed = _dismissed_category_proposals()
+    dismissed.add(body.proposal_id)
+    _save_dismissed_category_proposals(dismissed)
+    return {"accepted": proposal, "parsed": cfg.model_dump()}
+
+
+@app.post("/categories/proposals/dismiss")
+async def dismiss_category_proposal(body: CategoryProposalActionInput, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    dismissed = _dismissed_category_proposals()
+    dismissed.add(body.proposal_id)
+    _save_dismissed_category_proposals(dismissed)
+    return {"dismissed": body.proposal_id}
+
+
 @app.put("/categories/{name}")
 async def update_category_endpoint(name: str, body: CategoryUpdateInput, request: Request) -> dict:
     _require_instance_role(request, "owner")
@@ -1550,11 +1740,10 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
                 cat.instructions = CategoryInstructions(**body.instructions)
             else:
                 cat.instructions = None
-            if body.when:
+            if body.when is not None:
                 from src.automation import RuleWhen
                 cat.when = RuleWhen(**body.when)
-            if body.template:
-                cat.template = body.template
+            cat.template = body.template
             break
     else:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -2038,6 +2227,11 @@ def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) 
     template = find_template(cfg, body.template_name)
     if template is None:
         raise HTTPException(status_code=404, detail="template not found")
+    if body.subject or body.body_markdown:
+        template = template.model_copy(update={
+            "subject": body.subject or template.subject,
+            "body_markdown": body.body_markdown or template.body_markdown,
+        })
 
     contacts = contacts_for_segment(segment_id, agent_instance_id=current_agent_instance_id())
     if not contacts:
@@ -2051,6 +2245,9 @@ def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) 
         "segment_id": segment_id,
         "segment_name": segment_name,
         "template_name": template.name,
+        "campaign_name": body.name or template.name,
+        "subject": body.subject or template.subject,
+        "scheduled_at": body.scheduled_at,
         "template_category": template.category,
         "template_audience": list(template.audience),
         "segment_audiences": guard.segment_audiences,
@@ -2068,10 +2265,13 @@ def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) 
 
 
 def _campaign_summary(campaign_id: str, record: dict) -> dict:
-    rendered = record["rendered"]
+    rendered = record.get("rendered") or []
     return {
         "campaign_id": campaign_id,
         "status": record["status"],
+        "campaign_name": record.get("campaign_name") or record["template_name"],
+        "subject": record.get("subject"),
+        "scheduled_at": record.get("scheduled_at"),
         "group_id": record.get("group_id"),
         "group_name": record.get("group_name"),
         "segment_id": record.get("segment_id"),
@@ -2082,9 +2282,17 @@ def _campaign_summary(campaign_id: str, record: dict) -> dict:
         "segment_audiences": record.get("segment_audiences") or [],
         "recipient_count": len(rendered),
         "created_at": record["created_at"],
+        "updated_at": record.get("updated_at"),
+        "sent_at": record.get("sent_at"),
         "preview": rendered[0] if rendered else None,
         "recipients": [
-            {"email": r["email"], "name": r.get("name"), "subject": r["subject"], "unresolved": r.get("unresolved") or []}
+            {
+                "email": r["email"],
+                "name": r.get("name"),
+                "subject": r["subject"],
+                "unresolved": r.get("unresolved") or [],
+                "status": _recipient_status(r["email"], record.get("result")),
+            }
             for r in rendered
         ],
         "missing_variables": record.get("missing_variables") or [],
@@ -2094,13 +2302,36 @@ def _campaign_summary(campaign_id: str, record: dict) -> dict:
     }
 
 
+def _recipient_status(email: str, result: dict | None) -> str:
+    if not result:
+        return "pending"
+    for item in result.get("sent") or []:
+        if item.get("email") == email:
+            return "sent"
+    for item in result.get("denied") or []:
+        if item.get("email") == email:
+            return "denied"
+    for item in result.get("failed") or []:
+        if item.get("email") == email:
+            return "failed"
+    return "pending"
+
+
+def _campaign_records_for_current_instance() -> dict[str, dict]:
+    instance = current_agent_instance_id()
+    return {
+        cid: rec
+        for cid, rec in load_campaign_runs(agent_instance_id=instance).items()
+        if rec.get("agent_instance_id") == instance
+    }
+
+
 @app.get("/campaigns")
 async def list_campaigns() -> dict:
     instance = current_agent_instance_id()
     items = [
         _campaign_summary(cid, rec)
-        for cid, rec in _pending_campaigns.items()
-        if rec.get("agent_instance_id") == instance
+        for cid, rec in _campaign_records_for_current_instance().items()
     ]
     items.sort(key=lambda x: x["created_at"], reverse=True)
     return {"agent_instance_id": instance, "campaigns": items}
@@ -2120,9 +2351,9 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
     _require_instance_role(request, "owner")
     cfg = load_campaigns()
     preview = _campaign_preview_payload(cfg, body)
-    if not preview["audience_match"]:
+    if not body.save_as_draft and not preview["audience_match"]:
         raise HTTPException(status_code=422, detail=preview["guard_message"])
-    if preview["missing_variables"]:
+    if not body.save_as_draft and preview["missing_variables"]:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -2135,13 +2366,17 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
         )
 
     campaign_id = str(uuid.uuid4())
+    status = "draft" if body.save_as_draft else "pending_approval"
     record = {
-        "status": "pending_approval",
+        "status": status,
+        "campaign_name": preview.get("campaign_name") or preview["template_name"],
         "group_id": body.group_id,
         "group_name": None,
         "segment_id": preview["segment_id"],
         "segment_name": preview["segment_name"],
         "template_name": preview["template_name"],
+        "subject": preview.get("subject"),
+        "scheduled_at": preview.get("scheduled_at"),
         "template_category": preview["template_category"],
         "template_audience": preview["template_audience"],
         "segment_audiences": preview["segment_audiences"],
@@ -2150,68 +2385,83 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
         "guard_message": preview["guard_message"],
         "rendered": preview["rendered"],
         "created_at": _now_iso(),
+        "updated_at": _now_iso(),
         "user_id": current_user_id(),
         "agent_instance_id": current_agent_instance_id(),
     }
-    _pending_campaigns[campaign_id] = record
+    upsert_campaign_run(campaign_id, record, agent_instance_id=current_agent_instance_id())
     return _campaign_summary(campaign_id, record)
 
 
 @app.post("/campaigns/{campaign_id}/reject")
 async def reject_campaign(request: Request, campaign_id: str) -> dict:
     _require_instance_role(request, "owner")
-    record = _pending_campaigns.get(campaign_id)
+    records = load_campaign_runs(agent_instance_id=current_agent_instance_id())
+    record = records.get(campaign_id)
     if record is None or record.get("agent_instance_id") != current_agent_instance_id():
         raise HTTPException(status_code=404, detail="campaign not found")
-    record["status"] = "rejected"
-    _pending_campaigns.pop(campaign_id, None)
-    return {"campaign_id": campaign_id, "status": "rejected"}
+    record["status"] = "cancelled"
+    record["updated_at"] = _now_iso()
+    records[campaign_id] = record
+    save_campaign_runs(records, agent_instance_id=current_agent_instance_id())
+    return _campaign_summary(campaign_id, record)
 
 
 @app.post("/campaigns/{campaign_id}/approve")
 async def approve_campaign(request: Request, campaign_id: str) -> dict:
     _require_instance_role(request, "owner")
-    record = _pending_campaigns.get(campaign_id)
+    records = load_campaign_runs(agent_instance_id=current_agent_instance_id())
+    record = records.get(campaign_id)
     if record is None or record.get("agent_instance_id") != current_agent_instance_id():
         raise HTTPException(status_code=404, detail="campaign not found")
     if record["status"] != "pending_approval":
-        raise HTTPException(status_code=409, detail=f"campaign already {record['status']}")
+        if record["status"] == "draft":
+            record["status"] = "pending_approval"
+        else:
+            raise HTTPException(status_code=409, detail=f"campaign already {record['status']}")
     if not record.get("audience_match", True):
         raise HTTPException(status_code=422, detail=record.get("guard_message") or "Audience incompatible")
     if record.get("missing_variables"):
         raise HTTPException(status_code=422, detail="Variables manquantes détectées avant l'envoi")
 
-    campaign_dry_run = effective_dry_run()
-    resource = None if campaign_dry_run else gmail_resource()
-    sent, denied, failed = [], [], []
-    for index, email in enumerate(record["rendered"]):
-        if settings.security_enabled:
-            verdict = authorize_action(
-                "send_campaign",
-                {"to": email["email"], "content": email["text"]},
-                run_id=campaign_id,
-                action_id=f"{campaign_id}:{index}",
-            )
-            if verdict.get("decision") == "deny":
-                denied.append({"email": email["email"], "reason": verdict.get("reason")})
-                continue
-        try:
-            result = send_html_message(
-                to=email["email"],
-                subject=email["subject"],
-                html=email["html"],
-                text=email["text"],
-                resource=resource,
-            )
-            sent.append({"email": email["email"], "dry_run": bool(result.get("dry_run"))})
-        except Exception as exc:
-            failed.append({"email": email["email"], "error": str(exc)})
+    if record.get("scheduled_at"):
+        record["status"] = "scheduled"
+        record["updated_at"] = _now_iso()
+        records[campaign_id] = record
+        save_campaign_runs(records, agent_instance_id=current_agent_instance_id())
+        return _campaign_summary(campaign_id, record)
 
-    record["status"] = "sent"
-    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": campaign_dry_run}
+    send_campaign_run(campaign_id, record)
+    record["updated_at"] = _now_iso()
+    records[campaign_id] = record
+    save_campaign_runs(records, agent_instance_id=current_agent_instance_id())
     summary = _campaign_summary(campaign_id, record)
-    _pending_campaigns.pop(campaign_id, None)
     return summary
+
+
+def sweep_due_campaigns(now: datetime | None = None, agent_instance_id: str | None = None) -> list[dict]:
+    from src.campaigns import due_campaign_ids
+
+    instance = agent_instance_id or current_agent_instance_id()
+    records = load_campaign_runs(agent_instance_id=instance)
+    changed = False
+    summaries: list[dict] = []
+    for campaign_id in due_campaign_ids(now=now, agent_instance_id=instance):
+        record = records.get(campaign_id)
+        if not record or record.get("agent_instance_id") != instance:
+            continue
+        try:
+            send_campaign_run(campaign_id, record)
+        except Exception as exc:
+            record["status"] = "failed"
+            record["result"] = {"sent": [], "denied": [], "failed": [{"email": None, "error": str(exc)}]}
+        record["updated_at"] = _now_iso()
+        records[campaign_id] = record
+        changed = True
+        summaries.append(_campaign_summary(campaign_id, record))
+    if changed:
+        save_campaign_runs(records, agent_instance_id=instance)
+    return summaries
 
 
 def _run_timestamp_at_or_after(record: dict, since_dt: datetime) -> bool:
@@ -2267,6 +2517,27 @@ async def drafts(
         "agent_instance_id": current_agent_instance_id(),
         "drafts": runs[:limit],
         "limit": limit,
+    }
+
+
+@app.get("/junk/suggestions")
+async def junk_suggestions(request: Request, limit: int = Query(default=200, ge=25, le=500)) -> dict:
+    """Block candidates taken from this mailbox's own traffic, not placeholders."""
+    _require_instance_role(request, "viewer")
+    config = load_junk(agent_instance_id=current_agent_instance_id())
+    try:
+        resource = await asyncio.to_thread(gmail_resource)
+        messages = await asyncio.to_thread(list_inbox, limit, resource)
+    except Exception as exc:
+        print(f"api: junk suggestions unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "scanned": len(messages),
+        "suggestions": suggest_junk_senders(messages, config),
     }
 
 
@@ -2424,6 +2695,32 @@ def _persist_rules(config: RulesConfig) -> dict:
         "rules", yaml.safe_dump(config.model_dump(), sort_keys=False), DEFAULT_RULES_PATH
     )
     return {"parsed": load_rules().model_dump()}
+
+
+class StarterRulesInput(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+
+
+@app.get("/rules/starter")
+async def get_starter_rules() -> dict:
+    """Sensible starter rules for a small company, offered rather than forced."""
+    return {"starter_rules": starter_rule_catalogue(load_rules())}
+
+
+@app.post("/rules/starter/apply")
+async def apply_starter_rules_endpoint(request: Request, body: StarterRulesInput) -> dict:
+    _require_instance_role(request, "owner")
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="Select at least one starter rule")
+    config = load_rules()
+    try:
+        config, added = apply_starter_rules(config, body.ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = _persist_rules(config)
+    result["added"] = added
+    result["starter_rules"] = starter_rule_catalogue(load_rules())
+    return result
 
 
 _TOGGLEABLE_SECTIONS = {"automation", "digest", "snooze", "follow_ups", "learning"}
@@ -2783,29 +3080,38 @@ async def get_preferences(request: Request) -> dict:
     }
 
 
-async def _memory_kind_text(request: Request, kind: str) -> str:
+async def _memory_kind_entry(request: Request, kind: str) -> tuple[str, str]:
+    """The stored preference text for a kind plus where it came from."""
     cfg = load_config()
     store = request.app.state.store
     item = await store.aget(namespace(kind), "user_preferences")
     if item:
-        return preferences_text(item.value)
+        return preferences_text(item.value), preferences_origin(item.value) or ORIGIN_LEARNED
     defaults = {
         "triage_preferences": cfg.agent.triage_instructions,
         "response_preferences": cfg.agent.response_preferences,
         "writing_style": cfg.agent.writing_style_default,
     }
-    return defaults.get(kind, "")
+    return defaults.get(kind, ""), ORIGIN_DEFAULT
+
+
+async def _memory_kind_text(request: Request, kind: str) -> str:
+    text, _ = await _memory_kind_entry(request, kind)
+    return text
 
 
 @app.get("/memory/summary")
 async def memory_summary(request: Request) -> dict:
     """Readable memory: one deletable French line per learned item, per kind."""
     summary: dict = {"agent_instance_id": current_agent_instance_id()}
+    origins: dict = {}
     for kind in MEMORY_KINDS:
-        text = await _memory_kind_text(request, kind)
+        text, origin = await _memory_kind_entry(request, kind)
+        origins[kind] = origin
         summary[kind] = await asyncio.to_thread(
             summarize_kind, kind, text, graph_module.llm
         )
+    summary["origins"] = origins
     return summary
 
 
@@ -2819,7 +3125,7 @@ async def delete_memory_item(request: Request, kind: str, id: str) -> dict:
     if updated is None:
         raise HTTPException(status_code=404, detail="memory item not found")
     store = request.app.state.store
-    await store.aput(namespace(kind), "user_preferences", wrap_preferences(updated))
+    await store.aput(namespace(kind), "user_preferences", wrap_preferences(updated, ORIGIN_MANUAL))
     return {
         "agent_instance_id": current_agent_instance_id(),
         "kind": kind,
@@ -2832,11 +3138,20 @@ async def delete_memory_item(request: Request, kind: str, id: str) -> dict:
 async def update_preferences(request: Request, body: MemoryInput) -> dict:
     # AsyncSqliteStore: must use the async API on the event loop (sync calls raise).
     store = request.app.state.store
-    await store.aput(namespace("triage_preferences"), "user_preferences", wrap_preferences(body.triage_preferences))
-    await store.aput(namespace("response_preferences"), "user_preferences", wrap_preferences(body.response_preferences))
+    await store.aput(
+        namespace("triage_preferences"),
+        "user_preferences",
+        wrap_preferences(body.triage_preferences, ORIGIN_MANUAL),
+    )
+    await store.aput(
+        namespace("response_preferences"),
+        "user_preferences",
+        wrap_preferences(body.response_preferences, ORIGIN_MANUAL),
+    )
     return {
         "triage_preferences": body.triage_preferences,
         "response_preferences": body.response_preferences,
+        "origin": ORIGIN_MANUAL,
     }
 
 
@@ -2852,15 +3167,23 @@ async def get_style(request: Request) -> dict:
         "max_samples": cfg.style_learning.max_samples,
         "writing_style": writing_style,
         "source": "learned" if item else "default",
+        # The store only holds the rendered text; the UI's structured panel needs
+        # it parsed back, and the origin to say who wrote it.
+        "profile": parse_style_text(writing_style).model_dump(),
+        "origin": (preferences_origin(item.value) or ORIGIN_LEARNED) if item else ORIGIN_DEFAULT,
     }
 
 
 @app.put("/style")
 async def update_style(request: Request, body: StyleInput) -> dict:
     store = request.app.state.store
-    await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(body.writing_style))
+    await store.aput(
+        namespace("writing_style"), "user_preferences", wrap_preferences(body.writing_style, ORIGIN_MANUAL)
+    )
     return {
         "agent_instance_id": current_agent_instance_id(),
+        "profile": parse_style_text(body.writing_style).model_dump(),
+        "origin": ORIGIN_MANUAL,
         "writing_style": body.writing_style,
         "source": "manual",
     }
@@ -2898,12 +3221,13 @@ async def learn_style(request: Request) -> dict:
     await request.app.state.store.aput(
         namespace("writing_style"),
         "user_preferences",
-        wrap_preferences(writing_style),
+        wrap_preferences(writing_style, ORIGIN_LEARNED),
     )
     return {
         "agent_instance_id": current_agent_instance_id(),
         "sample_count": len(samples),
         "profile": profile.model_dump(),
+        "origin": ORIGIN_LEARNED,
         "writing_style": writing_style,
     }
 
@@ -3267,6 +3591,7 @@ async def inbox(
     request: Request,
     limit: int = Query(default=25, ge=1, le=100),
     refresh: bool = Query(default=False),
+    mailbox: str = Query(default="inbox", pattern="^(inbox|sent)$"),
 ) -> dict:
     """List the tenant's recent inbox messages with the agent's verdict attached.
 
@@ -3284,14 +3609,33 @@ async def inbox(
     """
     user_id = current_user_id()
     user_dept = _request_user_dept(request)
-    cache_key = (user_id, current_agent_instance_id(), limit)
+    cache_key = (user_id, current_agent_instance_id(), mailbox, limit)
     cached = None if refresh else _inbox_cache_get(cache_key)
     if cached is not None:
         messages = [dict(message) for message in cached]
     else:
         try:
             resource = await asyncio.to_thread(gmail_resource)
-            messages = await asyncio.to_thread(list_inbox, limit, resource)
+            if mailbox == "sent":
+                sent = await asyncio.to_thread(fetch_sent, limit, resource)
+                messages = [
+                    {
+                        "id": item.get("id"),
+                        "thread_id": item.get("thread_id"),
+                        "from": item.get("to", ""),
+                        "subject": item.get("subject", ""),
+                        "snippet": item.get("body", "")[:240],
+                        "date": item.get("date", ""),
+                        "unread": False,
+                        "mailbox": "sent",
+                    }
+                    for item in sent
+                    if item.get("id")
+                ]
+            else:
+                messages = await asyncio.to_thread(list_inbox, limit, resource)
+                for message in messages:
+                    message["mailbox"] = "inbox"
             _inbox_cache_put(cache_key, messages)
         except Exception as exc:
             return await _inbox_unavailable(exc, user_id, user_dept, limit)
@@ -3370,6 +3714,43 @@ async def inbox_read(msg_id: str) -> dict:
 @app.post("/inbox/{msg_id}/unread")
 async def inbox_unread(msg_id: str) -> dict:
     return await _inbox_action(mark_as_unread, msg_id, "unread")
+
+
+@app.post("/inbox/{msg_id}/force-agent")
+async def inbox_force_agent(request: Request, msg_id: str) -> dict:
+    """Mark a message unread, clear its previous run, and process it immediately."""
+    try:
+        resource = await asyncio.to_thread(gmail_resource)
+        await asyncio.to_thread(mark_as_unread, msg_id, resource)
+    except Exception as exc:
+        print(f"api: gmail force-agent unavailable for {msg_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+
+    existing = await asyncio.to_thread(
+        find_run_by_email,
+        msg_id,
+        user_id=None,
+        agent_instance_id=current_agent_instance_id(),
+    )
+    cleared = 0
+    if existing:
+        cleared = await asyncio.to_thread(
+            delete_runs,
+            [existing["run_id"]],
+            agent_instance_id=current_agent_instance_id(),
+        )
+    graph = getattr(request.app.state, "graph", graph_module.graph)
+    outcome = await process_message_with_retry(graph, msg_id, resource, load_rules())
+    _inbox_cache_clear(current_user_id(), current_agent_instance_id())
+    return {
+        "ok": True,
+        "msg_id": msg_id,
+        "cleared_runs": cleared,
+        "outcome": {"message_id": outcome[0], "status": outcome[1], "run_id": outcome[2]},
+    }
 
 
 class AssignInput(BaseModel):

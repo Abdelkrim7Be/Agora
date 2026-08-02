@@ -62,9 +62,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users/*/disable").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users/*/enable").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "ADMIN")
-                .requestMatchers(HttpMethod.POST, "/agent-instances").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/agent-instances/*").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances/*/activate").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances/*/deactivate").hasRole("ADMIN")
@@ -77,7 +77,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/memory").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers("/api/agent/campaigns/**").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/stream").hasAnyRole("OWNER", "VIEWER", "ADMIN")
@@ -111,6 +111,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/trash").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/read").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/unread").hasAnyRole("OWNER", "ADMIN")
+                // Re-queueing a message for the agent re-runs the pipeline on it, so it
+                // sits with the other mailbox mutations rather than the read surface.
+                .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/force-agent").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/signature").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/signature").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/signature/image").hasAnyRole("OWNER", "VIEWER", "ADMIN")
@@ -142,6 +145,13 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/roles").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/roles/*").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/roles/*").hasAnyRole("OWNER", "ADMIN")
+                // Category proposals from the mailbox scan: readable alongside the
+                // categories themselves, but only an owner turns one into a category.
+                // Declared before the generic /categories/* rules so the literal
+                // "proposals" path never falls through to them.
+                .requestMatchers(HttpMethod.GET, "/api/agent/categories/proposals").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/categories/proposals/accept").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/categories/proposals/dismiss").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/categories").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/categories").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/categories/*").hasAnyRole("OWNER", "ADMIN")
@@ -166,11 +176,16 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/drafts").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 // Junk-gate settings: readable by anyone who can see the workspace,
                 // editable by the instance owner, same shape as the rules surface.
+                // Block candidates derived from the mailbox: readable with the settings.
+                .requestMatchers(HttpMethod.GET, "/api/agent/junk/suggestions").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/junk").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/junk").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/rules").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/rules").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/rules/suggestions").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                // Starter rules offered at onboarding; only an owner accepts one.
+                .requestMatchers(HttpMethod.GET, "/api/agent/rules/starter").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/rules/starter/apply").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/suggestions/*/promote").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/rule-toggle").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/section-toggle").hasAnyRole("OWNER", "ADMIN")

@@ -248,18 +248,27 @@ export function useDraftsQuery(category, priority, q = '', since = '') {
 
 // --- Inbox ---
 
-export function useInboxQuery() {
+const INBOX_PAGE_SIZE = 25;
+
+export const inboxQueryKey = (instanceId, mailbox = 'inbox') => ['inbox', instanceId, mailbox];
+
+export const inboxQueryPath = (mailbox = 'inbox') => {
+  const params = new URLSearchParams({ limit: String(INBOX_PAGE_SIZE) });
+  if (mailbox === 'sent') params.set('mailbox', 'sent');
+  return `/api/agent/inbox?${params.toString()}`;
+};
+
+export function useInboxQuery(mailbox = 'inbox') {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
-    queryKey: ['inbox', instanceId],
-    queryFn: () => api(`/api/agent/inbox?limit=${INBOX_PAGE_SIZE}`),
+    queryKey: inboxQueryKey(instanceId, mailbox),
+    queryFn: () => api(inboxQueryPath(mailbox)),
     enabled: Boolean(token),
+    placeholderData: (previous) => previous,
   });
 }
-
-const INBOX_PAGE_SIZE = 25;
 
 export function useInboxAction() {
   const { api } = useApi();
@@ -268,6 +277,20 @@ export function useInboxAction() {
   return useMutation({
     mutationFn: ({ msgId, command }) => api(`/api/agent/inbox/${msgId}/${command}`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] }),
+  });
+}
+
+export function useForceAgentOnMessage() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (msgId) => api(`/api/agent/inbox/${encodeURIComponent(msgId)}/force-agent`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['pending-runs', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
+    },
   });
 }
 
@@ -1008,6 +1031,41 @@ export function useTestCategoryMatch() {
   });
 }
 
+export function useCategoryProposalsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['category-proposals', instanceId],
+    queryFn: () => api('/api/agent/categories/proposals?limit=500'),
+    enabled: Boolean(token) && Boolean(instanceId),
+    retry: false,
+  });
+}
+
+export function useAcceptCategoryProposal() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/categories/proposals/accept', { method: 'POST', body: JSON.stringify(payload) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['category-proposals', instanceId] });
+    },
+  });
+}
+
+export function useDismissCategoryProposal() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (proposalId) => api('/api/agent/categories/proposals/dismiss', { method: 'POST', body: JSON.stringify({ proposal_id: proposalId }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['category-proposals', instanceId] }),
+  });
+}
+
 // --- Junk gate ---
 
 export function useJunkQuery() {
@@ -1028,6 +1086,42 @@ export function useSaveJunk() {
   return useMutation({
     mutationFn: (payload) => api('/api/agent/junk', { method: 'PUT', body: JSON.stringify(payload) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['junk', instanceId] }),
+  });
+}
+
+export function useJunkSuggestionsQuery(enabled = false) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['junk-suggestions', instanceId],
+    queryFn: () => api('/api/agent/junk/suggestions'),
+    // Costs a Gmail round trip, so it only runs when the owner asks for it.
+    enabled: Boolean(token) && enabled,
+  });
+}
+
+export function useStarterRulesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['starter-rules', instanceId],
+    queryFn: () => api('/api/agent/rules/starter'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useApplyStarterRules() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (ids) => api('/api/agent/rules/starter/apply', { method: 'POST', body: JSON.stringify({ ids }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rules', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['starter-rules', instanceId] });
+    },
   });
 }
 
@@ -1187,15 +1281,20 @@ export function usePendingCampaignsQuery() {
   });
 }
 
-export function useCampaignPreviewQuery(segmentId, templateName) {
+export function useCampaignPreviewQuery(segmentId, templateName, overrides = {}) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
-    queryKey: ['campaign-preview', instanceId, segmentId, templateName],
+    queryKey: ['campaign-preview', instanceId, segmentId, templateName, overrides.subject || '', overrides.bodyMarkdown || ''],
     queryFn: () => api('/api/agent/campaigns/preview', {
       method: 'POST',
-      body: JSON.stringify({ segment_id: segmentId, template_name: templateName }),
+      body: JSON.stringify({
+        segment_id: segmentId,
+        template_name: templateName,
+        subject: overrides.subject || null,
+        body_markdown: overrides.bodyMarkdown || null,
+      }),
     }),
     enabled: Boolean(token) && Boolean(segmentId) && Boolean(templateName),
     retry: false,
@@ -1207,13 +1306,21 @@ export function usePrepareCampaign() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: ({ segmentId, templateName }) => api('/api/agent/campaigns/prepare', {
+    mutationFn: ({ segmentId, templateName, name, subject, bodyMarkdown, scheduledAt, saveAsDraft }) => api('/api/agent/campaigns/prepare', {
       method: 'POST',
-      body: JSON.stringify({ segment_id: segmentId, template_name: templateName }),
+      body: JSON.stringify({
+        segment_id: segmentId,
+        template_name: templateName,
+        name: name || null,
+        subject: subject || null,
+        body_markdown: bodyMarkdown || null,
+        scheduled_at: scheduledAt || null,
+        save_as_draft: Boolean(saveAsDraft),
+      }),
     }),
     onSuccess: (result, { segmentId, templateName }) => {
       queryClient.invalidateQueries({ queryKey: ['campaigns-pending', instanceId] });
-      queryClient.setQueryData(['campaign-preview', instanceId, segmentId, templateName], result);
+      queryClient.invalidateQueries({ queryKey: ['campaign-preview', instanceId, segmentId, templateName] });
     },
   });
 }

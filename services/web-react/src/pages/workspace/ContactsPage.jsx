@@ -109,7 +109,11 @@ export default function ContactsPage() {
 
   useEffect(() => {
     const present = new Set(contacts.map((c) => c.email));
-    setSelectedEmails((prev) => new Set([...prev].filter((email) => present.has(email))));
+    setSelectedEmails((prev) => {
+      const kept = [...prev].filter((email) => present.has(email));
+      if (kept.length === prev.size) return prev;
+      return new Set(kept);
+    });
   }, [contacts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetForm = () => { setEditingEmail(''); setForm(EMPTY_FORM); setHasPhoto(false); };
@@ -398,7 +402,7 @@ export default function ContactsPage() {
                         <div className="mini-chip-row">
                           <span className="mini-chip">{contact.fields?.gender ? `avatar: ${contact.fields.gender}` : 'avatar: auto'}</span>
                           <span className="mini-chip">{contact.audience}</span>
-                          <span className="mini-chip">{contact.active === false ? 'inactive' : 'actif'}</span>
+                          <span className="mini-chip">{contact.active === false ? 'inactif' : 'actif'}</span>
                           {contact.category ? (
                             <span className={`mini-chip category-chip ${contact.category_source === 'manual' ? 'manual' : 'inferred'}`}>
                               {contact.category}{contact.category_source && contact.category_source !== 'manual' ? ` (${contact.category_source})` : ''}

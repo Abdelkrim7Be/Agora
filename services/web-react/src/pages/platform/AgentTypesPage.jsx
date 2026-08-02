@@ -5,6 +5,7 @@ import { StatusBadge, Badge } from '../../components/ui/Badge';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAgentTypesQuery } from '../../api/queries';
+import { capabilityLabelFr } from '../../utils/format';
 
 const COMING_SOON_AGENT_TYPES = [
   {
@@ -54,10 +55,11 @@ export default function AgentTypesPage() {
         ) : (
           allTypes.map((type) => {
             const comingSoon = Boolean(type.comingSoon);
+            const activeHealthy = !comingSoon && (type.health === 'healthy' || type.health === 'active' || !type.health);
             return (
               <Card
                 key={type.id}
-                className={comingSoon ? 'type-card coming-soon' : 'type-card'}
+                className={`type-card ${comingSoon ? 'coming-soon' : activeHealthy ? 'active-healthy' : ''}`.trim()}
                 aria-disabled={comingSoon ? 'true' : 'false'}
               >
                 <div className="card-header">
@@ -67,7 +69,7 @@ export default function AgentTypesPage() {
                       <span>{type.id}</span>
                       <StatusBadge
                         status={type.health}
-                        label={comingSoon ? 'Bientôt disponible' : undefined}
+                        label={comingSoon ? 'bientôt disponible' : activeHealthy ? 'actif et sain' : undefined}
                         classFn={comingSoon ? () => 'warn' : undefined}
                       />
                       <span>{type.base_path || ''}</span>
@@ -77,7 +79,7 @@ export default function AgentTypesPage() {
                 </div>
                 <p>{type.description || ''}</p>
                 <div className="chip-row">
-                  {(type.capabilities || []).map((capability) => <Badge key={capability}>{capability}</Badge>)}
+                  {(type.capabilities || []).map((capability) => <Badge key={capability}>{capabilityLabelFr(capability)}</Badge>)}
                 </div>
               </Card>
             );

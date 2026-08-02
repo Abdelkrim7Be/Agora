@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
+import { SyncProgressBar } from '../../components/ui/SyncProgressBar';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
-import { useJunkQuery, useSaveJunk } from '../../api/queries';
+import { useJunkQuery, useSaveJunk, useJunkSuggestionsQuery } from '../../api/queries';
 
 const LIST_FIELDS = [
   {
@@ -90,6 +91,17 @@ export default function JunkPage() {
     if (query.error) setStatus(`Filtre indisponible : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [scanRequested, setScanRequested] = useState(false);
+  const suggestionsQuery = useJunkSuggestionsQuery(scanRequested);
+  const suggestions = suggestionsQuery.data?.suggestions || [];
+
+  const addBlockedSender = (address) => {
+    if (!form) return;
+    const current = String(form.blocked_senders || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    if (current.includes(address)) return;
+    setForm({ ...form, blocked_senders: [...current, address].join('\n') });
+  };
+
   const handleSave = async () => {
     if (!form) return;
     try {
@@ -115,10 +127,10 @@ export default function JunkPage() {
       <Card>
         <div className="card-header">
           <div>
-            <h2>Filtre anti-bruit</h2>
+            <h2>Filtre indésirable</h2>
             <div className="meta">
               <span>
-                Ce qui est écarté ici ne reçoit jamais de réponse et ne consomme aucun appel au modèle.
+                Le filtre jette, les règles rangent. Ce qui est écarté ici ne reçoit jamais de réponse et ne consomme aucun appel au modèle.
               </span>
             </div>
           </div>
@@ -171,6 +183,52 @@ export default function JunkPage() {
                 </label>
               ))}
             </div>
+
+            {canManage ? (
+              <div className="junk-suggestions">
+                <div className="card-header">
+                  <div>
+                    <h3>Expéditeurs de masse détectés</h3>
+                    <div className="meta">Tirés de votre boîte, pas d'exemples génériques.</div>
+                  </div>
+                  <button type="button" onClick={() => (scanRequested ? suggestionsQuery.refetch() : setScanRequested(true))}>
+                    <span className="material-symbols-outlined" aria-hidden="true">frame_inspect</span>
+                    <span>{scanRequested ? 'Relancer l’analyse' : 'Analyser la boîte'}</span>
+                  </button>
+                </div>
+                {suggestionsQuery.isFetching ? (
+                  <SyncProgressBar
+                    compact
+                    label="Analyse de la boîte"
+                    mode="syncing"
+                    message="Détection des expéditeurs de masse en cours..."
+                  />
+                ) : null}
+                {suggestionsQuery.error ? (
+                  <p className="muted">Analyse indisponible : {suggestionsQuery.error.message}</p>
+                ) : null}
+                {scanRequested && !suggestionsQuery.isFetching && !suggestionsQuery.error && !suggestions.length ? (
+                  <p className="muted">Aucun expéditeur de masse à proposer.</p>
+                ) : null}
+                {suggestions.length ? (
+                  <ul className="junk-suggestion-list">
+                    {suggestions.map((item) => (
+                      <li key={item.address}>
+                        <span className="junk-suggestion-copy">
+                          <strong>{item.address}</strong>
+                          <small>{item.count} message(s) · {item.reason}</small>
+                        </span>
+                        <button type="button" onClick={() => addBlockedSender(item.address)}>
+                          <span className="material-symbols-outlined" aria-hidden="true">block</span>
+                          <span>Écarter</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <p className="muted">Les ajouts ne prennent effet qu'après « Enregistrer ».</p>
+              </div>
+            ) : null}
 
             {!canManage ? <p className="muted">Un propriétaire de l’instance peut modifier ce filtre.</p> : null}
           </>

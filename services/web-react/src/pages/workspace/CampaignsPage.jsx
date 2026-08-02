@@ -16,6 +16,7 @@ import {
   useApproveCampaign,
   useRejectCampaign,
 } from '../../api/queries';
+import { statusLabelFr } from '../../utils/format';
 import { splitDirectoryValues } from '../../utils/workflowYaml';
 
 const SEGMENTS_PAGE_SIZE = 5;
@@ -43,12 +44,23 @@ function campaignTemplateMatchesSegment(template, segment) {
   return !allowed.length || !target.length || allowed.some((item) => target.includes(item));
 }
 
+function campaignStatusClass(status) {
+  if (['sent'].includes(status)) return 'ok';
+  if (['failed', 'cancelled'].includes(status)) return 'error';
+  if (['draft', 'scheduled', 'sending', 'pending_approval'].includes(status)) return 'warn';
+  return 'muted';
+}
+
 export default function CampaignsPage() {
   const { setStatus } = useStatus();
   const { confirmDialog } = useDialog();
 
   const [segmentId, setSegmentId] = useState('');
   const [templateName, setTemplateName] = useState('');
+  const [campaignName, setCampaignName] = useState('');
+  const [subjectOverride, setSubjectOverride] = useState('');
+  const [bodyOverride, setBodyOverride] = useState('');
+  const [scheduledAt, setScheduledAt] = useState('');
   const [templateForm, setTemplateForm] = useState(EMPTY_TEMPLATE_FORM);
   const segmentsPager = usePager(0);
   const templatesPager = usePager(0);
@@ -58,7 +70,7 @@ export default function CampaignsPage() {
   const segmentsQuery = useSegmentsQuery();
   const templatesQuery = useCampaignTemplatesQuery();
   const pendingQuery = usePendingCampaignsQuery();
-  const previewQuery = useCampaignPreviewQuery(segmentId, templateName);
+  const previewQuery = useCampaignPreviewQuery(segmentId, templateName, { subject: subjectOverride, bodyMarkdown: bodyOverride });
   const saveTemplate = useSaveCampaignTemplate();
   const deleteTemplate = useDeleteCampaignTemplate();
   const prepareCampaign = usePrepareCampaign();
@@ -67,7 +79,7 @@ export default function CampaignsPage() {
 
   const segments = useMemo(() => segmentsQuery.data?.segments || [], [segmentsQuery.data]);
   const templates = useMemo(() => templatesQuery.data?.templates || [], [templatesQuery.data]);
-  const pending = pendingQuery.data?.campaigns || [];
+  const campaigns = pendingQuery.data?.campaigns || [];
   const preview = previewQuery.data || null;
 
   const loaded = segmentsQuery.data && templatesQuery.data && pendingQuery.data;
@@ -120,13 +132,27 @@ export default function CampaignsPage() {
 
   const handlePrepare = async (e) => {
     e.preventDefault();
-    if (!preparation.ready) {
+    const saveAsDraft = e.nativeEvent?.submitter?.value === 'draft';
+    if (!saveAsDraft && !preparation.ready) {
       setStatus(preparation.reason, 'error');
       return;
     }
     try {
-      const result = await prepareCampaign.mutateAsync({ segmentId, templateName });
-      setStatus(`Campagne ${result.template_name} mise en attente.`, 'ok');
+      const result = await prepareCampaign.mutateAsync({
+        segmentId,
+        templateName,
+        name: campaignName,
+        subject: subjectOverride,
+        bodyMarkdown: bodyOverride,
+        scheduledAt,
+        saveAsDraft,
+      });
+      const message = result.status === 'draft'
+        ? `Campagne ${result.campaign_name} enregistrée en brouillon.`
+        : result.scheduled_at
+          ? `Campagne ${result.campaign_name} prête à être programmée après validation.`
+          : `Campagne ${result.campaign_name} mise en attente.`;
+      setStatus(message, 'ok');
     } catch (error) {
       setStatus(`Impossible de mettre la campagne en file : ${error.message}`, 'error');
     }
@@ -171,8 +197,13 @@ export default function CampaignsPage() {
 
   const handleApprove = async (campaignId) => {
     try {
-      await approveCampaign.mutateAsync(campaignId);
-      setStatus('Campagne approuvée.', 'ok');
+      const result = await approveCampaign.mutateAsync(campaignId);
+      const message = result.status === 'scheduled'
+        ? 'Campagne approuvée et programmée.'
+        : result.status === 'sent'
+          ? 'Campagne approuvée et envoyée.'
+          : 'Campagne approuvée.';
+      setStatus(message, 'ok');
     } catch (error) {
       setStatus(`Impossible d'approuver la campagne : ${error.message}`, 'error');
     }
@@ -181,7 +212,7 @@ export default function CampaignsPage() {
   const handleReject = async (campaignId) => {
     try {
       await rejectCampaign.mutateAsync(campaignId);
-      setStatus('Campagne rejetée.', 'ok');
+      setStatus('Campagne annulée.', 'ok');
     } catch (error) {
       setStatus(`Impossible de rejeter la campagne : ${error.message}`, 'error');
     }
@@ -197,7 +228,7 @@ export default function CampaignsPage() {
   return (
     <>
       <PageHeading view="campaigns" />
-      <div className="notice"><strong>Campagne :</strong> envoi sortant groupé. Vous choisissez un segment de contacts, un modèle, puis la campagne attend une approbation humaine avant envoi. La planification horaire automatique n est pas encore active dans cette vue.</div>
+      <div className="notice"><strong>Campagne :</strong> envoi sortant groupé. Vous choisissez un segment de contacts, un modèle, une date éventuelle, puis la campagne attend une validation humaine avant envoi.</div>
       <div className="campaigns-grid">
         <Card>
           <div className="card-header">
@@ -219,9 +250,17 @@ export default function CampaignsPage() {
                 {filteredTemplates.map((t) => <option key={t.name} value={t.name}>{t.name} · {campaignAudienceLabel(t.audience)}</option>)}
               </select>
             </label>
-            <button className="primary" type="submit" disabled={!preparation.ready} title={preparation.reason}>
+            <label><span>Nom de campagne</span><input value={campaignName} onChange={(e) => setCampaignName(e.target.value)} placeholder="Annonce clients août" /></label>
+            <label><span>Objet personnalisé</span><input value={subjectOverride} onChange={(e) => setSubjectOverride(e.target.value)} placeholder="Utilise l’objet du modèle si vide" /></label>
+            <label><span>Corps personnalisé (Markdown)</span><textarea rows={6} value={bodyOverride} onChange={(e) => setBodyOverride(e.target.value)} placeholder="Utilise le corps du modèle si vide" /></label>
+            <label><span>Planifier le</span><input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} /></label>
+            <button className="primary" type="submit" value="prepare" disabled={!preparation.ready} title={preparation.reason}>
               <span className="material-symbols-outlined" aria-hidden="true">playlist_add_check</span>
               <span>Préparer pour validation</span>
+            </button>
+            <button type="submit" value="draft" disabled={!segmentId || !templateName}>
+              <span className="material-symbols-outlined" aria-hidden="true">draft</span>
+              <span>Enregistrer brouillon</span>
             </button>
           </form>
           <p className="hint">Le modèle est filtré selon l'audience du segment. Une variable manquante ou une audience incompatible bloque la mise en file.</p>
@@ -265,7 +304,7 @@ export default function CampaignsPage() {
                       <div className="mini-chip-row">
                         <span className="mini-chip">{segment.id}</span>
                         <span className="mini-chip">{`${segment.resolved_count || 0} destinataire(s)`}</span>
-                        <span className="mini-chip">{`audience: ${campaignAudienceLabel(campaignSegmentAudiences(segment))}`}</span>
+                        <span className="mini-chip">{`Audience : ${campaignAudienceLabel(campaignSegmentAudiences(segment))}`}</span>
                       </div>
                     </div>
                   </div>
@@ -291,8 +330,8 @@ export default function CampaignsPage() {
                       <span>{template.subject || 'Modèle sans objet'}</span>
                       <div className="mini-chip-row">
                         <span className="mini-chip">{template.category || 'sans catégorie'}</span>
-                        <span className="mini-chip">{`audience: ${campaignAudienceLabel(template.audience)}`}</span>
-                        {template.variables?.length > 0 && <span className="mini-chip">{`variables: ${template.variables.join(', ')}`}</span>}
+                        <span className="mini-chip">{`Audience : ${campaignAudienceLabel(template.audience)}`}</span>
+                        {template.variables?.length > 0 && <span className="mini-chip">{`Variables : ${template.variables.join(', ')}`}</span>}
                       </div>
                     </div>
                     <div className="directory-actions">
@@ -325,31 +364,46 @@ export default function CampaignsPage() {
 
       <Card>
         <div className="card-header">
-          <div><h2>Campagnes préparées à valider</h2><p>Vérifiez le nombre de destinataires et le premier email rendu avant d'approuver l'envoi global.</p></div>
+          <div><h2>Campagnes</h2><p>Vérifiez les brouillons, les programmations, les envois terminés et les erreurs par destinataire.</p></div>
         </div>
         <div className="campaign-pending">
-          {!pending.length ? 'Aucune campagne en attente.' : pending.map((campaign) => {
+          {!campaigns.length ? 'Aucune campagne préparée.' : campaigns.map((campaign) => {
             const campaignWarnings = (campaign.missing_variables || []).map((item) => `${item.email} (${(item.unresolved || []).join(', ')})`).join(' · ');
-            const canApprove = campaign.audience_match && !(campaign.missing_variables || []).length;
+            const canApprove = ['draft', 'pending_approval'].includes(campaign.status) && campaign.audience_match && !(campaign.missing_variables || []).length;
+            const canCancel = ['draft', 'pending_approval', 'scheduled'].includes(campaign.status);
             return (
               <article className="card campaign-pending-card" key={campaign.campaign_id}>
                 <div className="card-header">
                   <div>
-                    <h2>{campaign.template_name}</h2>
+                    <h2>{campaign.campaign_name || campaign.template_name}</h2>
                     <div className="meta">
                       <span>{campaign.segment_name || campaign.segment_id || 'segment inconnu'}</span>
                       <span>{campaign.recipient_count || 0} destinataire(s)</span>
                       <span>{campaign.template_category || 'sans catégorie'}</span>
+                      {campaign.scheduled_at ? <span>programmée : {campaign.scheduled_at}</span> : null}
                     </div>
                   </div>
-                  <span className={`status-pill ${campaign.audience_match ? 'ok' : 'warn'}`}>{campaign.audience_match ? 'Prêt' : 'Bloqué'}</span>
+                  <span className={`status-pill ${campaignStatusClass(campaign.status)}`}>{statusLabelFr(campaign.status)}</span>
                 </div>
                 {campaign.guard_message && <p className="campaign-warning">{campaign.guard_message}</p>}
                 {campaignWarnings && <p className="campaign-warning">Variables manquantes : {campaignWarnings}</p>}
                 <div className="campaign-preview-email" dangerouslySetInnerHTML={{ __html: campaign.preview?.html || '<p class="muted">Aucun aperçu.</p>' }} />
+                {campaign.recipients?.length > 0 && (
+                  <div className="campaign-recipient-results">
+                    {campaign.recipients.slice(0, 8).map((recipient) => (
+                      <span className={`mini-chip ${campaignStatusClass(recipient.status)}`} key={recipient.email}>
+                        {recipient.email} · {statusLabelFr(recipient.status)}
+                      </span>
+                    ))}
+                    {campaign.recipients.length > 8 && <span className="mini-chip">+{campaign.recipients.length - 8}</span>}
+                  </div>
+                )}
+                {campaign.result?.failed?.length > 0 && (
+                  <p className="campaign-warning">Erreurs : {campaign.result.failed.map((item) => `${item.email || 'campagne'} (${item.error})`).join(' · ')}</p>
+                )}
                 <div className="actions">
                   <button className="primary" type="button" disabled={!canApprove} onClick={() => handleApprove(campaign.campaign_id)}>Approuver</button>
-                  <button className="danger" type="button" onClick={() => handleReject(campaign.campaign_id)}>Rejeter</button>
+                  <button className="danger" type="button" disabled={!canCancel} onClick={() => handleReject(campaign.campaign_id)}>Annuler</button>
                 </div>
               </article>
             );

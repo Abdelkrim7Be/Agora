@@ -8,6 +8,7 @@ spring:
     username: ${POSTGRES_USER:agora}
     password: ${POSTGRES_PASSWORD:agora}
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: update
     show-sql: false
@@ -28,7 +29,7 @@ gateway:
   agent-types:
     - id: email-agent
       display-name: Email Agent
-      description: Autonomous email triage, drafting, validation, style learning, and mailbox operations.
+      description: Trie les e-mails, rédige les réponses, apprend votre style et gère la boîte mail, chaque envoi restant sous validation.
       capabilities:
         - email_triage
         - draft_approval

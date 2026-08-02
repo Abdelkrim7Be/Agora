@@ -9,6 +9,7 @@ import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
+import { currentUsername } from '../../utils/jwt';
 import { agentTypeLabel, instanceIdentity, instanceSummaryFields } from '../../utils/format';
 import {
   useAgentInstancesQuery,
@@ -20,13 +21,15 @@ import {
 } from '../../api/queries';
 
 const EMPTY_CREATE_FORM = { agentType: '', displayName: '', assignedTo: '' };
+const SELF_SERVICE_LIMIT = 5;
+const EMAIL_AGENT_TYPE = 'email-agent';
 
 function instanceStatus(instance) {
   return String(instance?.status || 'active').toLowerCase();
 }
 
 export default function InstancesPage() {
-  const { globalRole } = useAuth();
+  const { globalRole, token } = useAuth();
   const { instances, setInstances, setInstanceId } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog } = useDialog();
@@ -38,7 +41,14 @@ export default function InstancesPage() {
   const renameInstance = useRenameInstance();
   const deleteInstance = useDeleteInstance();
   const createInstance = useCreateInstance();
-  const canManage = globalRole === 'admin';
+  const isAdmin = globalRole === 'admin';
+  const username = currentUsername(token);
+  const ownEmailInstanceCount = instances.filter((instance) => (
+    instance.created_by === username && instance.agent_type === EMAIL_AGENT_TYPE
+  )).length;
+  const selfServiceLimitReached = !isAdmin && ownEmailInstanceCount >= SELF_SERVICE_LIMIT;
+  const canCreate = isAdmin || !selfServiceLimitReached;
+  const canManage = isAdmin;
   const announcedInitialLoad = useRef(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
@@ -47,7 +57,8 @@ export default function InstancesPage() {
   const agentTypes = typesQuery.data || [];
 
   const openCreate = () => {
-    setCreateForm({ ...EMPTY_CREATE_FORM, agentType: agentTypes[0]?.id || '' });
+    const defaultType = isAdmin ? agentTypes[0]?.id || EMAIL_AGENT_TYPE : EMAIL_AGENT_TYPE;
+    setCreateForm({ ...EMPTY_CREATE_FORM, agentType: defaultType });
     setCreateError('');
     setCreateOpen(true);
   };
@@ -57,6 +68,10 @@ export default function InstancesPage() {
     const displayName = createForm.displayName.trim();
     if (!createForm.agentType || !displayName) {
       setCreateError('Type d’agent et nom sont requis.');
+      return;
+    }
+    if (selfServiceLimitReached) {
+      setCreateError(`Limite atteinte : ${SELF_SERVICE_LIMIT} instances email-agent maximum par utilisateur.`);
       return;
     }
     const oauthPopup = window.open('', 'agora-gmail-connect', 'popup=yes,width=520,height=720');
@@ -70,7 +85,7 @@ export default function InstancesPage() {
         agentType: createForm.agentType,
         displayName,
         mailboxIdentity: '',
-        assignedTo: createForm.assignedTo,
+        assignedTo: isAdmin ? createForm.assignedTo : '',
       });
       setCreateOpen(false);
       if (created?.id) {
@@ -161,7 +176,13 @@ export default function InstancesPage() {
     <>
       <PageHeading view="instances" />
       <div className="toolbar">
-        <button className="primary" type="button" disabled={!canManage} title={canManage ? 'Créer une instance' : 'Rôle admin requis'} onClick={openCreate}>
+        <button
+          className="primary"
+          type="button"
+          disabled={!canCreate}
+          title={selfServiceLimitReached ? `${SELF_SERVICE_LIMIT} instances email-agent maximum` : 'Créer une instance'}
+          onClick={openCreate}
+        >
           <span className="material-symbols-outlined" aria-hidden="true">add</span>
           <span>Ajouter une instance</span>
         </button>
@@ -170,6 +191,11 @@ export default function InstancesPage() {
           <span>Actualiser</span>
         </button>
       </div>
+      {!isAdmin ? (
+        <div className="notice">
+          Vous pouvez créer jusqu’à <strong>{SELF_SERVICE_LIMIT}</strong> instances de l’agent e-mail. Un administrateur gère les autres vues plateforme et les accès des utilisateurs.
+        </div>
+      ) : null}
       <div className="instance-grid">
         {!instances.length ? (
           <EmptyState message="Aucune instance visible." />
@@ -182,8 +208,8 @@ export default function InstancesPage() {
             const typeLabel = agentTypeLabel(instance.agent_type, typesQuery.data || []);
             const identity = instanceIdentity(instance);
             const openTitle = active ? 'Ouvrir l’espace de travail' : 'Activez cette instance avant de l’ouvrir';
-            const renameTitle = canManage ? 'Renommer l’instance' : 'Rôle admin requis';
-            const deleteTitle = canManage ? 'Supprimer l’instance' : 'Rôle admin requis';
+            const renameTitle = canManage ? 'Renommer l’instance' : 'Administration requise';
+            const deleteTitle = canManage ? 'Supprimer l’instance' : 'Administration requise';
             return (
               <Card key={instance.id} className={`instance-card ${active ? '' : 'inactive'}`}>
                 <div className="card-header">
@@ -250,19 +276,26 @@ export default function InstancesPage() {
           <div className="modal-header">
             <div>
               <h2 id="create-instance-title">Ajouter une instance</h2>
-              <p>Choisissez un type d’agent et un nom affiché. La connexion Gmail se fait ensuite depuis l’onboarding de l’instance.</p>
+              <p>{isAdmin ? 'Choisissez un type d’agent, un nom affiché et une attribution optionnelle.' : 'Créez une instance email-agent. La connexion Gmail se fait ensuite depuis l’onboarding.'}</p>
             </div>
             <button className="ghost icon-button" type="button" aria-label="Fermer" onClick={() => setCreateOpen(false)}>
               <span className="material-symbols-outlined" aria-hidden="true">close</span>
             </button>
           </div>
           <form className="login-form" onSubmit={handleCreate}>
-            <label>
-              <span>Type d’agent</span>
-              <select value={createForm.agentType} onChange={(e) => setCreateForm({ ...createForm, agentType: e.target.value })}>
-                {agentTypes.map((type) => <option key={type.id} value={type.id}>{type.display_name || type.id}</option>)}
-              </select>
-            </label>
+            {isAdmin ? (
+              <label>
+                <span>Type d’agent</span>
+                <select value={createForm.agentType} onChange={(e) => setCreateForm({ ...createForm, agentType: e.target.value })}>
+                  {agentTypes.map((type) => <option key={type.id} value={type.id}>{type.display_name || type.id}</option>)}
+                </select>
+              </label>
+            ) : (
+              <label>
+                <span>Type d’agent</span>
+                <input value="Email Agent" readOnly />
+              </label>
+            )}
             <label>
               <span>Nom affiché</span>
               <input
@@ -274,16 +307,20 @@ export default function InstancesPage() {
                 required
               />
             </label>
-            <label>
-              <span>Attribuer à</span>
-              <select value={createForm.assignedTo} onChange={(e) => setCreateForm({ ...createForm, assignedTo: e.target.value })}>
-                <option value="">Personne pour l’instant</option>
-                {(usersQuery.data || []).map((user) => (
-                  <option key={user.username} value={user.username}>{user.username}</option>
-                ))}
-              </select>
-              <small className="muted">Sans attribution, seuls les administrateurs globaux verront cette instance.</small>
-            </label>
+            {isAdmin ? (
+              <label>
+                <span>Attribuer à</span>
+                <select value={createForm.assignedTo} onChange={(e) => setCreateForm({ ...createForm, assignedTo: e.target.value })}>
+                  <option value="">Personne pour l’instant</option>
+                  {(usersQuery.data || []).map((user) => (
+                    <option key={user.username} value={user.username}>{user.username}</option>
+                  ))}
+                </select>
+                <small className="muted">Sans attribution, seuls les administrateurs globaux verront cette instance.</small>
+              </label>
+            ) : (
+              <p className="muted">{ownEmailInstanceCount}/{SELF_SERVICE_LIMIT} instances email-agent utilisées.</p>
+            )}
             {createError && <p className="form-error">{createError}</p>}
             <div className="dialog-actions">
               <button type="button" onClick={() => setCreateOpen(false)}>Annuler</button>

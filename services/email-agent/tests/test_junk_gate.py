@@ -118,3 +118,48 @@ def test_a_normal_run_carries_no_junk_reason(tmp_path, monkeypatch):
 
     record = next(r for r in list_runs(path=index) if r["email_id"] == "m_ok")
     assert record["junk_reason"] is None
+
+
+# --- Block candidates derived from the mailbox (plan 4.2) ---
+
+def test_junk_suggestions_rank_real_bulk_senders():
+    from src.junk_config import JunkConfig, suggest_junk_senders
+
+    messages = (
+        [{"from": "Shop <noreply@shop.example>", "subject": f"Promo {i}"} for i in range(4)]
+        + [{"from": "News <newsletter@media.example>", "subject": "Hebdo"} for _ in range(2)]
+        + [{"from": "Sarah <sarah@client.example>", "subject": "Devis"}]
+    )
+    suggestions = suggest_junk_senders(messages, JunkConfig())
+
+    assert [s["address"] for s in suggestions] == [
+        "noreply@shop.example",
+        "newsletter@media.example",
+    ]
+    assert suggestions[0]["count"] == 4
+    assert suggestions[0]["reason"].startswith("sender:")
+    # Sample subjects help the owner recognise the sender before blocking it.
+    assert suggestions[0]["subjects"][:1] == ["Promo 0"]
+
+
+def test_junk_suggestions_skip_already_listed_senders():
+    from src.junk_config import JunkConfig, suggest_junk_senders
+
+    messages = [{"from": "Shop <noreply@shop.example>", "subject": "Promo"} for _ in range(3)]
+
+    blocked = JunkConfig(blocked_senders=["noreply@shop.example"])
+    assert suggest_junk_senders(messages, blocked) == []
+
+    by_domain = JunkConfig(blocked_domains=["shop.example"])
+    assert suggest_junk_senders(messages, by_domain) == []
+
+    # An explicitly allowed sender must never be offered as a block candidate.
+    allowed = JunkConfig(allowed_senders=["noreply@shop.example"])
+    assert suggest_junk_senders(messages, allowed) == []
+
+
+def test_junk_suggestions_ignore_ordinary_correspondents():
+    from src.junk_config import JunkConfig, suggest_junk_senders
+
+    messages = [{"from": "Sarah <sarah@client.example>", "subject": "Devis"} for _ in range(9)]
+    assert suggest_junk_senders(messages, JunkConfig()) == []

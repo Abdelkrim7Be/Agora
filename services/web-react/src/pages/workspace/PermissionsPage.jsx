@@ -3,7 +3,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
 import { useUsersQuery, useGrantsQuery, useAddGrant, useRemoveGrant } from '../../api/queries';
-import { formatDateTimeFr } from '../../utils/format';
+import { formatDateTimeFr, roleLabelFr } from '../../utils/format';
 
 export default function PermissionsPage() {
   const { setStatus } = useStatus();
@@ -71,7 +71,7 @@ export default function PermissionsPage() {
           </button>
         </div>
         <div className="notice">
-          Une délégation donne à un utilisateur un rôle sur cette instance uniquement : <strong>owner</strong> (configurer + approuver), <strong>approver</strong> (relire/envoyer les brouillons), <strong>viewer</strong> (consulter). Le rôle JWT global s'applique à toute la plateforme ; les délégations l'étendent pour des espaces précis.
+          Une délégation donne à un utilisateur un rôle sur cette instance uniquement : <strong>propriétaire</strong> (configurer + approuver), <strong>validateur</strong> (relire/envoyer les brouillons), <strong>lecteur</strong> (consulter). Le rôle JWT global s'applique à toute la plateforme ; les délégations l'étendent pour des espaces précis.
         </div>
         <div className="grants-panel">
           {grants.length ? (
@@ -82,7 +82,7 @@ export default function PermissionsPage() {
                   <div className="directory-main">
                     <strong>{g.user_id}</strong>
                     <div className="mini-chip-row">
-                      <span className="status-pill">{g.role}</span>
+                      <span className="status-pill">{roleLabelFr(g.role)}</span>
                       <span className="mini-chip">accordé par {g.granted_by || '—'}</span>
                       <span className="mini-chip">{g.granted_at ? formatDateTimeFr(g.granted_at) : '—'}</span>
                     </div>
@@ -107,9 +107,9 @@ export default function PermissionsPage() {
               })}
             </select>
             <select className="grants-role-select" aria-label="Rôle sur l'instance" value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="approver">approver</option>
-              <option value="viewer">viewer</option>
-              <option value="owner">owner</option>
+              <option value="approver">validateur</option>
+              <option value="viewer">lecteur</option>
+              <option value="owner">propriétaire</option>
             </select>
             <div className="directory-actions">
               <button className="primary" type="submit" disabled={!userId}>

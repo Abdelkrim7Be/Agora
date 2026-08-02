@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useInstance } from '../../contexts/InstanceContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { gatewayUrl } from '../../api/client';
 import { useUnreadCountQuery, useNotificationsQuery, useMarkNotificationRead } from '../../api/queries';
+import { roleLabelFr } from '../../utils/format';
+import { currentUsername } from '../../utils/jwt';
 
 function NotificationBell() {
   const { instanceId } = useParams();
@@ -57,6 +60,7 @@ function NotificationBell() {
 
 export default function Topbar() {
   const { token, gatewayBase, signOut } = useAuth();
+  const { currentInstance, currentInstanceRole } = useInstance();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const signedIn = Boolean(token);
@@ -76,6 +80,14 @@ export default function Topbar() {
     signOut();
     navigate('/login');
   };
+  // The chip identifies the signed-in person; the instance's mailbox is only a
+  // fallback for tokens that carry no subject.
+  const displayName = currentUsername(token)
+    || currentInstance?.assigned_to
+    || currentInstance?.mailbox_identity
+    || 'Utilisateur connecté';
+  const initials = String(displayName).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'U';
+  const roleLabel = roleLabelFr(currentInstanceRole);
 
   return (
     <header className="topbar">
@@ -85,6 +97,15 @@ export default function Topbar() {
       </div>
       <div className="auth-actions" aria-label="Contrôles de session">
         {signedIn ? <NotificationBell /> : null}
+        {signedIn ? (
+          <div className="identity-chip" title={`${displayName} · connecté`}>
+            <span className="identity-avatar">{initials}</span>
+            <span className="identity-copy">
+              <strong>{displayName}</strong>
+              <small>{roleLabel} · connecté</small>
+            </span>
+          </div>
+        ) : null}
         <button
           className="icon-button theme-toggle"
           type="button"

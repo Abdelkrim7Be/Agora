@@ -20,6 +20,8 @@ export default function NotificationsPage() {
   const navigate = useNavigate();
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [severityFilter, setSeverityFilter] = useState('');
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [browserPermission, setBrowserPermission] = useState(() => window.Notification?.permission || 'unsupported');
 
   const query = useNotificationsQuery(unreadOnly);
   const markRead = useMarkNotificationRead();
@@ -29,6 +31,26 @@ export default function NotificationsPage() {
   const notifications = (query.data?.notifications || []).filter(
     (n) => !severityFilter || n.severity === severityFilter
   );
+  const allSelected = notifications.length > 0 && notifications.every((n) => selectedIds.has(n.id));
+  const selectedNotifications = notifications.filter((n) => selectedIds.has(n.id));
+
+  const toggleAll = () => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allSelected) notifications.forEach((n) => next.delete(n.id));
+      else notifications.forEach((n) => next.add(n.id));
+      return next;
+    });
+  };
+
+  const toggleOne = (id) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const handleMarkRead = async (id) => {
     try {
@@ -55,8 +77,39 @@ export default function NotificationsPage() {
     }
   };
 
+  const handleBulkRead = async () => {
+    try {
+      const unread = selectedNotifications.filter((n) => !n.read_at);
+      await Promise.all(unread.map((n) => markRead.mutateAsync(n.id)));
+      setSelectedIds(new Set());
+      setStatus(`${unread.length} notification(s) marquée(s) comme lues.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de marquer la sélection : ${error.message}`, 'error');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      await Promise.all(selectedNotifications.map((n) => deleteNotification.mutateAsync(n.id)));
+      setSelectedIds(new Set());
+      setStatus(`${selectedNotifications.length} notification(s) supprimée(s).`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de supprimer la sélection : ${error.message}`, 'error');
+    }
+  };
+
   const handleNavigate = (notification) => {
     if (notification.action_url) navigate(notification.action_url);
+  };
+
+  const handleBrowserPermission = async () => {
+    if (!window.Notification) {
+      setStatus('Les notifications du navigateur ne sont pas prises en charge.', 'error');
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setBrowserPermission(permission);
+    setStatus(permission === 'granted' ? 'Notifications du navigateur activées.' : 'Notifications du navigateur non activées.', permission === 'granted' ? 'ok' : 'error');
   };
 
   return (
@@ -78,6 +131,12 @@ export default function NotificationsPage() {
               {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
             <button type="button" onClick={handleMarkAllRead}>Tout marquer comme lu</button>
+            <button type="button" disabled={!notifications.length} onClick={toggleAll}>{allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}</button>
+            <button type="button" disabled={!selectedNotifications.length} onClick={handleBulkRead}>Marquer la sélection comme lue</button>
+            <button type="button" className="danger" disabled={!selectedNotifications.length} onClick={handleBulkDelete}>Supprimer la sélection</button>
+            <button type="button" disabled={browserPermission === 'granted' || browserPermission === 'unsupported'} onClick={handleBrowserPermission}>
+              Notifications navigateur
+            </button>
             <button type="button" onClick={() => query.refetch()}>Actualiser</button>
           </div>
         </div>
@@ -88,13 +147,20 @@ export default function NotificationsPage() {
         ) : (
           <ul className="notification-list">
             {notifications.map((notification) => (
-              <NotificationItem
-                key={notification.id}
-                notification={notification}
-                onMarkRead={handleMarkRead}
-                onDelete={handleDelete}
-                onNavigate={handleNavigate}
-              />
+              <li className="notification-select-row" key={notification.id}>
+                <input
+                  type="checkbox"
+                  aria-label={`Sélectionner ${notification.title}`}
+                  checked={selectedIds.has(notification.id)}
+                  onChange={() => toggleOne(notification.id)}
+                />
+                <NotificationItem
+                  notification={notification}
+                  onMarkRead={handleMarkRead}
+                  onDelete={handleDelete}
+                  onNavigate={handleNavigate}
+                />
+              </li>
             ))}
           </ul>
         )}

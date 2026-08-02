@@ -13,10 +13,11 @@ import java.util.Set;
  * Role hierarchy (highest to lowest): owner > approver > viewer.
  *
  * Effective role resolution order:
- *   1. If the caller's global JWT role is "owner" → effective role is "owner" for every instance.
- *   2. If the caller has an explicit grant for this instance → use that grant's role.
- *   3. If the instance's allowedRoles list includes the JWT role → use the JWT role.
- *   4. Otherwise → no access.
+ *   1. If the caller's global JWT role is "admin" → effective role is "owner" for every instance.
+ *   2. If the caller created this instance → effective role is "owner".
+ *   3. If the caller has an explicit grant for this instance → use that grant's role.
+ *   4. If the instance's allowedRoles list includes the JWT role → use the JWT role.
+ *   5. Otherwise → no access.
  */
 @Service
 public class InstanceGrantService {
@@ -35,16 +36,14 @@ public class InstanceGrantService {
      * Resolve the effective instance role for a caller. Returns empty if no access.
      */
     public Optional<String> effectiveRole(String agentInstanceId, String userId, String jwtRole) {
-        // owner and admin (the IT superuser tier, above owner) are owner-equivalent on
-        // every instance. The gateway SecurityConfig still gates which verbs admin can
-        // reach, so this only broadens proxied reads, not approvals/mutations.
-        if ("owner".equals(jwtRole) || "admin".equals(jwtRole)) return Optional.of("owner");
-
-        Optional<AgentInstanceGrant> grant = grants.findByAgentInstanceIdAndUserId(agentInstanceId, userId);
-        if (grant.isPresent()) return Optional.of(grant.get().getRole());
-
+        // Admin is the IT superuser tier. Other users are scoped by ownership,
+        // explicit grants, or the instance's allowed global roles.
+        if ("admin".equals(jwtRole)) return Optional.of("owner");
         Optional<AgentInstance> instance = instances.findById(agentInstanceId);
         if (instance.isPresent()) {
+            if (userId != null && userId.equals(instance.get().getCreatedBy())) return Optional.of("owner");
+            Optional<AgentInstanceGrant> grant = grants.findByAgentInstanceIdAndUserId(agentInstanceId, userId);
+            if (grant.isPresent()) return Optional.of(grant.get().getRole());
             boolean allowed = java.util.Arrays.stream(instance.get().getAllowedRoles().split(","))
                     .map(String::trim)
                     .anyMatch(r -> r.equalsIgnoreCase(jwtRole));

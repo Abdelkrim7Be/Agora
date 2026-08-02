@@ -270,6 +270,29 @@ def test_render_template_fills_contact_name(tmp_path):
     assert rendered == "Bonjour Jean Dupont, salut Jean!"
 
 
+def test_render_template_strips_missing_name_placeholder():
+    from src.categories import render_template_text
+
+    rendered = render_template_text("Bonjour {{name}},\n\nSujet: {{subject}}", {"author": "anon@example.com"})
+
+    assert "{{name}}" not in rendered
+    assert rendered.startswith("Bonjour,\n")
+
+
+def test_render_template_strips_unknown_placeholders_and_orphan_punctuation():
+    from src.categories import render_template_text
+
+    rendered = render_template_text(
+        "Bonjour {{prenom}},\n{{company}} : {{missing}}.\nMerci {{name}} !",
+        {"author": "Alice <alice@example.com>"},
+    )
+
+    assert "{{" not in rendered
+    assert "Bonjour Alice," in rendered
+    assert " :" not in rendered
+    assert "Merci Alice !" in rendered
+
+
 def test_auto_draft_fills_contact_name(tmp_path):
     from src.categories import auto_draft_tool_call, Contact, load_categories
 
@@ -484,6 +507,103 @@ def test_category_approval_policy_fields_default_and_round_trip(tmp_path):
     reloaded = load_categories(reloaded_path)
     assert reloaded.categories[0].require_approval is True
     assert reloaded.categories[0].external_send_allowed is False
+
+
+def test_category_proposals_discover_new_domains_and_accept(monkeypatch, tmp_path):
+    import src.api as api
+    from src.api import app
+    from fastapi.testclient import TestClient
+
+    categories_path = tmp_path / "categories.yaml"
+    categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
+    state_path = tmp_path / "category_proposals.json"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
+    monkeypatch.setattr(api, "gmail_resource", lambda *a, **kw: object())
+    monkeypatch.setattr(api, "list_inbox", lambda limit, resource=None: [
+        {"id": "1", "from": "A <a@factures.example>", "subject": "Facture janvier", "snippet": ""},
+        {"id": "2", "from": "B <b@factures.example>", "subject": "Facture février", "snippet": ""},
+        {"id": "3", "from": "C <c@factures.example>", "subject": "Facture mars", "snippet": ""},
+    ])
+
+    with TestClient(app) as client:
+        proposals = client.get("/categories/proposals").json()["proposals"]
+        assert proposals
+        accepted = client.post("/categories/proposals/accept", json={"proposal_id": proposals[0]["id"]})
+        assert accepted.status_code == 200, accepted.text
+        created = accepted.json()["parsed"]["categories"][0]
+        assert created["enabled"] is False
+        assert created["when"]["sender_domain"] == ["factures.example"]
+
+
+def test_category_proposals_skip_consumer_mail_domains(monkeypatch, tmp_path):
+    """A gmail.com cluster is unrelated people, and would swallow most mail."""
+    import src.api as api
+    from src.api import app
+    from fastapi.testclient import TestClient
+
+    categories_path = tmp_path / "categories.yaml"
+    categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
+    state_path = tmp_path / "category_proposals.json"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
+    monkeypatch.setattr(api, "gmail_resource", lambda *a, **kw: object())
+    monkeypatch.setattr(api, "list_inbox", lambda limit, resource=None: [
+        {"id": str(i), "from": f"P{i} <p{i}@gmail.com>", "subject": f"Bonjour {i}", "snippet": ""}
+        for i in range(8)
+    ] + [
+        {"id": "x1", "from": "A <a@factures.example>", "subject": "Facture janvier", "snippet": ""},
+        {"id": "x2", "from": "B <b@factures.example>", "subject": "Facture février", "snippet": ""},
+        {"id": "x3", "from": "C <c@factures.example>", "subject": "Facture mars", "snippet": ""},
+    ])
+
+    with TestClient(app) as client:
+        proposals = client.get("/categories/proposals").json()["proposals"]
+
+    domains = [p["display_name"] for p in proposals if p["kind"] == "domain"]
+    assert "gmail.com" not in domains
+    assert "factures.example" in domains
+
+
+def test_category_edit_updates_and_clears_matchers(monkeypatch, tmp_path):
+    import src.api as api
+    from src.api import app
+    from fastapi.testclient import TestClient
+
+    categories_path = tmp_path / "categories.yaml"
+    categories_path.write_text(CATEGORIES_YAML, encoding="utf-8")
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+
+    payload = {
+        "display_name": "Réclamations clients",
+        "description": "Traiter les réclamations sans mot-clé obligatoire.",
+        "enabled": True,
+        "priority": "urgent",
+        "policy": "notify",
+        "owner": "Support",
+        "approver": None,
+        "route_to": ["support@company.example"],
+        "instructions": None,
+        "when": {},
+        "template": None,
+        "require_approval": True,
+        "external_send_allowed": False,
+    }
+
+    with TestClient(app) as client:
+        response = client.put("/categories/reclamation", json=payload)
+        assert response.status_code == 200, response.text
+        category = next(
+            item for item in response.json()["parsed"]["categories"]
+            if item["name"] == "reclamation"
+        )
+        assert category["display_name"] == "Réclamations clients"
+        assert category["policy"] == "notify"
+        assert category["when"]["sender_domain"] == []
+        assert category["when"]["subject_contains"] == []
+        assert category["template"] is None
+        assert category["require_approval"] is True
+        assert category["external_send_allowed"] is False
 
 
 def test_require_approval_escalates_organize_policy_to_hitl(fake_llms, monkeypatch):

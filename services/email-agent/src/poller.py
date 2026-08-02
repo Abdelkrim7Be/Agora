@@ -84,7 +84,7 @@ from src.automation import (
 )
 from src.config import load_config, settings
 from src.runtime_settings import load_runtime_settings
-from src.memory import namespace, wrap_preferences
+from src.memory import ORIGIN_LEARNED, namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
 from src.security_client import classify_content, sanitize_email
 from src.gmail_client import (
@@ -125,6 +125,7 @@ from src.retention import run_retention
 from src.trace import setup_trace_store
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
+from src.campaigns import due_campaign_ids, load_campaign_runs, save_campaign_runs, send_campaign_run
 from src.run_registry import (
     ACTIVE_RUN_STATUSES,
     find_run_by_email,
@@ -260,6 +261,32 @@ def sweep_pending_approval_slas(now: datetime | None = None) -> list[tuple[str, 
         }
         escalated.append((run["run_id"], recipient))
     return escalated
+
+
+def sweep_due_campaigns(now: datetime | None = None) -> list[tuple[str, str, str]]:
+    """Send scheduled campaigns that were already approved by the owner."""
+    instance_id = current_agent_instance_id()
+    records = load_campaign_runs(agent_instance_id=instance_id)
+    outcomes: list[tuple[str, str, str]] = []
+    changed = False
+    for campaign_id in due_campaign_ids(now=now, agent_instance_id=instance_id):
+        record = records.get(campaign_id)
+        if not record or record.get("agent_instance_id") != instance_id:
+            continue
+        try:
+            send_campaign_run(campaign_id, record)
+            status = record.get("status") or "sent"
+        except Exception as exc:
+            record["status"] = "failed"
+            record["result"] = {"sent": [], "denied": [], "failed": [{"email": None, "error": str(exc)}]}
+            status = "failed"
+        record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        records[campaign_id] = record
+        changed = True
+        outcomes.append((campaign_id, status, "campaign"))
+    if changed:
+        save_campaign_runs(records, agent_instance_id=instance_id)
+    return outcomes
 
 
 def ensure_watch(resource=None) -> dict | None:
@@ -428,12 +455,59 @@ async def retry_security_holds(
     )
     exclude_message_ids = exclude_message_ids or set()
     outcomes: list[tuple] = []
-    for record in held:
-        msg_id = record.get("email_id")
-        if not msg_id or msg_id in exclude_message_ids:
+    now = datetime.now(timezone.utc)
+    for msg_id, record in _newest_hold_per_message(held).items():
+        if msg_id in exclude_message_ids:
+            continue
+        if not _security_hold_retry_due(record, now):
             continue
         outcomes.append(await process_message_with_retry(graph, msg_id, resource, rules_config))
     return outcomes
+
+
+def _newest_hold_per_message(held: list[dict]) -> dict[str, dict]:
+    """One retry candidate per held message, not per held run row.
+
+    A message that keeps tripping the classifier accumulates a run row per
+    attempt, so iterating the rows re-processes the same few messages hundreds
+    of times a cycle and starves the rest of the inbox. Retry the message.
+    """
+    newest: dict[str, dict] = {}
+    for record in held:
+        msg_id = record.get("email_id")
+        if not msg_id:
+            continue
+        current = newest.get(msg_id)
+        if current is None or _hold_sort_key(record) > _hold_sort_key(current):
+            newest[msg_id] = record
+    return newest
+
+
+def _hold_sort_key(record: dict) -> str:
+    return str(record.get("updated_at") or record.get("created_at") or "")
+
+
+# A message the classifier will always hold (an injection attempt, say) would
+# otherwise be re-attempted on every single cycle, burning an LLM call each time
+# and — because holds are retried before new mail — starving the rest of the
+# inbox. Back off between attempts instead of hammering it.
+SECURITY_HOLD_RETRY_BACKOFF_MIN = 15
+
+
+def _security_hold_retry_due(record: dict, now: datetime | None = None) -> bool:
+    """True when a held run has waited long enough to be worth re-attempting."""
+    now = now or datetime.now(timezone.utc)
+    last = record.get("updated_at") or record.get("created_at")
+    if not last:
+        return True
+    try:
+        seen = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    waited = (now - seen.astimezone(timezone.utc)).total_seconds()
+    return waited >= SECURITY_HOLD_RETRY_BACKOFF_MIN * 60
 
 
 async def process_message(
@@ -845,6 +919,7 @@ async def poll_once(
         graph, resource, rules_config, {msg_id for msg_id, _status, _run_id in outcomes}
     ))
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    outcomes.extend(await asyncio.to_thread(sweep_due_campaigns))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
     await asyncio.to_thread(sweep_pending_approval_slas)
@@ -890,6 +965,7 @@ async def enqueue_once(
         set_last_history_id(next_baseline)
 
     outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    outcomes.extend(await asyncio.to_thread(sweep_due_campaigns))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
     enqueued_count = sum(1 for _msg_id, status, _run_id in outcomes if status == "enqueued")
@@ -1010,7 +1086,9 @@ async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
 
         profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
         text = build_style_text(profile)
-        await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(text))
+        await store.aput(
+            namespace("writing_style"), "user_preferences", wrap_preferences(text, ORIGIN_LEARNED)
+        )
         print(f"poller: {instance_id} seeded writing style from {len(samples)} sent email(s)")
     except Exception as exc:
         # Best-effort: drafts fall back to the configured default style.
