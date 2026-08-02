@@ -238,6 +238,11 @@ services:
       GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH:-credentials.json}
       GMAIL_OAUTH_REDIRECT_URI: ${GMAIL_OAUTH_REDIRECT_URI:-https://localhost/api/agent/connect/gmail/callback}
       GMAIL_OAUTH_STATE_SECRET: ${GMAIL_OAUTH_STATE_SECRET:-${AGENT_TOKEN_ENCRYPTION_KEY}}
+      # Outlook is opt-in per instance; blank here keeps Gmail-only deployments unchanged.
+      OUTLOOK_CLIENT_ID: ${OUTLOOK_CLIENT_ID:-}
+      OUTLOOK_CLIENT_SECRET: ${OUTLOOK_CLIENT_SECRET:-}
+      OUTLOOK_TENANT: ${OUTLOOK_TENANT:-common}
+      OUTLOOK_OAUTH_REDIRECT_URI: ${OUTLOOK_OAUTH_REDIRECT_URI:-https://localhost/api/agent/connect/outlook/callback}
     volumes:
       - agent_data:/app/data
     healthcheck:
@@ -269,6 +274,15 @@ services:
     environment:
       GATEWAY_SECRET_DIR: ${GATEWAY_SECRET_DIR:-/run/secrets/agora-gateway/}
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
+      # Invitation links point at the public web app; SMTP is optional — with no
+      # relay the endpoints return the setup link instead of mailing it.
+      GATEWAY_APP_URL: ${GATEWAY_APP_URL:-https://localhost}
+      GATEWAY_INVITE_EXPIRY_HOURS: ${GATEWAY_INVITE_EXPIRY_HOURS:-48}
+      GATEWAY_SMTP_HOST: ${GATEWAY_SMTP_HOST:-}
+      GATEWAY_SMTP_PORT: ${GATEWAY_SMTP_PORT:-587}
+      GATEWAY_SMTP_USERNAME: ${GATEWAY_SMTP_USERNAME:-}
+      GATEWAY_SMTP_PASSWORD: ${GATEWAY_SMTP_PASSWORD:-}
+      GATEWAY_SMTP_FROM: ${GATEWAY_SMTP_FROM:-}
       GATEWAY_JWT_TTL_MINUTES: ${GATEWAY_JWT_TTL_MINUTES:-15}
       GATEWAY_JWT_REFRESH_TTL_DAYS: ${GATEWAY_JWT_REFRESH_TTL_DAYS:-7}
       GATEWAY_JWT_SECURE_COOKIES: ${GATEWAY_JWT_SECURE_COOKIES:-true}
