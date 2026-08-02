@@ -120,6 +120,15 @@ from src.sync_status import (
     _resolve as _sync_resolve,
 )
 from src.run_registry import selected_run_registry_backend as _selected_run_registry_backend
+from src.outlook_oauth import (
+    OUTLOOK_SCOPES,
+    build_authorization_url as build_outlook_authorization_url,
+    build_state as build_outlook_oauth_state,
+    exchange_code_for_token as exchange_outlook_oauth_code,
+    revoke_outlook_token,
+    validate_state as validate_outlook_oauth_state,
+)
+from src.mail.setting import get_mail_provider, set_mail_provider
 from src.gmail_oauth import (
     build_authorization_url as build_gmail_authorization_url,
     build_state as build_gmail_oauth_state,
@@ -403,6 +412,13 @@ class GmailConnectStartResponse(BaseModel):
     agent_instance_id: str
     scopes: list[str]
     expires_in_seconds: int = 600
+
+
+class ConnectTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    mailbox: str = ""
+    error: str = ""
 
 
 class GmailConnectCallbackResponse(BaseModel):
@@ -1404,21 +1420,126 @@ async def gmail_connect_start(instance_id: str, request: Request) -> GmailConnec
     )
 
 
-def _gmail_callback_redirect(agent_instance_id: str | None, status: str, message: str = "") -> RedirectResponse:
+@app.get(
+    "/agent-instances/{instance_id}/connect/outlook/start",
+    response_model=GmailConnectStartResponse,
+)
+async def outlook_connect_start(instance_id: str, request: Request) -> GmailConnectStartResponse:
+    """Begin the Microsoft consent flow — the Outlook twin of the Gmail start."""
+    user_id = _request_user_id(request) or current_user_id()
+    mailbox_identity = request.query_params.get("mailbox_identity") or ""
+    try:
+        state = build_outlook_oauth_state(user_id, instance_id, mailbox_identity=mailbox_identity)
+        authorization_url = build_outlook_authorization_url(state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return GmailConnectStartResponse(
+        authorization_url=authorization_url,
+        agent_instance_id=instance_id,
+        scopes=OUTLOOK_SCOPES,
+    )
+
+
+@app.get("/connect/outlook/callback")
+async def outlook_connect_callback(
+    background_tasks: BackgroundTasks, code: str | None = None, state: str | None = None
+) -> RedirectResponse:
+    if not code or not state:
+        return _oauth_callback_redirect("outlook", None, "error", "Missing Outlook OAuth code or state.")
+    payload: dict | None = None
+    try:
+        payload = validate_outlook_oauth_state(state)
+        exchange_outlook_oauth_code(code, payload, state=state)
+        with user_context(payload["user_id"]):
+            with agent_instance_context(payload["agent_instance_id"]):
+                # Record the provider before anything reads the mailbox: every
+                # later call resolves through get_provider(), which would pick
+                # Gmail by default and look for a token that does not exist.
+                set_mail_provider("outlook", payload["agent_instance_id"])
+                record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
+        if settings.setup_enabled:
+            _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
+    except (ValueError, RuntimeError) as exc:
+        print(f"api: outlook oauth callback rejected: {exc}")
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _oauth_callback_redirect("outlook", instance_id, "error", str(exc))
+    except Exception as exc:
+        print(f"api: outlook oauth callback failed: {exc!r}\n{traceback.format_exc()}")
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _oauth_callback_redirect(
+            "outlook",
+            instance_id,
+            "error",
+            f"Could not finish connecting to Microsoft ({type(exc).__name__}: {exc}). Try again.",
+        )
+    return _oauth_callback_redirect("outlook", payload["agent_instance_id"], "connected")
+
+
+@app.post("/disconnect/outlook", status_code=200)
+async def disconnect_outlook() -> dict:
+    """Delete the stored Outlook token for the current agent instance.
+
+    Microsoft has no per-token revoke endpoint, so this removes our copy; the
+    directory-side grant survives until the user revokes it in their account.
+    """
+    user_id = current_user_id()
+    agent_instance_id = current_agent_instance_id()
+    removed = revoke_outlook_token(user_id, agent_instance_id)
+    uid, iid = _sync_resolve(user_id, agent_instance_id)
+    patch = {"connection_status": "disconnected", "sync_mode": "idle"}
+    if _selected_run_registry_backend() == "postgres":
+        _sync_pg_update(uid, iid, patch)
+    else:
+        _sync_json_update(uid, iid, patch)
+    return {"disconnected": removed, "user_id": user_id, "agent_instance_id": agent_instance_id}
+
+
+@app.post("/connect/test", response_model=ConnectTestResponse)
+async def connect_test() -> ConnectTestResponse:
+    """Round-trip the configured mailbox and report what came back.
+
+    Answers "is this mailbox actually reachable right now" without waiting for
+    the next poll cycle. The result is recorded through the normal sync status
+    path so the failure reason shows up wherever connection state is displayed.
+    """
+    provider = get_provider()
+    result = await asyncio.to_thread(provider.probe)
+    if result.get("ok"):
+        record_sync_success("probe")
+    else:
+        record_sync_failure(result.get("error") or "mailbox unreachable")
+    return ConnectTestResponse(
+        ok=bool(result.get("ok")),
+        provider=provider.name,
+        mailbox=result.get("mailbox") or "",
+        error=result.get("error") or "",
+    )
+
+
+def _oauth_callback_redirect(
+    provider: str, agent_instance_id: str | None, status: str, message: str = ""
+) -> RedirectResponse:
     """Send OAuth completion back into the app.
 
-    The frontend opens Google in a named popup and keeps the main setup page
-    visible. This redirect may therefore land inside the popup; the main
+    The frontend opens the provider in a named popup and keeps the main setup
+    page visible. This redirect may therefore land inside the popup; the main
     window learns completion through polling, and the query parameters remain
     useful if the callback ever lands in the main workspace window.
+
+    The `gmail=` query key is kept for both providers: the frontend already
+    keys off it, and renaming it would break in-flight popups on deploy.
     """
-    target = "/oauth/gmail/callback"
+    target = f"/oauth/{provider}/callback"
     query = f"gmail={status}"
     if agent_instance_id:
         query += f"&agent_instance_id={quote(agent_instance_id)}"
     if message:
         query += f"&message={quote(message)}"
     return RedirectResponse(f"{settings.app_base_url}{target}?{query}", status_code=303)
+
+
+def _gmail_callback_redirect(agent_instance_id: str | None, status: str, message: str = "") -> RedirectResponse:
+    return _oauth_callback_redirect("gmail", agent_instance_id, status, message)
 
 
 def _start_setup_after_connect(background_tasks: BackgroundTasks, user_id: str, agent_instance_id: str) -> None:
@@ -1450,6 +1571,7 @@ async def gmail_connect_callback(
         exchange_gmail_oauth_code(code, payload)
         with user_context(payload["user_id"]):
             with agent_instance_context(payload["agent_instance_id"]):
+                set_mail_provider("gmail", payload["agent_instance_id"])
                 record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
         if settings.setup_enabled:
             _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
@@ -3452,8 +3574,13 @@ async def sync_unread(request: Request, limit: int | None = Query(default=None, 
 
 @app.get("/sync/status")
 async def sync_status() -> dict:
-    """Return the Gmail sync observability state for the current agent instance."""
-    return get_sync_status()
+    """Return the mailbox sync observability state for the current agent instance.
+
+    Carries `provider` so callers — the web app and the gateway's mailbox
+    overview — can render and act on the right connect flow without the gateway
+    having to keep its own copy of that setting.
+    """
+    return {**get_sync_status(), "provider": get_mail_provider(current_agent_instance_id())}
 
 
 @app.post("/sync/pause", status_code=200)

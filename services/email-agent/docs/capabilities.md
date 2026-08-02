@@ -147,3 +147,6 @@ authorization, HITL, dry-run, and trusted message context all still apply.
   fields are untrusted-content-derived.
 - Auto-organization can perform reversible allowed actions without human approval when enabled.
 - In the Phase 4 compose stack, security rate limits use Redis; local dev can still use the in-memory backend.
+- Every capability tool above runs through the mail provider layer, so it works on Gmail and
+  Outlook alike — see `docs/mail-providers.md` for the mapping and for the Outlook caveats
+  (no push notifications, no live verification yet).

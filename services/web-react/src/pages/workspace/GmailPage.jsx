@@ -11,6 +11,7 @@ import {
   useGmailPause,
   useGmailResume,
   useGmailDisconnect,
+  useMailboxConnectionTest,
   useRuntimeSettingsQuery,
   useSaveRuntimeSettings
 } from '../../api/queries';
@@ -51,10 +52,15 @@ export default function GmailPage() {
   const pause = useGmailPause();
   const resume = useGmailResume();
   const disconnect = useGmailDisconnect();
+  const testConnection = useMailboxConnectionTest();
   const runtimeSettings = useRuntimeSettingsQuery();
   const saveRuntimeSettings = useSaveRuntimeSettings();
 
   const status = query.data || {};
+  // The agent owns the provider setting — it is the component holding the token.
+  // Anything unset reads as Gmail, which is what every pre-Outlook instance is.
+  const provider = status.provider === 'outlook' ? 'outlook' : 'gmail';
+  const providerLabel = provider === 'outlook' ? 'Outlook' : 'Gmail';
   const connected = status.connection_status === 'connected';
   const wasConnected = status.connection_status === 'disconnected' || status.connection_status === 'error';
 
@@ -91,30 +97,49 @@ export default function GmailPage() {
     }
   };
 
-  // Open Google OAuth in a popup and keep the workspace visible. Do not use
+  // Open provider OAuth in a popup and keep the workspace visible. Do not use
   // noopener here: Chromium returns null for the popup handle, which can make
   // popup-blocker detection look like a failure even after the window opened.
   const handleConnect = async () => {
     if (!instanceId) return;
-    const oauthPopup = window.open('', 'agora-gmail-connect', 'popup=yes,width=520,height=720');
+    const oauthPopup = window.open('', 'agora-mailbox-connect', 'popup=yes,width=520,height=720');
     if (!oauthPopup) {
-      setStatus('Popup bloquée. Autorisez les popups pour ce site puis cliquez de nouveau sur « Connecter Gmail ».', 'error');
+      setStatus(`Popup bloquée. Autorisez les popups pour ce site puis cliquez de nouveau sur « Connecter ${providerLabel} ».`, 'error');
       return;
     }
-    oauthPopup.document.write('<!doctype html><title>Connexion Gmail</title><body style="font-family:system-ui,sans-serif;padding:24px;background:#0b1326;color:#dae2fd">Ouverture du consentement Google...</body>');
+    oauthPopup.document.write(`<!doctype html><title>Connexion ${providerLabel}</title><body style="font-family:system-ui,sans-serif;padding:24px;background:#0b1326;color:#dae2fd">Ouverture du consentement ${providerLabel}...</body>`);
     setConnecting(true);
-    setVisual({ mode: 'syncing', message: `Ouverture du consentement Google pour ${currentInstance?.display_name || instanceId}...` });
-    setStatus(`Ouverture du consentement Google pour ${currentInstance?.display_name || instanceId}...`, 'ok');
+    setVisual({ mode: 'syncing', message: `Ouverture du consentement ${providerLabel} pour ${currentInstance?.display_name || instanceId}...` });
+    setStatus(`Ouverture du consentement ${providerLabel} pour ${currentInstance?.display_name || instanceId}...`, 'ok');
     try {
       const mailbox = currentInstance?.mailbox_identity ? `?mailbox_identity=${encodeURIComponent(currentInstance.mailbox_identity)}` : '';
-      const result = await api(`/api/agent/agent-instances/${encodeURIComponent(instanceId)}/connect/gmail/start${mailbox}`);
+      const result = await api(`/api/agent/agent-instances/${encodeURIComponent(instanceId)}/connect/${provider}/start${mailbox}`);
       oauthPopup.location.href = result.authorization_url;
       oauthPopup.focus();
     } catch (error) {
       oauthPopup.close();
       setConnecting(false);
-      setVisual({ mode: 'error', message: `Impossible de démarrer la connexion Gmail : ${error.message}` });
-      setStatus(`Impossible de démarrer la connexion Gmail : ${error.message}`, 'error');
+      setVisual({ mode: 'error', message: `Impossible de démarrer la connexion ${providerLabel} : ${error.message}` });
+      setStatus(`Impossible de démarrer la connexion ${providerLabel} : ${error.message}`, 'error');
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setVisual({ mode: 'syncing', message: `Test de la connexion ${providerLabel} en cours...` });
+    setStatus(`Test de la connexion ${providerLabel}...`, 'ok');
+    try {
+      const result = await testConnection.mutateAsync();
+      if (result.ok) {
+        const mailbox = result.mailbox ? ` (${result.mailbox})` : '';
+        setStatus(`Connexion ${providerLabel} opérationnelle${mailbox}.`, 'ok');
+        setVisual({ mode: 'ok', message: `La boîte répond${mailbox}.` });
+      } else {
+        setStatus(`La boîte ne répond pas : ${result.error}`, 'error');
+        setVisual({ mode: 'error', message: `La boîte ne répond pas : ${result.error}` });
+      }
+    } catch (error) {
+      setStatus(`Impossible de tester la connexion : ${error.message}`, 'error');
+      setVisual({ mode: 'error', message: `Impossible de tester la connexion : ${error.message}` });
     }
   };
 
@@ -151,7 +176,7 @@ export default function GmailPage() {
 
   const handleDisconnect = async () => {
     const confirmed = await confirmDialog({
-      title: 'Déconnecter Gmail',
+      title: `Déconnecter ${providerLabel}`,
       message: 'Supprime le jeton OAuth stocké pour cette instance. L’agent cessera de synchroniser jusqu’à la reconnexion.',
       confirmLabel: 'Déconnecter',
       confirmIcon: 'link_off',
@@ -159,10 +184,10 @@ export default function GmailPage() {
     });
     if (!confirmed) return;
     try {
-      await disconnect.mutateAsync();
-      setStatus('Gmail déconnecté. Jeton OAuth supprimé.', 'ok');
+      await disconnect.mutateAsync(provider);
+      setStatus(`${providerLabel} déconnecté. Jeton OAuth supprimé.`, 'ok');
     } catch (error) {
-      setStatus(`Impossible de déconnecter Gmail : ${error.message}`, 'error');
+      setStatus(`Impossible de déconnecter ${providerLabel} : ${error.message}`, 'error');
     }
   };
 
@@ -177,9 +202,9 @@ export default function GmailPage() {
             <h2>Connexion et synchronisation Gmail</h2>
             <div className="meta"><span>{currentInstance?.display_name || instanceId}</span></div>
           </div>
-          <button className="primary" type="button" disabled={connected || connecting} title={connected ? 'Gmail est déjà connecté pour cette boîte' : 'Connecter Gmail'} onClick={handleConnect}>
+          <button className="primary" type="button" disabled={connected || connecting} title={connected ? `${providerLabel} est déjà connecté pour cette boîte` : `Connecter ${providerLabel}`} onClick={handleConnect}>
             <span className="material-symbols-outlined" aria-hidden="true">add_link</span>
-            <span>{connected ? 'Gmail connecté' : (wasConnected ? 'Reconnecter Gmail' : 'Connecter Gmail')}</span>
+            <span>{connected ? `${providerLabel} connecté` : (wasConnected ? `Reconnecter ${providerLabel}` : `Connecter ${providerLabel}`)}</span>
           </button>
         </div>
         <div className="notice">
@@ -194,6 +219,7 @@ export default function GmailPage() {
           </div>
         </div>
         <div className="summary-grid">
+          <div><span>Fournisseur</span><strong>{providerLabel}</strong></div>
           <div><span>Connexion</span><strong className={connectionStatusClass(status.connection_status)}>{status.connection_status ? statusLabelFr(status.connection_status) : '—'}</strong></div>
           <div><span>Mode de synchro</span><strong>{status.sync_mode || '—'}</strong></div>
           <div><span>Dernier succès</span><strong>{formatDateTimeFr(status.last_success_at)}</strong></div>
@@ -219,8 +245,12 @@ export default function GmailPage() {
           <button type="button" onClick={() => query.refetch()}>
             <span className="material-symbols-outlined" aria-hidden="true">refresh</span><span>Actualiser le statut</span>
           </button>
+          <button type="button" disabled={testConnection.isPending} onClick={handleTestConnection}>
+            <span className="material-symbols-outlined" aria-hidden="true">network_check</span>
+            <span>{testConnection.isPending ? 'Test en cours…' : 'Tester la connexion'}</span>
+          </button>
           <button className="danger" type="button" onClick={handleDisconnect}>
-            <span className="material-symbols-outlined" aria-hidden="true">link_off</span><span>Déconnecter Gmail</span>
+            <span className="material-symbols-outlined" aria-hidden="true">link_off</span><span>Déconnecter {providerLabel}</span>
           </button>
         </div>
         {canManage && runtimeForm ? (
