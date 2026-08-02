@@ -266,6 +266,63 @@ class ProxyControllerTest {
     }
 
     @Test
+    void proxy_outlook_oauth_start_requires_a_role_and_forwards() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/agent-instances/default-email-agent/connect/outlook/start"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"authorization_url\":\"https://login.microsoftonline.example\",\"agent_instance_id\":\"default-email-agent\",\"scopes\":[]}")));
+
+        mockMvc.perform(get("/api/agent/agent-instances/default-email-agent/connect/outlook/start")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authorization_url").value("https://login.microsoftonline.example"));
+
+        wireMock.verify(getRequestedFor(urlEqualTo("/agent-instances/default-email-agent/connect/outlook/start"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+    }
+
+    @Test
+    void proxy_outlook_oauth_start_rejects_an_anonymous_caller() throws Exception {
+        mockMvc.perform(get("/api/agent/agent-instances/default-email-agent/connect/outlook/start"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void proxy_outlook_oauth_callback_forwards_without_jwt() throws Exception {
+        // Microsoft redirects the browser here with no Bearer token; the signed
+        // OAuth state is what authenticates it, same as the Gmail callback.
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/connect/outlook/callback?code=abc&state=signed"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"status\":\"connected\"}")));
+
+        mockMvc.perform(get("/api/agent/connect/outlook/callback?code=abc&state=signed"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("connected"));
+
+        wireMock.verify(getRequestedFor(urlEqualTo("/connect/outlook/callback?code=abc&state=signed")));
+    }
+
+    @Test
+    void proxy_connect_test_requires_a_role_and_forwards() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/connect/test"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ok\":true,\"provider\":\"gmail\",\"mailbox\":\"ceo@example.com\",\"error\":\"\"}")));
+
+        mockMvc.perform(post("/api/agent/connect/test")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mailbox").value("ceo@example.com"));
+
+        mockMvc.perform(post("/api/agent/connect/test"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void proxy_gmail_webhook_forwards_without_jwt() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/webhooks/gmail"))
                 .willReturn(aResponse()

@@ -358,7 +358,22 @@ export function useGmailDisconnect() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: () => api('/api/agent/disconnect/gmail', { method: 'POST' }),
+    // The route is provider-specific: deleting the wrong provider's token would
+    // report success while leaving the mailbox connected.
+    mutationFn: (provider = 'gmail') =>
+      api(`/api/agent/disconnect/${provider === 'outlook' ? 'outlook' : 'gmail'}`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}
+
+export function useMailboxConnectionTest() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/connect/test', { method: 'POST' }),
+    // The probe records its outcome server-side, so the status card is stale
+    // the moment it returns.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
   });
 }

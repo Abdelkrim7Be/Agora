@@ -86,6 +86,7 @@ export default function App() {
                     <Routes>
                       <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
                       <Route path="/oauth/gmail/callback" element={<OAuthCallbackPage />} />
+                      <Route path="/oauth/outlook/callback" element={<OAuthCallbackPage />} />
 
                       {/* Platform views */}
                       <Route path="/" element={<ProtectedRoute><PlatformLayout /></ProtectedRoute>}>

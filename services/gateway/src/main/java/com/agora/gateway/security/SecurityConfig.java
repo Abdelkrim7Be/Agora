@@ -75,9 +75,16 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/disconnect/gmail").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/style").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/memory").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/disconnect/outlook").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/webhooks/gmail").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/connect/gmail/callback").permitAll()
+                // The provider redirects the browser here with no Bearer token; the
+                // signed OAuth state is what authenticates the callback, exactly as
+                // for Gmail.
+                .requestMatchers(HttpMethod.GET, "/api/agent/connect/outlook/callback").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/gmail/start").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/agent-instances/*/connect/outlook/start").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/connect/test").hasAnyRole("OWNER", "APPROVER", "ADMIN")
                 .requestMatchers("/api/agent/campaigns/**").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/stream").hasAnyRole("OWNER", "VIEWER", "ADMIN")
