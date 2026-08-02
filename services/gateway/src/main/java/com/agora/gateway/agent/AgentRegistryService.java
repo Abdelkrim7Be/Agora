@@ -196,6 +196,45 @@ public class AgentRegistryService {
         }
     }
 
+    /**
+     * Mailbox connection state for the overview console.
+     *
+     * Degrades per instance rather than per request: a mailbox whose agent is
+     * unreachable comes back with `reachable=false` and a reason, so one broken
+     * mailbox shows as one bad row instead of failing the whole page.
+     */
+    public Map<String, Object> mailboxStatus(AgentInstance instance, String username) {
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("provider", "gmail");
+        if ("inactive".equalsIgnoreCase(instance.getStatus())) {
+            status.put("reachable", false);
+            status.put("connection_status", "inactive");
+            status.put("pending_drafts", 0);
+            return status;
+        }
+        try {
+            JsonNode root = getJson(instance, username, "/sync/status");
+            status.put("provider", root.path("provider").asText("gmail"));
+            status.put("connection_status", root.path("connection_status").asText("unknown"));
+            status.put("sync_mode", root.path("sync_mode").asText(""));
+            status.put("paused", root.path("paused").asBoolean(false));
+            status.put("last_success_at", nullableText(root.path("last_success_at")));
+            status.put("last_failure_at", nullableText(root.path("last_failure_at")));
+            status.put("last_error", nullableText(root.path("last_error")));
+            status.put("reachable", true);
+        } catch (RuntimeException ex) {
+            status.put("reachable", false);
+            status.put("connection_status", "unknown");
+            status.put("error", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+        }
+        status.put("pending_drafts", safePendingDrafts(instance, username));
+        return status;
+    }
+
+    private static String nullableText(JsonNode node) {
+        return node.isMissingNode() || node.isNull() ? null : node.asText();
+    }
+
     private int safePendingDrafts(AgentInstance instance, String username) {
         try {
             JsonNode root = getJson(instance, username, "/drafts");

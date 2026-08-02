@@ -69,6 +69,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/users/*/enable").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users/*/invite").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agents").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/mailboxes").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/agent-instances/*").hasRole("ADMIN")

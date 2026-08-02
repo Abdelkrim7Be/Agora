@@ -6,7 +6,9 @@ export function requestHeaders(token, instanceId, path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  if (path.startsWith('/api/agent') && instanceId) {
+  // The selected instance is the default, but a caller acting on a specific
+  // mailbox (the overview console tests each one in turn) may name its own.
+  if (path.startsWith('/api/agent') && !headers['X-Agora-Agent-Instance'] && instanceId) {
     headers['X-Agora-Agent-Instance'] = instanceId;
   }
   return headers;

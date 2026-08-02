@@ -375,6 +375,33 @@ export function useGmailDisconnect() {
   });
 }
 
+export function useMailboxesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['mailboxes'],
+    queryFn: () => api('/mailboxes'),
+    enabled: Boolean(token),
+    // The gateway fans out to every mailbox, so this is not free; refresh on a
+    // slow beat and let the page's own button cover "right now".
+    refetchInterval: 60000,
+  });
+}
+
+/** Probe one specific mailbox, whichever instance is currently selected. */
+export function useTestMailboxConnection() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (instanceId) =>
+      api('/api/agent/connect/test', {
+        method: 'POST',
+        headers: { 'X-Agora-Agent-Instance': instanceId },
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mailboxes'] }),
+  });
+}
+
 export function useMailboxConnectionTest() {
   const { api } = useApi();
   const queryClient = useQueryClient();

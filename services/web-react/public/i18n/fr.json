@@ -1,6 +1,7 @@
 {
   "nav": {
     "instances": "Tableau de bord",
+    "mailboxes": "Mes boîtes",
     "agentTypes": "Catalogue d’agents",
     "health": "Santé système",
     "audit": "Audit & conformité",
@@ -157,6 +158,11 @@
       "title": "Filtre anti-bruit",
       "kicker": "Tri automatique",
       "description": "Ce qui est écarté avant toute analyse : diffusions, alertes et réponses automatiques."
+    },
+    "mailboxes": {
+      "title": "Mes boîtes",
+      "kicker": "Supervision",
+      "description": "L’état de connexion de chaque boîte à laquelle vous avez accès, sans avoir à ouvrir chaque espace de travail."
     }
   },
   "global": {
