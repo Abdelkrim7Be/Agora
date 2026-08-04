@@ -120,6 +120,30 @@ class ProxyControllerTest {
 
 
     @Test
+    void proxy_refuses_an_instance_the_caller_has_no_grant_on() throws Exception {
+        // Regression: instances were created with allowed_roles="owner", and
+        // effectiveRole() treated allowed_roles as a grant. Any account holding the
+        // global "owner" role could therefore read any other account's mailbox by
+        // naming it in X-Agora-Agent-Instance — confirmed against a live stack,
+        // returning another tenant's real inbox messages.
+        String body = objectMapper.writeValueAsString(Map.of(
+                "id", "private-mailbox",
+                "agent_type", "email-agent",
+                "display_name", "Private Mailbox"
+        ));
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/agent/runs")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .header("X-Agora-Agent-Instance", "private-mailbox"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void proxy_forwards_selected_visible_agent_instance() throws Exception {
         String responseBody = "{\"run_id\":\"abc123\",\"status\":\"completed\"}";
 
@@ -140,6 +164,15 @@ class ProxyControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated());
+
+        // Instances are private to their creator now, so the owner reaching this
+        // admin-created instance needs an explicit grant. Without one the request
+        // is refused — see proxy_refuses_an_instance_the_caller_has_no_grant_on.
+        mockMvc.perform(post("/agent-instances/ceo-email-agent/grants")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"user_id\":\"owner\",\"role\":\"owner\"}"))
+                .andExpect(status().is2xxSuccessful());
 
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + token)
