@@ -80,3 +80,25 @@ def test_dlq_api_requeue_processes_once(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.json()["status"] == "requeued"
     assert calls == [entry["entry_id"]]
+
+
+def test_optional_timestamps_are_null_not_empty_strings():
+    """Postgres timestamptz rejects '', which silently broke every DLQ write."""
+    from src.dlq import _normalize_entry
+
+    entry = _normalize_entry({"message_id": "m1", "reason": "terminal_failure"})
+    assert entry["requeued_at"] is None
+    assert entry["resolved_at"] is None
+    # The required timestamp is still populated.
+    assert entry["timestamp"]
+
+
+def test_optional_timestamps_preserve_a_real_value():
+    from datetime import datetime, timezone
+
+    from src.dlq import _normalize_entry
+
+    when = datetime(2026, 8, 1, 12, 30, tzinfo=timezone.utc)
+    entry = _normalize_entry({"message_id": "m1", "requeued_at": when, "resolved_at": "2026-08-02T09:00:00+00:00"})
+    assert entry["requeued_at"] == "2026-08-01T12:30:00+00:00"
+    assert entry["resolved_at"] == "2026-08-02T09:00:00+00:00"

@@ -37,6 +37,16 @@ class Settings:
     openai_api_key: str = get_secret("AGENT", "OPENAI_API_KEY")
     anthropic_api_key: str = get_secret("AGENT", "ANTHROPIC_API_KEY")
     llm_profile: str = os.getenv("AGENT_LLM_PROFILE", "local")
+    # Send redacted content to the drafting model and restore the real values
+    # just before the action runs. Defaults on for any non-local profile, since
+    # that is exactly when mail content leaves the host.
+    redact_for_model: bool = (
+        os.getenv("AGENT_REDACT_FOR_MODEL", "").lower() == "true"
+        or (
+            os.getenv("AGENT_REDACT_FOR_MODEL", "") == ""
+            and os.getenv("AGENT_LLM_PROFILE", "local") not in ("local", "local-host", "local-docker", "safe")
+        )
+    )
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
     llm_streaming_enabled: bool = _env_bool("AGENT_LLM_STREAMING_ENABLED", "true")
     roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")
@@ -45,7 +55,23 @@ class Settings:
     gmail_token_path: str = os.getenv("GMAIL_TOKEN_PATH", "token.json")
     gmail_token_store_path: str = os.getenv("GMAIL_TOKEN_STORE_PATH", "logs/gmail_tokens.json")
     gmail_oauth_redirect_uri: str = os.getenv("GMAIL_OAUTH_REDIRECT_URI", "http://localhost:8080/api/agent/connect/gmail/callback")
+    # Where to send the browser after the Gmail OAuth callback finishes. Empty
+    # means "same origin, relative redirect" — correct in prod, where Traefik
+    # puts the web app and gateway behind one public origin. Local dev splits
+    # them across ports, so the override compose sets this explicitly.
+    app_base_url: str = os.getenv("AGENT_APP_BASE_URL", "").rstrip("/")
     gmail_oauth_state_secret: str = os.getenv("GMAIL_OAUTH_STATE_SECRET", "")
+    # Microsoft Graph. Unset by default — an instance only reaches this path
+    # once its provider setting says "outlook", so Gmail-only deployments never
+    # need an Azure app registration. "common" accepts both work/school and
+    # personal accounts; pin it to a directory id for single-tenant.
+    outlook_client_id: str = os.getenv("OUTLOOK_CLIENT_ID", "")
+    outlook_client_secret: str = os.getenv("OUTLOOK_CLIENT_SECRET", "")
+    outlook_tenant: str = os.getenv("OUTLOOK_TENANT", "common").strip() or "common"
+    outlook_oauth_redirect_uri: str = os.getenv(
+        "OUTLOOK_OAUTH_REDIRECT_URI",
+        "http://localhost:8080/api/agent/connect/outlook/callback",
+    )
     token_encryption_key_file: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY_FILE", "")
     token_encryption_key: str = os.getenv("AGENT_TOKEN_ENCRYPTION_KEY", "")
     token_encryption_required: bool = _env_bool("AGENT_TOKEN_ENCRYPTION_REQUIRED", "false")
@@ -65,6 +91,17 @@ class Settings:
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
+    default_send_mode: str = os.getenv("AGENT_DEFAULT_SEND_MODE", "simulation").strip().lower()
+    # Hard cap on who the agent may ever send real mail to, enforced at the Gmail
+    # send helpers themselves — below the security service, below dry-run, below
+    # any policy or model decision. Empty (the default) means no restriction;
+    # set it when running live tests so an unattended agent cannot reach anyone
+    # outside a known set of mailboxes.
+    outbound_allowlist: frozenset[str] = frozenset(
+        entry.strip().lower()
+        for entry in os.getenv("AGENT_OUTBOUND_ALLOWLIST", "").split(",")
+        if entry.strip()
+    )
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
     # Durable state files — shared by the API and the poller so a paused run started
@@ -77,7 +114,25 @@ class Settings:
     # Security service integration (off by default — no behavior change until opted in).
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
-    security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "10"))
+    # 10s was tuned for a hosted classifier call; against a single shared local
+    # Ollama instance that's also serving triage/draft/persona generation, the
+    # classifier queues behind whatever else is running and 10s isn't enough —
+    # every email hit classifier_unavailable, got parked at security_hold, and
+    # was reprocessed as a brand-new run every poll cycle, forever, without
+    # ever actually completing.
+    security_timeout: float = float(os.getenv("AGENT_SECURITY_TIMEOUT", "180"))
+    # Put a drafted reply through the full quarantined classifier before it
+    # becomes approvable. /sanitize skips that classifier when no heuristic
+    # keyword fires, so without this a carefully worded injection is never
+    # actually classified. Scoped to messages that produced a draft, which keeps
+    # the slow local model off the rest of the mailbox.
+    security_deep_check_drafts: bool = _env_bool("AGENT_SECURITY_DEEP_CHECK_DRAFTS", "true")
+    # Domains treated as "internal" for a category's external_send_allowed=false
+    # guard (comma-separated, case-insensitive). Independent of security_enabled —
+    # this is a local workflow-policy rule, not the external security service.
+    internal_domains: tuple[str, ...] = tuple(
+        d.strip().lower() for d in os.getenv("AGENT_INTERNAL_DOMAINS", "").split(",") if d.strip()
+    )
 
     # Pending-approval email notifications (off by default). Routes through the same
     # connected Gmail mailbox as agent sends; recipient resolves via the role directory.
@@ -142,6 +197,27 @@ class Settings:
     job_queue_stale_seconds: float = float(os.getenv("AGENT_JOB_QUEUE_STALE_SECONDS", "300"))
     job_queue_max_attempts: int = int(os.getenv("AGENT_JOB_QUEUE_MAX_ATTEMPTS", "5"))
     job_queue_poll_seconds: float = float(os.getenv("AGENT_JOB_QUEUE_POLL_SECONDS", "2"))
+
+    # Instance onboarding pipeline (Phase 6 delta — see instance_setup.py).
+    setup_enabled: bool = _env_bool("AGENT_SETUP_PIPELINE_ENABLED", "true")
+    # Onboarding reads the mailbox once and everything downstream — contacts,
+    # categories, style, persona, the first drafts — is built from that single
+    # sample. 50 was too thin a slice to characterise a real mailbox, so the
+    # workspace opened on a directory and a style profile drawn from a fortnight
+    # of mail. Fetching headers for 200 is a handful of batched calls; only the
+    # backlog triage below spends model time per message.
+    setup_recent_limit: int = int(os.getenv("AGENT_SETUP_RECENT_LIMIT", "200"))
+    setup_backlog_limit: int = int(os.getenv("AGENT_SETUP_BACKLOG_LIMIT", "20"))
+    setup_sent_sample: int = int(os.getenv("AGENT_SETUP_SENT_SAMPLE", "50"))
+    setup_llm_step_timeout_seconds: float = float(os.getenv("AGENT_SETUP_LLM_STEP_TIMEOUT_SECONDS", "120"))
+    setup_backlog_message_timeout_seconds: float = float(os.getenv("AGENT_SETUP_BACKLOG_MESSAGE_TIMEOUT_SECONDS", "90"))
+    setup_stale_seconds: float = float(os.getenv("AGENT_SETUP_STALE_SECONDS", "300"))
+    setup_max_attempts: int = int(os.getenv("AGENT_SETUP_MAX_ATTEMPTS", "3"))
+    instance_setup_path: str = os.getenv("AGENT_INSTANCE_SETUP_PATH", "logs/instance_setup.json")
+
+    # In-app notification centre (Phase 6 delta — see notification_store.py).
+    notification_store_path: str = os.getenv("AGENT_NOTIFICATION_STORE_PATH", "logs/notifications.json")
+    notification_retention_days: int = int(os.getenv("AGENT_NOTIFICATION_RETENTION_DAYS", "90"))
 
 
 settings = Settings()

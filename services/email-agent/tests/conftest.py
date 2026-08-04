@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from contextlib import contextmanager
+
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -127,6 +129,44 @@ def _send_mode_follows_dry_run(monkeypatch):
     monkeypatch.setattr(sm, "get_send_mode", lambda agent_instance_id=None: "live")
 
 
+class FakeProvider:
+    """Stand-in for a MailProvider, built from the handful of methods a test cares about.
+
+    Any method the test did not supply raises, so a call site reaching for a
+    mailbox operation the test did not expect fails loudly instead of silently
+    returning a Mock.
+    """
+
+    name = "gmail"
+
+    def __init__(self, **methods):
+        for attribute, value in methods.items():
+            setattr(self, attribute, value)
+
+    def __getattr__(self, item):
+        raise AssertionError(f"FakeProvider was asked for an unstubbed method: {item}")
+
+
+def patch_provider(monkeypatch, module, **methods) -> FakeProvider:
+    """Point one module's `get_provider` at a FakeProvider and return it."""
+    provider = FakeProvider(**methods)
+    monkeypatch.setattr(module, "get_provider", lambda *args, **kwargs: provider)
+    return provider
+
+
+class _UnusedToolLLM:
+    """Stands in for the drafting model on a path that should never reach it."""
+
+    def invoke(self, *_args, **_kwargs):
+        raise AssertionError(
+            "the drafting LLM was called, but this test declared no tool_sequence. "
+            "Pass fake_llms(tool_sequence=[...]) if the path really drafts."
+        )
+
+    def bind_tools(self, *_a, **_k):
+        return self
+
+
 @pytest.fixture
 def fake_llms(monkeypatch):
     """Patch the graph's router, tool LLM, and memory LLM for offline deterministic tests."""
@@ -140,8 +180,15 @@ def fake_llms(monkeypatch):
         import src.graph as g
 
         monkeypatch.setattr(g, "llm_router", _FakeRouter(classification))
+        # Always replace the tool LLM, even when the test supplies no sequence.
+        # Leaving it real meant a test that only faked the router still reached
+        # whatever endpoint the developer had running: green here, "Connection
+        # error" in CI. A test that needs the drafting model passes a sequence;
+        # anything else gets a stub that says so.
         if tool_sequence is not None:
             monkeypatch.setattr(g, "llm_with_tools", _FakeToolLLM(tool_sequence))
+        else:
+            monkeypatch.setattr(g, "llm_with_tools", _UnusedToolLLM())
         monkeypatch.setattr(g, "llm_memory", _FakeMemoryLLM(memory_preference))
         monkeypatch.setattr(
             g,
@@ -208,3 +255,64 @@ def mock_mailbox() -> list[dict]:
 @pytest.fixture
 def empty_mailbox() -> list[dict]:
     return []
+
+
+@contextmanager
+def reply_to(address: str | None):
+    """Set the trusted reply recipient tool_node would supply for a message.
+
+    Send tools take no `to` argument: the recipient comes from graph context so
+    that untrusted mail cannot redirect it. Tests calling a tool directly have
+    to stand in for tool_node and set that context.
+    """
+    from src.capabilities import current_reply_to
+
+    token = current_reply_to.set(address)
+    try:
+        yield
+    finally:
+        current_reply_to.reset(token)
+
+
+@contextmanager
+def route_targets(*addresses: str):
+    """Set the workflow-configured recipients tool_node would supply."""
+    from src.capabilities import current_route_targets
+
+    token = current_route_targets.set(tuple(addresses))
+    try:
+        yield
+    finally:
+        current_route_targets.reset(token)
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_llm_calls(request, monkeypatch):
+    """Fail loudly instead of quietly calling a real model.
+
+    `fake_llms` is opt-in, so a test that forgot it used whatever LLM endpoint the
+    developer happened to have running. The suite then passed on a laptop with
+    Ollama up and failed in CI with a bare "Connection error", and a green local
+    run meant nothing. Any test that genuinely needs a model must ask for
+    `fake_llms` (or patch the binding itself); everything else gets a stub that
+    explains what is missing.
+    """
+    if "fake_llms" in request.fixturenames or "allow_real_llm" in request.keywords:
+        return
+
+    import src.graph as g
+
+    class _Unstubbed:
+        def __init__(self, attr): self._attr = attr
+        def _fail(self, *_a, **_k):
+            raise AssertionError(
+                f"{request.node.name} invoked the real {self._attr}. Add the "
+                "'fake_llms' fixture, or mark the test with @pytest.mark.allow_real_llm."
+            )
+        invoke = __call__ = _fail
+        def bind_tools(self, *a, **k): return self
+        def with_structured_output(self, *a, **k): return self
+
+    for attr in ("llm", "llm_router", "llm_with_tools", "llm_memory", "llm_redraft"):
+        if hasattr(g, attr):
+            monkeypatch.setattr(g, attr, _Unstubbed(attr), raising=False)

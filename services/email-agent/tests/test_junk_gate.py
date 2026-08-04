@@ -66,3 +66,100 @@ def test_partial_input_is_safe():
 def test_marketing_local_part_is_junk():
     junk, _ = is_junk(_email(author="Boutique <marketing@boutique.fr>"))
     assert junk
+
+
+def test_junk_reason_survives_into_the_run_record(tmp_path, monkeypatch):
+    """The gate's verdict has to be auditable after the fact.
+
+    A gated message is recorded as an ignored run. Without the reason there is no
+    way to tell a correct call from a false positive — which sender rule or bulk
+    header fired is exactly what an owner needs when a real message goes missing.
+    """
+    from src.config import settings
+    from src.run_registry import list_runs, upsert_run
+
+    monkeypatch.setattr(settings, "run_registry_backend", "json")
+    monkeypatch.setattr(settings, "database_url", "")
+    index = tmp_path / "runs.json"
+
+    upsert_run(
+        "run-junk-1",
+        "completed",
+        email_input={
+            "subject": "Votre newsletter",
+            "author": "news@example.com",
+            "email_id": "m_junk",
+            "category": "junk_auto",
+            "junk_reason": "header:list-unsubscribe",
+        },
+        classification="ignore",
+        path=index,
+    )
+
+    record = next(r for r in list_runs(path=index) if r["email_id"] == "m_junk")
+    assert record["junk_reason"] == "header:list-unsubscribe"
+
+
+def test_a_normal_run_carries_no_junk_reason(tmp_path, monkeypatch):
+    from src.config import settings
+    from src.run_registry import list_runs, upsert_run
+
+    monkeypatch.setattr(settings, "run_registry_backend", "json")
+    monkeypatch.setattr(settings, "database_url", "")
+    index = tmp_path / "runs.json"
+
+    upsert_run(
+        "run-normal-1",
+        "pending_approval",
+        email_input={"subject": "Devis", "author": "client@example.com", "email_id": "m_ok"},
+        classification="respond",
+        path=index,
+    )
+
+    record = next(r for r in list_runs(path=index) if r["email_id"] == "m_ok")
+    assert record["junk_reason"] is None
+
+
+# --- Block candidates derived from the mailbox (plan 4.2) ---
+
+def test_junk_suggestions_rank_real_bulk_senders():
+    from src.junk_config import JunkConfig, suggest_junk_senders
+
+    messages = (
+        [{"from": "Shop <noreply@shop.example>", "subject": f"Promo {i}"} for i in range(4)]
+        + [{"from": "News <newsletter@media.example>", "subject": "Hebdo"} for _ in range(2)]
+        + [{"from": "Sarah <sarah@client.example>", "subject": "Devis"}]
+    )
+    suggestions = suggest_junk_senders(messages, JunkConfig())
+
+    assert [s["address"] for s in suggestions] == [
+        "noreply@shop.example",
+        "newsletter@media.example",
+    ]
+    assert suggestions[0]["count"] == 4
+    assert suggestions[0]["reason"].startswith("sender:")
+    # Sample subjects help the owner recognise the sender before blocking it.
+    assert suggestions[0]["subjects"][:1] == ["Promo 0"]
+
+
+def test_junk_suggestions_skip_already_listed_senders():
+    from src.junk_config import JunkConfig, suggest_junk_senders
+
+    messages = [{"from": "Shop <noreply@shop.example>", "subject": "Promo"} for _ in range(3)]
+
+    blocked = JunkConfig(blocked_senders=["noreply@shop.example"])
+    assert suggest_junk_senders(messages, blocked) == []
+
+    by_domain = JunkConfig(blocked_domains=["shop.example"])
+    assert suggest_junk_senders(messages, by_domain) == []
+
+    # An explicitly allowed sender must never be offered as a block candidate.
+    allowed = JunkConfig(allowed_senders=["noreply@shop.example"])
+    assert suggest_junk_senders(messages, allowed) == []
+
+
+def test_junk_suggestions_ignore_ordinary_correspondents():
+    from src.junk_config import JunkConfig, suggest_junk_senders
+
+    messages = [{"from": "Sarah <sarah@client.example>", "subject": "Devis"} for _ in range(9)]
+    assert suggest_junk_senders(messages, JunkConfig()) == []

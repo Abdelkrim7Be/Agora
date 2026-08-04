@@ -41,7 +41,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",
-        "gateway.owner.password=ownerpass"
+        "gateway.owner.password=ownerpass",
+        "gateway.admin.username=admin",
+        "gateway.admin.password=adminpass"
 })
 class ProxyControllerTest {
 
@@ -68,6 +70,16 @@ class ProxyControllerTest {
 
     private String ownerToken() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("username", "owner", "password", "ownerpass"));
+        String response = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(response).get("token").asText();
+    }
+
+    private String adminToken() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of("username", "admin", "password", "adminpass"));
         String response = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
@@ -108,6 +120,30 @@ class ProxyControllerTest {
 
 
     @Test
+    void proxy_refuses_an_instance_the_caller_has_no_grant_on() throws Exception {
+        // Regression: instances were created with allowed_roles="owner", and
+        // effectiveRole() treated allowed_roles as a grant. Any account holding the
+        // global "owner" role could therefore read any other account's mailbox by
+        // naming it in X-Agora-Agent-Instance — confirmed against a live stack,
+        // returning another tenant's real inbox messages.
+        String body = objectMapper.writeValueAsString(Map.of(
+                "id", "private-mailbox",
+                "agent_type", "email-agent",
+                "display_name", "Private Mailbox"
+        ));
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/agent/runs")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .header("X-Agora-Agent-Instance", "private-mailbox"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void proxy_forwards_selected_visible_agent_instance() throws Exception {
         String responseBody = "{\"run_id\":\"abc123\",\"status\":\"completed\"}";
 
@@ -124,10 +160,19 @@ class ProxyControllerTest {
                 "display_name", "CEO Email Agent"
         ));
         mockMvc.perform(post("/agent-instances")
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", "Bearer " + adminToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated());
+
+        // Instances are private to their creator now, so the owner reaching this
+        // admin-created instance needs an explicit grant. Without one the request
+        // is refused — see proxy_refuses_an_instance_the_caller_has_no_grant_on.
+        mockMvc.perform(post("/agent-instances/ceo-email-agent/grants")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"user_id\":\"owner\",\"role\":\"owner\"}"))
+                .andExpect(status().is2xxSuccessful());
 
         mockMvc.perform(post("/api/agent/run")
                         .header("Authorization", "Bearer " + token)
@@ -251,6 +296,63 @@ class ProxyControllerTest {
                 .andExpect(jsonPath("$.status").value("connected"));
 
         wireMock.verify(getRequestedFor(urlEqualTo("/connect/gmail/callback?code=abc&state=signed")));
+    }
+
+    @Test
+    void proxy_outlook_oauth_start_requires_a_role_and_forwards() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/agent-instances/default-email-agent/connect/outlook/start"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"authorization_url\":\"https://login.microsoftonline.example\",\"agent_instance_id\":\"default-email-agent\",\"scopes\":[]}")));
+
+        mockMvc.perform(get("/api/agent/agent-instances/default-email-agent/connect/outlook/start")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.authorization_url").value("https://login.microsoftonline.example"));
+
+        wireMock.verify(getRequestedFor(urlEqualTo("/agent-instances/default-email-agent/connect/outlook/start"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+    }
+
+    @Test
+    void proxy_outlook_oauth_start_rejects_an_anonymous_caller() throws Exception {
+        mockMvc.perform(get("/api/agent/agent-instances/default-email-agent/connect/outlook/start"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void proxy_outlook_oauth_callback_forwards_without_jwt() throws Exception {
+        // Microsoft redirects the browser here with no Bearer token; the signed
+        // OAuth state is what authenticates it, same as the Gmail callback.
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/connect/outlook/callback?code=abc&state=signed"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"status\":\"connected\"}")));
+
+        mockMvc.perform(get("/api/agent/connect/outlook/callback?code=abc&state=signed"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("connected"));
+
+        wireMock.verify(getRequestedFor(urlEqualTo("/connect/outlook/callback?code=abc&state=signed")));
+    }
+
+    @Test
+    void proxy_connect_test_requires_a_role_and_forwards() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlEqualTo("/connect/test"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ok\":true,\"provider\":\"gmail\",\"mailbox\":\"ceo@example.com\",\"error\":\"\"}")));
+
+        mockMvc.perform(post("/api/agent/connect/test")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mailbox").value("ceo@example.com"));
+
+        mockMvc.perform(post("/api/agent/connect/test"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

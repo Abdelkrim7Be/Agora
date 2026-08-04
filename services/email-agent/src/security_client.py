@@ -5,6 +5,35 @@ import httpx
 from src.config import settings
 
 
+async def classify_content(content: str, known_internal: bool = False) -> dict:
+    """Ask the security service for a full trust classification of some content.
+
+    /sanitize runs a fast path: with no heuristic keyword hit it returns
+    UNTRUSTED without consulting the quarantined classifier, which keeps ordinary
+    mail off a slow local model. That is the right default for throughput, but it
+    means a carefully worded injection carrying none of the obvious phrases is
+    never actually classified. This endpoint always runs the classifier, so the
+    caller can pay for one where it matters — before a drafted reply becomes
+    approvable — rather than on every message.
+
+    Fail-safe like sanitize_email: an outage reports classifier_unavailable
+    rather than an implicit pass.
+    """
+    payload = {"source": "gmail_thread", "content": content, "known_internal": known_internal}
+    try:
+        async with httpx.AsyncClient(timeout=settings.security_timeout) as client:
+            resp = await client.post(f"{settings.security_url}/classify", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return {
+            "source": "gmail_thread",
+            "trust": "UNTRUSTED",
+            "reasons": ["security_service_unreachable"],
+            "classifier_unavailable": True,
+        }
+
+
 async def sanitize_email(sender: str, subject: str, content: str) -> dict:
     """POST untrusted email content to the security service /sanitize endpoint.
 
@@ -57,6 +86,7 @@ def authorize_action(
     run_id: str,
     action_id: str = "",
     arg_trust: dict | None = None,
+    recipients: list[str] | None = None,
 ) -> dict:
     """POST a proposed tool action to the security service /authorize endpoint.
 
@@ -77,6 +107,9 @@ def authorize_action(
         "args": args,
         "context": context,
         "arg_trust": arg_trust or {},
+        # Recipients are resolved from trusted context, not tool arguments, so
+        # they have to be stated explicitly for recipient policy to see them.
+        "recipients": list(recipients or []),
     }
     try:
         with httpx.Client(timeout=settings.security_timeout) as client:

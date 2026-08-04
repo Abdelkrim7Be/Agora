@@ -10,6 +10,7 @@ segments so older UI paths keep working while contacts/segments become primary.
 from __future__ import annotations
 
 import html as _html
+import json
 import re
 from pathlib import Path
 from typing import Literal
@@ -21,6 +22,7 @@ from src.config import SERVICE_ROOT
 from src.contacts import AUDIENCE_VALUES, Audience, Contact, get_segment, resolve_segment
 
 DEFAULT_CAMPAIGNS_PATH = SERVICE_ROOT / "campaigns.yaml"
+DEFAULT_CAMPAIGN_RUNS_PATH = SERVICE_ROOT / "logs" / "campaign_runs.json"
 
 _VAR_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
@@ -145,6 +147,112 @@ def save_campaigns(config: CampaignsConfig, path: str | Path | None = None) -> N
     campaigns_path.write_text(dump_campaigns(config))
 
 
+def load_campaign_runs(agent_instance_id: str | None = None) -> dict[str, dict]:
+    """Load durable campaign lifecycle records for the current instance."""
+    from src.instance_config import read_instance_text
+
+    raw = read_instance_text("campaign_runs", DEFAULT_CAMPAIGN_RUNS_PATH, agent_instance_id)
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+
+
+def save_campaign_runs(records: dict[str, dict], agent_instance_id: str | None = None) -> None:
+    from src.instance_config import write_instance_text
+
+    payload = json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    write_instance_text("campaign_runs", payload, DEFAULT_CAMPAIGN_RUNS_PATH, agent_instance_id)
+
+
+def upsert_campaign_run(campaign_id: str, record: dict, agent_instance_id: str | None = None) -> None:
+    records = load_campaign_runs(agent_instance_id)
+    records[campaign_id] = record
+    save_campaign_runs(records, agent_instance_id)
+
+
+def delete_campaign_run(campaign_id: str, agent_instance_id: str | None = None) -> bool:
+    records = load_campaign_runs(agent_instance_id)
+    existed = campaign_id in records
+    if existed:
+        records.pop(campaign_id, None)
+        save_campaign_runs(records, agent_instance_id)
+    return existed
+
+
+def due_campaign_ids(now=None, agent_instance_id: str | None = None) -> list[str]:
+    from datetime import datetime, timezone
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    due: list[str] = []
+    for campaign_id, record in load_campaign_runs(agent_instance_id).items():
+        if record.get("status") != "scheduled" or not record.get("scheduled_at"):
+            continue
+        try:
+            scheduled = datetime.fromisoformat(str(record["scheduled_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if scheduled.tzinfo is None:
+            scheduled = scheduled.replace(tzinfo=timezone.utc)
+        if scheduled.astimezone(timezone.utc) <= current:
+            due.append(campaign_id)
+    return due
+
+
+def send_campaign_run(campaign_id: str, record: dict) -> dict:
+    """Send one approved campaign record through the normal guarded Gmail path."""
+    from src.config import settings
+    from src.mail import get_provider
+    from src.security_client import authorize_action
+    from src.send_mode import effective_dry_run
+
+    record["status"] = "sending"
+    campaign_dry_run = effective_dry_run()
+    provider = get_provider()
+    sent, denied, failed = [], [], []
+    for index, email in enumerate(record.get("rendered") or []):
+        recipient = email.get("email")
+        if settings.security_enabled:
+            verdict = authorize_action(
+                "send_campaign",
+                {"to": recipient, "content": email.get("text") or ""},
+                run_id=campaign_id,
+                action_id=f"{campaign_id}:{index}",
+            )
+            # Fail closed: only an explicit allow sends. `send_campaign` is
+            # currently `allow` in policy.yaml, but tightening it to `hitl` must
+            # hold the recipient back rather than fall through to the send.
+            if verdict.get("decision") != "allow":
+                denied.append({"email": recipient, "reason": verdict.get("reason") or verdict.get("decision")})
+                continue
+        try:
+            result = provider.send_html_message(
+                to=recipient,
+                subject=email.get("subject") or record.get("subject") or "",
+                html=email.get("html") or "",
+                text=email.get("text") or "",
+            )
+            sent.append({"email": recipient, "dry_run": bool(result.get("dry_run")), "message_id": result.get("id")})
+        except Exception as exc:
+            failed.append({"email": recipient, "error": str(exc)})
+
+    final_status = "failed" if failed and not sent and not denied else "sent"
+    record["status"] = final_status
+    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": campaign_dry_run}
+    from datetime import datetime, timezone
+
+    record["sent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return record["result"]
+
+
 def find_group(config: CampaignsConfig, group_id: str) -> Group | None:
     return next((g for g in config.groups if g.id == group_id), None)
 
@@ -170,9 +278,17 @@ def _member_values(member: GroupMember) -> dict[str, str]:
 def render_text(text: str, values: dict[str, str]) -> str:
     def _sub(match: re.Match) -> str:
         key = match.group(1)
-        return str(values.get(key, match.group(0)))
+        return str(values.get(key, ""))
 
-    return _VAR_RE.sub(_sub, text)
+    rendered = _VAR_RE.sub(_sub, text)
+    rendered = re.sub(r"[ \t]+([,.;])", r"\1", rendered)
+    rendered = re.sub(r"([,.;:!?]){2,}", r"\1", rendered)
+    rendered = re.sub(r"[ \t]{2,}", " ", rendered)
+    rendered = re.sub(r"(?m)^[ \t]*[,.;:!?]+[ \t]*$", "", rendered)
+    rendered = re.sub(r"(?m)^Bonjour[ \t]*$", "Bonjour,", rendered)
+    rendered = re.sub(r"(?m)^Bonjour[ \t]*[,;:][ \t]*$", "Bonjour,", rendered)
+    rendered = re.sub(r"(?m)^(.+?)[ \t]+[,;][ \t]*$", r"\1,", rendered)
+    return rendered.strip()
 
 
 def _markdown_to_html(md_text: str) -> str:
@@ -237,10 +353,16 @@ def members_for_group(group: Group, agent_instance_id: str | None = None) -> lis
 
 def render_for_member(template: CampaignTemplate, member: GroupMember) -> RenderedEmail:
     values = _member_values(member)
+    unresolved = sorted(
+        {
+            key
+            for key in unresolved_vars(template.subject) + unresolved_vars(template.body_markdown)
+            if not str(values.get(key, "")).strip()
+        }
+    )
     subject = render_text(template.subject, values)
     body_md = render_text(template.body_markdown, values)
     html_body = _HTML_SHELL.format(body=_markdown_to_html(body_md))
-    unresolved = sorted(set(unresolved_vars(subject) + unresolved_vars(body_md)))
     return RenderedEmail(
         email=member.email,
         name=member.name,

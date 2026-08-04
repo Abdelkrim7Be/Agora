@@ -53,7 +53,7 @@ public class ProxyController {
 
     // Approve-tier paths: owner or approver (instance-granted).
     private static final Set<String> APPROVE_PATH_PREFIXES = Set.of(
-            "/api/agent/run", "/api/agent/sync", "/api/agent/inbox"
+            "/api/agent/run", "/api/agent/sync"
     );
 
     // Body cap for proxied requests (uploads included) — the whole body is
@@ -212,6 +212,11 @@ public class ProxyController {
     private String deriveTier(String path, String method) {
         if ("GET".equals(method)) return "read";
         if ("POST".equals(method) && ("/api/agent/run".equals(path) || "/api/agent/run/stream".equals(path))) return "write";
+        if ("POST".equals(method) && (path.endsWith("/claim") || path.endsWith("/assign"))
+                && path.startsWith("/api/agent/inbox/")) {
+            return "approve";
+        }
+        if (path.startsWith("/api/agent/inbox")) return "write";
         for (String prefix : WRITE_PATH_PREFIXES) {
             if (path.startsWith(prefix)) return "write";
         }

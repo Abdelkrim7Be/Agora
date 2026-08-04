@@ -1,32 +1,38 @@
 {
   "nav": {
-    "instances": "Instances d'agents",
-    "agentTypes": "Types d'agents",
+    "platformDashboard": "Tableau de bord",
+    "instances": "Instances d’agents",
+    "agentTypes": "Catalogue d’agents",
     "health": "Santé système",
-    "audit": "Journaux d'audit",
-    "users": "Utilisateurs",
+    "audit": "Audit & conformité",
+    "users": "Équipe",
     "account": "Compte"
   },
   "view": {
+    "platformDashboard": {
+      "title": "Tableau de bord plateforme",
+      "kicker": "Agora AI",
+      "description": "Vue globale des agents IA, des boîtes connectées et des accès qui structurent la plateforme."
+    },
     "instances": {
-      "title": "Instances d'agents",
-      "kicker": "Plateforme multi-agents",
-      "description": "Activez, ouvrez et supervisez les instances d'agents IA hébergées sur la plateforme."
+      "title": "Instances d’agents",
+      "kicker": "Agora AI",
+      "description": "Créez, ouvrez et administrez les espaces de travail des agents IA actifs sur la plateforme."
     },
     "agentTypes": {
-      "title": "Types d'agents",
-      "kicker": "Registre",
-      "description": "Examinez les services d'agents disponibles et les capacités que chaque type expose."
+      "title": "Catalogue d’agents",
+      "kicker": "Services disponibles",
+      "description": "Choisissez les agents métiers à activer et les capacités attendues pour chaque usage client."
     },
     "account": {
       "title": "Compte",
       "kicker": "Session",
-      "description": "Gérez la session actuelle de la passerelle et le contexte de l'espace de travail sélectionné."
+      "description": "Consultez votre session, votre rôle et le contexte de travail actuellement sélectionné."
     },
     "gmail": {
-      "title": "Connexion Gmail & Synchronisation",
-      "kicker": "Connexion boîte mail",
-      "description": "Inspectez l'état de la connexion de la boîte mail et les signaux de synchronisation pour cette instance d'agent e-mail."
+      "title": "Boîte connectée",
+      "kicker": "Synchronisation",
+      "description": "Contrôlez le fournisseur mail, l’état OAuth, les derniers traitements et les actions de reconnexion."
     },
     "permissions": {
       "title": "Permissions",
@@ -34,34 +40,39 @@
       "description": "Consultez les rôles d'accès à l'instance et la délégation d'approbation pour cet espace de travail."
     },
     "validation": {
-      "title": "Boîte de validation",
+      "title": "Validations à traiter",
       "kicker": "Supervision humaine",
-      "description": "Passez en revue les actions en attente avant qu'elles n'affectent les systèmes connectés."
+      "description": "Approuvez, ajustez ou rejetez les actions proposées avant qu’elles n’affectent vos systèmes ou vos clients."
     },
     "drafts": {
-      "title": "Brouillons",
-      "kicker": "File d'approbation",
-      "description": "Passez en revue les brouillons d'e-mails en attente groupés par catégorie et priorité."
+      "title": "File de brouillons",
+      "kicker": "Travail préparé",
+      "description": "Retrouvez les brouillons générés par l’agent, groupés par cas métier et priorité."
     },
     "inbox": {
       "title": "Messages",
       "kicker": "Contexte de l'agent",
       "description": "Inspectez les messages ou événements récents et ouvrez l'exécution attachée."
     },
+    "sent": {
+      "title": "E-mails envoyés",
+      "kicker": "Historique sortant",
+      "description": "Consultez les derniers e-mails envoyés depuis la boîte connectée et vérifiez ce qui est réellement parti."
+    },
     "run-detail": {
-      "title": "Détail de l'exécution",
+      "title": "Détail du traitement",
       "kicker": "Analyse",
-      "description": "Tracez une décision de l'agent à travers les verdicts de sécurité, les appels d'outils et les messages de chronologie."
+      "description": "Comprenez une décision de l’agent à travers les contrôles de sécurité, les actions proposées et la chronologie."
     },
     "audit": {
-      "title": "Journaux d'audit",
+      "title": "Audit & conformité",
       "kicker": "Conformité",
-      "description": "Consultez les événements d'accès à la passerelle et à l'agent avec filtrage, pagination et exportation CSV."
+      "description": "Consultez les événements d’accès et les décisions sensibles avec filtrage, pagination et export CSV."
     },
     "users": {
-      "title": "Utilisateurs",
+      "title": "Équipe et invitations",
       "kicker": "Administration",
-      "description": "Créez, désactivez et attribuez un rôle + département pour les comptes du personnel. Admin uniquement."
+      "description": "Invitez les collaborateurs, attribuez les rôles et gardez la maîtrise des accès à la plateforme."
     },
     "health": {
       "title": "Santé système",
@@ -94,14 +105,14 @@
       "description": "Maintenez le contexte, les instructions de triage et le comportement de réponse pour l'agent."
     },
     "capabilities": {
-      "title": "Capacités & Politique de Sécurité",
+      "title": "Capacités & sécurité",
       "kicker": "Plan de contrôle",
-      "description": "Basculez les capacités en direct de l'agent et inspectez la politique de sécurité appliquée en amont."
+      "description": "Activez les capacités autorisées et vérifiez la politique appliquée avant toute action sensible."
     },
     "categories": {
-      "title": "Workflows",
-      "kicker": "Playbooks métier",
-      "description": "Définissez comment l'instance reconnaît les cas métiers, rédige des réponses, achemine le travail et applique les règles d'approbation."
+      "title": "Cas métier",
+      "kicker": "Gestion des e-mails",
+      "description": "Définissez les familles d’e-mails, leurs actions, les responsables et les expéditeurs qui déclenchent chaque traitement."
     },
     "roles": {
       "title": "Annuaire des rôles",
@@ -126,7 +137,7 @@
     "analytics": {
       "title": "Tableau de bord",
       "kicker": "Pilotage",
-      "description": "Suivez le volume traité, les workflows les plus chargés, le délai d’approbation et la charge par département pour l’instance sélectionnée."
+      "description": "Suivez le volume traité, les cas métier les plus chargés, le délai d’approbation et la charge par département pour l’instance sélectionnée."
     },
     "campaigns": {
       "title": "Campagnes",
@@ -137,6 +148,26 @@
       "title": "File d’erreurs",
       "kicker": "Exploitation",
       "description": "Inspectez les actions bloquées ou en échec et relancez uniquement ce qui peut l’être."
+    },
+    "setup": {
+      "title": "Configuration de l’instance",
+      "kicker": "Démarrage",
+      "description": "Synchronisation, apprentissage du style, import des contacts et catégorisation avant l’ouverture de l’espace de travail."
+    },
+    "guide": {
+      "title": "Guide de l’agent",
+      "kicker": "Prise en main",
+      "description": "Ce que fait l’agent, comment le configurer, et où intervenir."
+    },
+    "notifications": {
+      "title": "Notifications",
+      "kicker": "Centre de notifications",
+      "description": "Suivez les événements de cette instance : configuration, synchronisation, brouillons et campagnes."
+    },
+    "junk": {
+      "title": "Filtre anti-bruit",
+      "kicker": "Tri automatique",
+      "description": "Ce qui est écarté avant toute analyse : diffusions, alertes et réponses automatiques."
     }
   },
   "global": {

@@ -4,7 +4,26 @@ import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { currentUsername } from '../../utils/jwt';
-import { useUsersQuery, useCreateUser, useSetUserEnabled } from '../../api/queries';
+import { agentTypeLabel, formatDateTimeFr, roleLabelFr } from '../../utils/format';
+import {
+  useUsersQuery,
+  useCreateUser,
+  useSetUserEnabled,
+  useInviteUser,
+  useUpdateUser,
+  useAgentInstancesQuery,
+  useAgentTypesQuery,
+  useInstanceGrantsQuery,
+  useAddInstanceGrant,
+  useRemoveInstanceGrant,
+} from '../../api/queries';
+
+function onboardingState(user) {
+  if (user.enabled) return { label: 'Configuré', tone: 'ok' };
+  if (user.invitationExpired) return { label: 'Invitation expirée', tone: 'error' };
+  if (user.pendingInvitation) return { label: 'Invitation en attente', tone: 'warn' };
+  return { label: 'À inviter', tone: 'warn' };
+}
 
 export default function UsersPage() {
   const { setStatus } = useStatus();
@@ -12,7 +31,17 @@ export default function UsersPage() {
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
-  const [form, setForm] = useState({ username: '', password: '', role: 'viewer', department: '' });
+  const inviteUser = useInviteUser();
+  const updateUser = useUpdateUser();
+  const instancesQuery = useAgentInstancesQuery();
+  const typesQuery = useAgentTypesQuery();
+  const grantsQuery = useInstanceGrantsQuery(instancesQuery.data || [], true);
+  const addGrant = useAddInstanceGrant();
+  const removeGrant = useRemoveInstanceGrant();
+  const [form, setForm] = useState({ username: '', email: '', password: '', role: 'viewer', department: '' });
+  const [editForms, setEditForms] = useState({});
+  const [accessForm, setAccessForm] = useState({ userId: '', instanceId: '', role: 'viewer' });
+  const [inviteLink, setInviteLink] = useState('');
   const username = currentUsername(token);
   const announcedInitialLoad = useRef(false);
 
@@ -30,22 +59,63 @@ export default function UsersPage() {
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const users = query.data || [];
+  const instances = instancesQuery.data || [];
+  const agentTypes = typesQuery.data || [];
+  const grants = grantsQuery.data || [];
+
+  const instancesForUser = (user) => instances.filter((instance) => (
+    instance.created_by === user.username || grants.some((grant) => (
+      grant.user_id === user.username && grant.agent_instance_id === instance.id
+    ))
+  ));
+
+  const grantFor = (user, instance) => grants.find((grant) => (
+    grant.user_id === user.username && grant.agent_instance_id === instance.id
+  ));
+
+  const editFormFor = (user) => editForms[user.id] || {
+    role: user.role || 'viewer',
+    department: user.department || '',
+  };
+
+  const setEditForm = (user, patch) => {
+    setEditForms((current) => ({ ...current, [user.id]: { ...editFormFor(user), ...patch } }));
+  };
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    if (!form.username || !form.password) return;
+    if (!form.username) return;
     try {
-      await createUser.mutateAsync({
+      const payload = {
         username: form.username,
-        password: form.password,
         role: form.role,
         department: form.department || null,
-      });
-      setForm({ username: '', password: '', role: 'viewer', department: '' });
-      setStatus(`Utilisateur ${form.username} créé.`, 'ok');
+      };
+      if (form.email) payload.email = form.email;
+      if (form.password) payload.password = form.password;
+      const result = await createUser.mutateAsync(payload);
+      setInviteLink(result.setupLink || '');
+      setStatus(result.setupLink ? `Utilisateur ${form.username} créé. Lien d’invitation prêt à transmettre.` : `Utilisateur ${form.username} créé.`, 'ok');
+      setForm({ username: '', email: '', password: '', role: 'viewer', department: '' });
     } catch (error) {
       setStatus(`Impossible de créer l’utilisateur : ${error.message}`, 'error');
     }
+  };
+
+  const handleInvite = async (user) => {
+    try {
+      const result = await inviteUser.mutateAsync(user.id);
+      setInviteLink(result.setupLink || '');
+      setStatus(result.setupLink ? `Invitation recréée pour ${user.username}.` : `Invitation envoyée à ${user.email || user.username}.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d’envoyer l’invitation : ${error.message}`, 'error');
+    }
+  };
+
+  const copyInviteLink = async () => {
+    if (!inviteLink) return;
+    await navigator.clipboard?.writeText(inviteLink);
+    setStatus('Lien d’invitation copié.', 'ok');
   };
 
   const handleToggle = async (user) => {
@@ -62,14 +132,44 @@ export default function UsersPage() {
     }
   };
 
+  const handleUpdateUser = async (user) => {
+    const edit = editFormFor(user);
+    try {
+      await updateUser.mutateAsync({ id: user.id, role: edit.role, department: edit.department });
+      setStatus(`Accès de ${user.username} mis à jour.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de mettre à jour ${user.username} : ${error.message}`, 'error');
+    }
+  };
+
+  const handleGrant = async (event) => {
+    event.preventDefault();
+    if (!accessForm.userId || !accessForm.instanceId) return;
+    try {
+      await addGrant.mutateAsync(accessForm);
+      setStatus('Accès à l’instance mis à jour.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible d’ajouter l’accès : ${error.message}`, 'error');
+    }
+  };
+
+  const handleRemoveGrant = async (instanceId, userId) => {
+    try {
+      await removeGrant.mutateAsync({ instanceId, userId });
+      setStatus('Accès retiré.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible de retirer l’accès : ${error.message}`, 'error');
+    }
+  };
+
   return (
     <>
       <PageHeading view="users" />
-      <Card>
+      <Card className="users-card">
         <div className="card-header">
           <div>
-            <h2>Utilisateurs</h2>
-            <div className="meta"><span>Annuaire du personnel — admin uniquement</span></div>
+            <h2>Utilisateurs et invitations</h2>
+            <div className="meta"><span>Comptes, rôles et accès initial</span></div>
           </div>
           <button type="button" onClick={async () => { await query.refetch(); setStatus('Utilisateurs chargés.', 'ok'); }}>
             <span className="material-symbols-outlined" aria-hidden="true">sync</span>
@@ -77,22 +177,59 @@ export default function UsersPage() {
           </button>
         </div>
         <div className="notice">
-          Rôles : <strong>admin</strong> (utilisateurs, secrets, boîtes mail, config système), <strong>owner</strong> (workflows, personas, toutes les approbations), <strong>approver</strong> (approbations de son département), <strong>viewer</strong> (lecture seule). Le département reprend le vocabulaire de l'Annuaire des rôles (RH, Finance, ...).
+          Invitez un collaborateur sans partager de mot de passe temporaire. Si aucun relais SMTP n’est configuré, Agora AI affiche un lien sécurisé à transmettre manuellement.
         </div>
-        <div className="table-wrap">
+        {inviteLink ? (
+          <div className="notice invite-link-notice">
+            <strong>Lien d’invitation à transmettre</strong>
+            <div className="invite-copy-row">
+              <input readOnly value={inviteLink} aria-label="Lien d’invitation" />
+              <button type="button" onClick={copyInviteLink}>
+                <span className="material-symbols-outlined" aria-hidden="true">content_copy</span>
+                <span>Copier</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div className="table-wrap users-table">
           <table className="data-table">
-            <thead><tr><th>Utilisateur</th><th>Rôle</th><th>Département</th><th>Statut</th><th></th></tr></thead>
+            <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle plateforme</th><th>Département</th><th>Configuration</th><th></th></tr></thead>
             <tbody>
               {users.map((user) => {
                 const selfDisable = user.enabled && user.username === username;
                 const label = user.enabled ? 'Désactiver' : 'Activer';
+                const onboarding = onboardingState(user);
+                const edit = editFormFor(user);
                 return (
                   <tr key={user.id}>
                     <td>{user.username}</td>
-                    <td><span className="status-pill">{user.role}</span></td>
-                    <td>{user.department || '—'}</td>
-                    <td>{user.enabled ? 'Actif' : 'Désactivé'}</td>
+                    <td>{user.email || '—'}</td>
                     <td>
+                      <select value={edit.role} onChange={(event) => setEditForm(user, { role: event.target.value })}>
+                        <option value="viewer">lecteur</option>
+                        <option value="approver">validateur</option>
+                        <option value="owner">propriétaire</option>
+                        <option value="admin">administrateur</option>
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        value={edit.department}
+                        placeholder="Département"
+                        onChange={(event) => setEditForm(user, { department: event.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <span className={`status-pill ${onboarding.tone}`.trim()}>{onboarding.label}</span>
+                      {user.invitationExpiresAt ? <small className="muted">Expire {formatDateTimeFr(user.invitationExpiresAt)}</small> : null}
+                    </td>
+                    <td>
+                      <button type="button" onClick={() => handleUpdateUser(user)}>
+                        Enregistrer
+                      </button>
+                      <button type="button" onClick={() => handleInvite(user)}>
+                        Inviter
+                      </button>
                       <button
                         type="button"
                         disabled={selfDisable}
@@ -110,7 +247,7 @@ export default function UsersPage() {
           </table>
         </div>
         {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
-        <form className="toolbar" style={{ marginTop: '1rem' }} onSubmit={handleCreate}>
+        <form className="user-create-form" style={{ marginTop: '1rem' }} onSubmit={handleCreate}>
           <input
             placeholder="Nom d'utilisateur"
             required
@@ -119,18 +256,24 @@ export default function UsersPage() {
             onChange={(event) => setForm({ ...form, username: event.target.value })}
           />
           <input
+            type="email"
+            placeholder="E-mail d'invitation"
+            style={{ flex: 1 }}
+            value={form.email}
+            onChange={(event) => setForm({ ...form, email: event.target.value })}
+          />
+          <input
             type="password"
-            placeholder="Mot de passe temporaire"
-            required
+            placeholder="Mot de passe temporaire (optionnel)"
             style={{ flex: 1 }}
             value={form.password}
             onChange={(event) => setForm({ ...form, password: event.target.value })}
           />
           <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-            <option value="viewer">viewer</option>
-            <option value="approver">approver</option>
-            <option value="owner">owner</option>
-            <option value="admin">admin</option>
+            <option value="viewer">lecteur</option>
+            <option value="approver">validateur</option>
+            <option value="owner">propriétaire</option>
+            <option value="admin">administrateur</option>
           </select>
           <input
             placeholder="Département (optionnel)"
@@ -143,6 +286,84 @@ export default function UsersPage() {
             <span>Créer</span>
           </button>
         </form>
+      </Card>
+      <Card className="users-card user-instances-card">
+        <div className="card-header">
+          <div>
+            <h2>Gestion des accès aux instances</h2>
+            <div className="meta"><span>Attribuez un rôle par agent : lecture, validation ou propriété</span></div>
+          </div>
+        </div>
+        <form className="access-grant-form" onSubmit={handleGrant}>
+          <select
+            value={accessForm.userId}
+            onChange={(event) => setAccessForm({ ...accessForm, userId: event.target.value })}
+            aria-label="Utilisateur"
+            required
+          >
+            <option value="">Utilisateur</option>
+            {users.map((user) => <option key={user.id} value={user.username}>{user.username}</option>)}
+          </select>
+          <select
+            value={accessForm.instanceId}
+            onChange={(event) => setAccessForm({ ...accessForm, instanceId: event.target.value })}
+            aria-label="Instance"
+            required
+          >
+            <option value="">Instance d’agent</option>
+            {instances.map((instance) => (
+              <option key={instance.id} value={instance.id}>{instance.display_name || instance.id}</option>
+            ))}
+          </select>
+          <select
+            value={accessForm.role}
+            onChange={(event) => setAccessForm({ ...accessForm, role: event.target.value })}
+            aria-label="Rôle sur l’instance"
+          >
+            <option value="viewer">lecteur</option>
+            <option value="approver">validateur</option>
+            <option value="owner">propriétaire</option>
+          </select>
+          <button className="primary" type="submit" disabled={addGrant.isPending}>
+            <span className="material-symbols-outlined" aria-hidden="true">key</span>
+            <span>Donner l’accès</span>
+          </button>
+        </form>
+      </Card>
+      <Card className="users-card user-instances-card">
+        <div className="card-header">
+          <div>
+            <h2>Utilisateurs et instances</h2>
+            <div className="meta"><span>Lecture rapide des agents rattachés à chaque compte</span></div>
+          </div>
+        </div>
+        <div className="user-instance-list">
+          {users.map((user) => {
+            const userInstances = instancesForUser(user);
+            return (
+              <div className="user-instance-row" key={user.id}>
+                <div>
+                  <strong>{user.username}</strong>
+                  <span>{roleLabelFr(user.role)} · {user.department || 'sans département'}</span>
+                </div>
+                <div className="user-instance-pills">
+                  {userInstances.length ? userInstances.map((instance) => (
+                    <span className="mini-chip grant-chip" key={instance.id}>
+                      {instance.display_name || instance.id} · {agentTypeLabel(instance.agent_type, agentTypes)}
+                      {instance.created_by === user.username ? ' · créateur' : ` · ${roleLabelFr(grantFor(user, instance)?.role)}`}
+                      {instance.created_by !== user.username ? (
+                        <button type="button" aria-label={`Retirer ${instance.display_name || instance.id} à ${user.username}`} onClick={() => handleRemoveGrant(instance.id, user.username)}>
+                          <span className="material-symbols-outlined" aria-hidden="true">close</span>
+                        </button>
+                      ) : null}
+                    </span>
+                  )) : <span className="muted">Aucune instance rattachée</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
       </Card>
     </>
   );

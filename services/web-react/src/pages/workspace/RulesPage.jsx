@@ -15,10 +15,14 @@ import {
   useToggleSection,
   usePromoteSuggestion,
   useDismissSuggestion,
+  useJunkQuery,
+  useSaveJunk,
+  useStarterRulesQuery,
+  useApplyStarterRules,
 } from '../../api/queries';
 
 const EMPTY_RULE = {
-  name: '', enabled: true, senderContains: '', senderDomain: '', subjectContains: '', whenLabels: '',
+  name: '', enabled: true, senderContains: '', senderRegex: '', senderDomain: '', subjectContains: '', bodyContains: '', whenLabels: '',
   thenLabels: '', snoozeDays: '', respond: '', archive: false, markRead: false, notify: false,
 };
 
@@ -29,7 +33,9 @@ function ruleWhenSummary(rule) {
   const w = rule.when || {};
   const parts = [];
   if (w.subject_contains?.length) parts.push(`sujet : ${w.subject_contains.join(', ')}`);
+  if (w.body_contains?.length) parts.push(`corps : ${w.body_contains.join(', ')}`);
   if (w.sender_contains?.length) parts.push(`expéditeur : ${w.sender_contains.join(', ')}`);
+  if (w.sender_regex?.length) parts.push(`regex expéditeur : ${w.sender_regex.join(', ')}`);
   if (w.sender_domain?.length) parts.push(`domaine : ${w.sender_domain.join(', ')}`);
   if (w.labels?.length) parts.push(`libellés : ${w.labels.join(', ')}`);
   return parts.join(' · ') || 'toujours';
@@ -68,10 +74,15 @@ export default function RulesPage() {
   const [digest, setDigest] = useState({ hour: 18, statuses: '' });
   const [snooze, setSnooze] = useState({ labelPrefix: 'Snoozed', maxResurface: 20 });
   const [followUps, setFollowUps] = useState({ label: 'Awaiting Reply', afterDays: 3, maxResults: 10, nudge: 'Just following up on this.' });
+  const [junk, setJunk] = useState({
+    enabled: true, allowedSenders: '', allowedDomains: '', blockedSenders: '', blockedDomains: '',
+    gmailCategories: true, bulkHeaders: true, senderHeuristics: true,
+  });
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
   const query = useRulesQuery();
+  const junkQuery = useJunkQuery();
   const suggestionsQuery = useRuleSuggestionsQuery();
   const saveYaml = useSaveRulesYaml();
   const saveRule = useSaveRule();
@@ -81,6 +92,7 @@ export default function RulesPage() {
   const toggleSection = useToggleSection();
   const promoteSuggestion = usePromoteSuggestion();
   const dismissSuggestion = useDismissSuggestion();
+  const saveJunk = useSaveJunk();
 
   const parsed = query.data?.parsed;
   const rules = parsed?.rules || [];
@@ -107,6 +119,21 @@ export default function RulesPage() {
     setStatus(`Impossible de charger les règles : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const cfg = junkQuery.data?.junk;
+    if (!cfg) return;
+    setJunk({
+      enabled: cfg.enabled !== false,
+      allowedSenders: listToCsv(cfg.allowed_senders),
+      allowedDomains: listToCsv(cfg.allowed_domains),
+      blockedSenders: listToCsv(cfg.blocked_senders),
+      blockedDomains: listToCsv(cfg.blocked_domains),
+      gmailCategories: cfg.gmail_categories !== false,
+      bulkHeaders: cfg.bulk_headers !== false,
+      senderHeuristics: cfg.sender_heuristics !== false,
+    });
+  }, [junkQuery.data]);
+
   const resetRuleForm = () => { setEditingName(''); setRule(EMPTY_RULE); };
 
   const startEdit = (r) => {
@@ -117,8 +144,10 @@ export default function RulesPage() {
       name: r.name,
       enabled: r.enabled !== false,
       senderContains: listToCsv(w.sender_contains),
+      senderRegex: listToCsv(w.sender_regex),
       senderDomain: listToCsv(w.sender_domain),
       subjectContains: listToCsv(w.subject_contains),
+      bodyContains: listToCsv(w.body_contains),
       whenLabels: listToCsv(w.labels),
       thenLabels: listToCsv(t.labels),
       snoozeDays: t.snooze_days || '',
@@ -139,8 +168,10 @@ export default function RulesPage() {
       enabled: rule.enabled,
       when: {
         sender_contains: csvToList(rule.senderContains),
+        sender_regex: csvToList(rule.senderRegex),
         sender_domain: csvToList(rule.senderDomain),
         subject_contains: csvToList(rule.subjectContains),
+        body_contains: csvToList(rule.bodyContains),
         labels: csvToList(rule.whenLabels),
       },
       then: {
@@ -211,12 +242,53 @@ export default function RulesPage() {
     }
   };
 
+  const starterQuery = useStarterRulesQuery();
+  const applyStarter = useApplyStarterRules();
+  const [starterPicks, setStarterPicks] = useState([]);
+
+  const starterRules = starterQuery.data?.starter_rules || [];
+  const availableStarters = starterRules.filter((entry) => !entry.applied);
+
+  const toggleStarterPick = (id) => {
+    setStarterPicks((picks) => (picks.includes(id) ? picks.filter((p) => p !== id) : [...picks, id]));
+  };
+
+  const handleApplyStarter = async () => {
+    if (!starterPicks.length) return;
+    try {
+      const result = await applyStarter.mutateAsync(starterPicks);
+      setStarterPicks([]);
+      setStatus(`${(result.added || []).length} règle(s) recommandée(s) ajoutée(s).`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible d'ajouter les règles recommandées : ${error.message}`, 'error');
+    }
+  };
+
   const handleSaveYaml = async () => {
     try {
       await saveYaml.mutateAsync(yamlText);
       setStatus('Règles enregistrées.', 'ok');
     } catch (error) {
       setStatus(`Impossible d'enregistrer les règles : ${error.message}`, 'error');
+    }
+  };
+
+  const handleSaveJunk = async (e) => {
+    e.preventDefault();
+    try {
+      await saveJunk.mutateAsync({
+        enabled: junk.enabled,
+        allowed_senders: csvToList(junk.allowedSenders),
+        allowed_domains: csvToList(junk.allowedDomains),
+        blocked_senders: csvToList(junk.blockedSenders),
+        blocked_domains: csvToList(junk.blockedDomains),
+        gmail_categories: junk.gmailCategories,
+        bulk_headers: junk.bulkHeaders,
+        sender_heuristics: junk.senderHeuristics,
+      });
+      setStatus('Filtre indésirable enregistré.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible d'enregistrer le filtre indésirable : ${error.message}`, 'error');
     }
   };
 
@@ -241,6 +313,49 @@ export default function RulesPage() {
   return (
     <>
       <PageHeading view="rules" />
+      <div className="notice">
+        Pipeline : filtre indésirable → règles → routage par catégorie → tri IA → brouillon. Le filtre jette, les règles rangent.
+      </div>
+
+      {canManage && availableStarters.length > 0 && (
+        <Card className="starter-rules">
+          <div className="card-header">
+            <div>
+              <h2>Règles recommandées</h2>
+              <div className="meta">Proposées, jamais imposées : cochez celles qui vous conviennent.</div>
+            </div>
+            <button
+              className="primary"
+              type="button"
+              disabled={!starterPicks.length || applyStarter.isPending}
+              onClick={handleApplyStarter}
+            >
+              <span className="material-symbols-outlined" aria-hidden="true">playlist_add</span>
+              <span>Ajouter la sélection</span>
+            </button>
+          </div>
+          <ul className="starter-list">
+            {availableStarters.map((entry) => (
+              <li className="starter-item" key={entry.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={starterPicks.includes(entry.id)}
+                    onChange={() => toggleStarterPick(entry.id)}
+                  />
+                  <span className="starter-copy">
+                    <strong>{entry.title}</strong>
+                    <small>{entry.explanation}</small>
+                    {entry.needs_input ? (
+                      <small className="starter-note">À compléter après ajout : {entry.needs_input}.</small>
+                    ) : null}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       <div className="toolbar">
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les règles</span>
@@ -261,8 +376,10 @@ export default function RulesPage() {
             <div className="workflow-wide instructions-fieldset">
               <strong>Condition (toutes les valeurs saisies doivent correspondre)</strong>
               <label><span>Expéditeur contient</span><input value={rule.senderContains} onChange={(e) => setRule({ ...rule, senderContains: e.target.value })} placeholder="newsletter, no-reply" /></label>
+              <label><span>Regex expéditeur</span><input value={rule.senderRegex} onChange={(e) => setRule({ ...rule, senderRegex: e.target.value })} placeholder=".*@news\.example\.com" /></label>
               <label><span>Domaine expéditeur</span><input value={rule.senderDomain} onChange={(e) => setRule({ ...rule, senderDomain: e.target.value })} placeholder="mailchimp.com, list.example.com" /></label>
               <label><span>Sujet contient</span><input value={rule.subjectContains} onChange={(e) => setRule({ ...rule, subjectContains: e.target.value })} placeholder="promo, soldes" /></label>
+              <label><span>Corps contient</span><input value={rule.bodyContains} onChange={(e) => setRule({ ...rule, bodyContains: e.target.value })} placeholder="demande de devis, facture" /></label>
               <label><span>Libellés Gmail</span><input value={rule.whenLabels} onChange={(e) => setRule({ ...rule, whenLabels: e.target.value })} placeholder="CATEGORY_PROMOTIONS, CATEGORY_SOCIAL" /></label>
             </div>
             <div className="workflow-wide instructions-fieldset">
@@ -306,13 +423,23 @@ export default function RulesPage() {
                   <strong>{r.name}</strong>
                   <span>{ruleWhenSummary(r)} → {ruleThenSummary(r)}</span>
                 </div>
-                <div className="toolbar">
-                  <TogglePill label={r.enabled ? 'Activée' : 'Désactivée'} enabled={Boolean(r.enabled)} onClick={() => handleToggleRule(r.name, !r.enabled)} />
+                <div className="rule-row-actions">
+                  <button
+                    type="button"
+                    className={`status-pill ${r.enabled ? 'ok' : 'error'}`}
+                    onClick={() => handleToggleRule(r.name, !r.enabled)}
+                  >
+                    {r.enabled ? 'Activée' : 'Désactivée'}
+                  </button>
                   {canManage && (
-                    <>
-                      <button type="button" onClick={() => startEdit(r)}>Modifier</button>
-                      <button className="danger" type="button" onClick={() => handleDeleteRule(r.name)}>Supprimer</button>
-                    </>
+                    <div className="directory-actions">
+                      <button type="button" onClick={() => startEdit(r)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier</span>
+                      </button>
+                      <button className="danger" type="button" onClick={() => handleDeleteRule(r.name)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">delete</span><span>Supprimer</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -323,6 +450,29 @@ export default function RulesPage() {
 
       {canManage && (
         <Card className="editor-card">
+          <div className="card-header">
+            <div><h2>Filtre indésirable</h2><p>Blocage déterministe avant tri IA pour les newsletters, promos et expéditeurs explicitement exclus.</p></div>
+          </div>
+          <form className="workflow-form" onSubmit={handleSaveJunk}>
+            <label className="workflow-checkbox"><input type="checkbox" checked={junk.enabled} onChange={(e) => setJunk({ ...junk, enabled: e.target.checked })} /><span>Filtre actif</span></label>
+            <label className="workflow-checkbox"><input type="checkbox" checked={junk.gmailCategories} onChange={(e) => setJunk({ ...junk, gmailCategories: e.target.checked })} /><span>Catégories Gmail</span></label>
+            <label className="workflow-checkbox"><input type="checkbox" checked={junk.bulkHeaders} onChange={(e) => setJunk({ ...junk, bulkHeaders: e.target.checked })} /><span>En-têtes bulk</span></label>
+            <label className="workflow-checkbox"><input type="checkbox" checked={junk.senderHeuristics} onChange={(e) => setJunk({ ...junk, senderHeuristics: e.target.checked })} /><span>Expéditeurs marketing</span></label>
+            <label><span>Domaines bloqués</span><input value={junk.blockedDomains} onChange={(e) => setJunk({ ...junk, blockedDomains: e.target.value })} placeholder="temu.com, bershka.com" /></label>
+            <label><span>Expéditeurs bloqués</span><input value={junk.blockedSenders} onChange={(e) => setJunk({ ...junk, blockedSenders: e.target.value })} placeholder="promo@example.com" /></label>
+            <label><span>Domaines autorisés</span><input value={junk.allowedDomains} onChange={(e) => setJunk({ ...junk, allowedDomains: e.target.value })} placeholder="client-important.com" /></label>
+            <label><span>Expéditeurs autorisés</span><input value={junk.allowedSenders} onChange={(e) => setJunk({ ...junk, allowedSenders: e.target.value })} placeholder="contact@client-important.com" /></label>
+            <div className="workflow-form-actions workflow-wide">
+              <button type="submit" disabled={saveJunk.isPending}>
+                <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer le filtre</span>
+              </button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      {canManage && (
+        <Card className="editor-card">
           <strong>Sous-systèmes</strong>
           <p className="muted">Réglez le digest, la mise en veille et les relances sans toucher au YAML. Utilisez les interrupteurs ci-dessus pour activer chaque sous-système.</p>
           <div className="section-config-grid">
@@ -330,13 +480,13 @@ export default function RulesPage() {
               <div className="workflow-wide"><strong>Digest quotidien</strong></div>
               <label><span>Heure (0-23)</span><input type="number" min="0" max="23" value={digest.hour} onChange={(e) => setDigest({ ...digest, hour: e.target.value })} /></label>
               <label><span>Statuts inclus</span><input value={digest.statuses} onChange={(e) => setDigest({ ...digest, statuses: e.target.value })} placeholder="notify, pending_approval" /></label>
-              <div className="workflow-form-actions workflow-wide"><button type="submit">Enregistrer le digest</button></div>
+              <div className="workflow-form-actions workflow-wide"><button type="submit"><span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer le digest</span></button></div>
             </form>
             <form className="workflow-form" onSubmit={handleSaveSection('snooze')}>
               <div className="workflow-wide"><strong>Mise en veille</strong></div>
               <label><span>Préfixe de libellé</span><input value={snooze.labelPrefix} onChange={(e) => setSnooze({ ...snooze, labelPrefix: e.target.value })} placeholder="Snoozed" /></label>
               <label><span>Réémergences max / exécution</span><input type="number" min="1" value={snooze.maxResurface} onChange={(e) => setSnooze({ ...snooze, maxResurface: e.target.value })} /></label>
-              <div className="workflow-form-actions workflow-wide"><button type="submit">Enregistrer la veille</button></div>
+              <div className="workflow-form-actions workflow-wide"><button type="submit"><span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer la veille</span></button></div>
             </form>
             <form className="workflow-form" onSubmit={handleSaveSection('follow_ups')}>
               <div className="workflow-wide"><strong>Relances</strong></div>
@@ -344,7 +494,7 @@ export default function RulesPage() {
               <label><span>Après (jours)</span><input type="number" min="1" value={followUps.afterDays} onChange={(e) => setFollowUps({ ...followUps, afterDays: e.target.value })} /></label>
               <label><span>Résultats max</span><input type="number" min="1" value={followUps.maxResults} onChange={(e) => setFollowUps({ ...followUps, maxResults: e.target.value })} /></label>
               <label className="workflow-wide"><span>Message de relance</span><input value={followUps.nudge} onChange={(e) => setFollowUps({ ...followUps, nudge: e.target.value })} placeholder="Just following up on this." /></label>
-              <div className="workflow-form-actions workflow-wide"><button type="submit">Enregistrer les relances</button></div>
+              <div className="workflow-form-actions workflow-wide"><button type="submit"><span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer les relances</span></button></div>
             </form>
           </div>
         </Card>

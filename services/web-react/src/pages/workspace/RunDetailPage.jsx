@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { useStatus } from '../../contexts/StatusContext';
-import { statusLabelFr, formatCount, formatCost, summarizeTraceError } from '../../utils/format';
+import { formatDateTimeFr, statusLabelFr, formatCount, formatCost, summarizeTraceError } from '../../utils/format';
 import { useRunDetailQuery } from '../../api/queries';
 
 export default function RunDetailPage() {
@@ -57,7 +57,7 @@ export default function RunDetailPage() {
                   const pillLabel = isHitlPause ? "En attente d'approbation" : statusLabelFr(item.status);
                   return (
                     <tr key={index}>
-                      <td>{item.started_at ? new Date(item.started_at).toLocaleString() : '—'}</td>
+                      <td>{formatDateTimeFr(item.started_at)}</td>
                       <td>{item.node || 'unknown'}</td>
                       <td><span className={`status-pill ${pillClass}`}>{pillLabel}</span></td>
                       <td>{item.latency_ms ?? 0} ms</td>

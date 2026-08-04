@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useApi } from '../api/useApi';
+import AgoraLogo from '../components/brand/AgoraLogo';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -35,9 +36,9 @@ export default function LoginPage() {
       <section className="modal-panel login-panel" role="dialog" aria-modal="true" aria-labelledby="login-title">
         <div className="modal-header">
           <div>
-            <div className="login-brand"><span className="brand-mark">B</span><strong>Agora AI</strong></div>
-            <h2 id="login-title">Bon retour</h2>
-            <p>Connectez-vous pour accéder à la plateforme d'agents IA.</p>
+            <AgoraLogo className="login-brand" />
+            <h2 id="login-title">Bienvenue dans votre espace Agora AI</h2>
+            <p>Supervisez vos agents métiers, vos validations et vos boîtes connectées depuis un environnement sécurisé.</p>
           </div>
         </div>
         <p className={`login-status${status.kind ? ` ${status.kind}` : ''}`} role="status">
@@ -70,12 +71,22 @@ export default function LoginPage() {
             <span>Accéder à la plateforme</span>
           </button>
         </form>
+        <div className="login-trust-row" aria-label="Garanties de sécurité">
+          <span>Validation humaine</span>
+          <span>Audit activé</span>
+          <span>Accès sécurisé</span>
+        </div>
       </section>
       <aside className="login-side" aria-hidden="true">
-        <div>
-          <span className="eyebrow">Agora Consulting · Plateforme d'agents IA</span>
-          <h2>Pilotez les assistants IA de Agora Consulting depuis un seul endroit.</h2>
-          <p>Approbations, activité, accès, politiques et coûts restent derrière l'espace connecté.</p>
+        <div className="login-product-panel">
+          <span className="eyebrow">Agora Consulting · agents métiers supervisés</span>
+          <h2>Des agents IA utiles, mais jamais hors contrôle.</h2>
+          <p>Centralisez les validations, la synchronisation des boîtes mail, les règles métier et les journaux d’audit dans une interface pensée pour les équipes clientes.</p>
+          <div className="login-proof-grid">
+            <div><strong>Supervision</strong><span>Chaque action sensible passe par une validation claire.</span></div>
+            <div><strong>Traçabilité</strong><span>Les accès et décisions restent consultables.</span></div>
+            <div><strong>Connecteurs</strong><span>Boîtes mail, cas métier et routage dans un seul espace.</span></div>
+          </div>
         </div>
       </aside>
     </div>

@@ -26,4 +26,12 @@ SELECT format(
 
 GRANT CONNECT ON DATABASE :"app_database" TO agora_email_agent;
 GRANT USAGE ON SCHEMA public TO agora_email_agent;
+
+-- LangGraph's Postgres checkpointer and store create their own tables on the
+-- first startup (AsyncPostgresSaver.setup()). Without CREATE the agent dies at
+-- boot on a fresh database with "permission denied for schema public" — which
+-- only shows up on a clean deploy, because an existing volume already has the
+-- tables. Still NOSUPERUSER and NOBYPASSRLS, so tenant row-level security
+-- continues to apply to this role.
+GRANT CREATE ON SCHEMA public TO agora_email_agent;
 SQL

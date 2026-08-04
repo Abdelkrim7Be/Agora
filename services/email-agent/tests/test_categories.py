@@ -8,6 +8,7 @@ from langgraph.store.memory import InMemoryStore
 
 from src.categories import classify_category, load_categories
 from src.run_registry import list_runs, upsert_run
+from tests.conftest import ai_tool_call, patch_provider
 
 
 def _cfg() -> dict:
@@ -270,6 +271,29 @@ def test_render_template_fills_contact_name(tmp_path):
     assert rendered == "Bonjour Jean Dupont, salut Jean!"
 
 
+def test_render_template_strips_missing_name_placeholder():
+    from src.categories import render_template_text
+
+    rendered = render_template_text("Bonjour {{name}},\n\nSujet: {{subject}}", {"author": "anon@example.com"})
+
+    assert "{{name}}" not in rendered
+    assert rendered.startswith("Bonjour,\n")
+
+
+def test_render_template_strips_unknown_placeholders_and_orphan_punctuation():
+    from src.categories import render_template_text
+
+    rendered = render_template_text(
+        "Bonjour {{prenom}},\n{{company}} : {{missing}}.\nMerci {{name}} !",
+        {"author": "Alice <alice@example.com>"},
+    )
+
+    assert "{{" not in rendered
+    assert "Bonjour Alice," in rendered
+    assert " :" not in rendered
+    assert "Merci Alice !" in rendered
+
+
 def test_auto_draft_fills_contact_name(tmp_path):
     from src.categories import auto_draft_tool_call, Contact, load_categories
 
@@ -463,6 +487,238 @@ def test_category_instructions_round_trip_through_dump(tmp_path):
     assert reloaded.categories[0].instructions.sla == "Respond within 24h"
 
 
+def test_category_approval_policy_fields_default_and_round_trip(tmp_path):
+    """require_approval / external_send_allowed default safely and survive a
+    load -> dump -> load round-trip, including for pre-existing categories.yaml
+    files that predate these fields (migration safety)."""
+    from src.categories import Category, dump_categories
+
+    default = Category(name="plain", display_name="Plain")
+    assert default.require_approval is False
+    assert default.external_send_allowed is True
+
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_WITH_INSTRUCTIONS)
+    cfg = load_categories(path)
+    cfg.categories[0].require_approval = True
+    cfg.categories[0].external_send_allowed = False
+
+    reloaded_path = tmp_path / "categories_reloaded.yaml"
+    reloaded_path.write_text(dump_categories(cfg))
+    reloaded = load_categories(reloaded_path)
+    assert reloaded.categories[0].require_approval is True
+    assert reloaded.categories[0].external_send_allowed is False
+
+
+def test_category_proposals_discover_new_domains_and_accept(monkeypatch, tmp_path):
+    import src.api as api
+    from src.api import app
+    from fastapi.testclient import TestClient
+
+    categories_path = tmp_path / "categories.yaml"
+    categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
+    state_path = tmp_path / "category_proposals.json"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
+    patch_provider(monkeypatch, api, list_inbox=lambda limit: [
+        {"id": "1", "from": "A <a@factures.example>", "subject": "Facture janvier", "snippet": ""},
+        {"id": "2", "from": "B <b@factures.example>", "subject": "Facture février", "snippet": ""},
+        {"id": "3", "from": "C <c@factures.example>", "subject": "Facture mars", "snippet": ""},
+    ])
+
+    with TestClient(app) as client:
+        proposals = client.get("/categories/proposals").json()["proposals"]
+        assert proposals
+        accepted = client.post("/categories/proposals/accept", json={"proposal_id": proposals[0]["id"]})
+        assert accepted.status_code == 200, accepted.text
+        created = accepted.json()["parsed"]["categories"][0]
+        assert created["enabled"] is False
+        assert created["when"]["sender_domain"] == ["factures.example"]
+
+
+def test_category_proposals_skip_consumer_mail_domains(monkeypatch, tmp_path):
+    """A gmail.com cluster is unrelated people, and would swallow most mail."""
+    import src.api as api
+    from src.api import app
+    from fastapi.testclient import TestClient
+
+    categories_path = tmp_path / "categories.yaml"
+    categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
+    state_path = tmp_path / "category_proposals.json"
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
+    patch_provider(monkeypatch, api, list_inbox=lambda limit: [
+        {"id": str(i), "from": f"P{i} <p{i}@gmail.com>", "subject": f"Bonjour {i}", "snippet": ""}
+        for i in range(8)
+    ] + [
+        {"id": "x1", "from": "A <a@factures.example>", "subject": "Facture janvier", "snippet": ""},
+        {"id": "x2", "from": "B <b@factures.example>", "subject": "Facture février", "snippet": ""},
+        {"id": "x3", "from": "C <c@factures.example>", "subject": "Facture mars", "snippet": ""},
+    ])
+
+    with TestClient(app) as client:
+        proposals = client.get("/categories/proposals").json()["proposals"]
+
+    domains = [p["display_name"] for p in proposals if p["kind"] == "domain"]
+    assert "gmail.com" not in domains
+    assert "factures.example" in domains
+
+
+def test_category_edit_updates_and_clears_matchers(monkeypatch, tmp_path):
+    import src.api as api
+    from src.api import app
+    from fastapi.testclient import TestClient
+
+    categories_path = tmp_path / "categories.yaml"
+    categories_path.write_text(CATEGORIES_YAML, encoding="utf-8")
+    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+
+    payload = {
+        "display_name": "Réclamations clients",
+        "description": "Traiter les réclamations sans mot-clé obligatoire.",
+        "enabled": True,
+        "priority": "urgent",
+        "policy": "notify",
+        "owner": "Support",
+        "approver": None,
+        "route_to": ["support@company.example"],
+        "instructions": None,
+        "when": {},
+        "template": None,
+        "require_approval": True,
+        "external_send_allowed": False,
+    }
+
+    with TestClient(app) as client:
+        response = client.put("/categories/reclamation", json=payload)
+        assert response.status_code == 200, response.text
+        category = next(
+            item for item in response.json()["parsed"]["categories"]
+            if item["name"] == "reclamation"
+        )
+        assert category["display_name"] == "Réclamations clients"
+        assert category["policy"] == "notify"
+        assert category["when"]["sender_domain"] == []
+        assert category["when"]["subject_contains"] == []
+        assert category["template"] is None
+        assert category["require_approval"] is True
+        assert category["external_send_allowed"] is False
+
+
+def test_require_approval_escalates_organize_policy_to_hitl(fake_llms, monkeypatch):
+    """organize is `allow` at the tool-policy level (see security/policy.yaml), but a
+    category with require_approval=True must still pause for human approval — the
+    per-workflow override can only make a tool-default 'allow' stricter, never the
+    reverse."""
+    import src.graph as g
+    from src.categories import CategoriesConfig, Category
+    from src.automation import RuleWhen
+    from langchain_core.tools import tool as lc_tool
+
+    fake_llms()
+    organize_cfg = CategoriesConfig(
+        enabled=True,
+        categories=[Category(
+            name="newsletters",
+            display_name="Newsletters",
+            policy="organize",
+            labels=["Newsletter"],
+            when=RuleWhen(sender_contains=["newsletter"]),
+            require_approval=True,
+        )],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: organize_cfg)
+
+    @lc_tool
+    def apply_label(label: str) -> str:
+        """Apply a label to the current email."""
+        return f"labelled:{label}"
+
+    @lc_tool
+    def archive_email() -> str:
+        """Archive the current email."""
+        return "archived"
+
+    monkeypatch.setitem(g.tools_by_name_map, "apply_label", apply_label)
+    monkeypatch.setitem(g.tools_by_name_map, "archive_email", archive_email)
+
+    email = {"author": "newsletter@promo.io", "to": "me@example.com", "subject": "Weekly digest", "email_thread": "content"}
+    result = g.email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert "__interrupt__" in result
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "apply_label"
+
+
+def test_external_send_allowed_false_blocks_recipient_outside_internal_domains(monkeypatch, fake_llms, respond_email):
+    """A category with external_send_allowed=False must not let its notify_internal
+    routing reach a recipient outside AGENT_INTERNAL_DOMAINS — even though
+    notify_internal's own tool-level policy would otherwise allow (post-HITL) the
+    send. With no internal domains configured, this fails closed (blocks everything)
+    rather than silently no-op-ing."""
+    # The run continues past the notify approval into the agent loop, so the
+    # drafting model must be stubbed too or the test reaches the network.
+    fake_llms(classification="notify", tool_sequence=[ai_tool_call("Done", {"done": True})])
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "route_to": ["ops@external-partner.example"],
+                "when": {"subject_contains": ["question"]},
+                "external_send_allowed": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
+    monkeypatch.setattr(g.settings, "internal_domains", ())
+
+    result = g.email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert "__interrupt__" not in result
+    contents = [
+        m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+        for m in result["messages"]
+    ]
+    assert any("does not allow sending outside internal domains" in (c or "") for c in contents)
+
+
+def test_external_send_allowed_false_permits_internal_domain_recipient(monkeypatch, respond_email):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[
+            {
+                "name": "reclamation",
+                "display_name": "Réclamation",
+                "priority": "urgent",
+                "policy": "notify",
+                "owner": "Operations",
+                "route_to": ["ops@company.example"],
+                "when": {"subject_contains": ["question"]},
+                "external_send_allowed": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
+    monkeypatch.setattr(g.settings, "internal_domains", ("company.example",))
+
+    result = g.email_assistant.invoke({"email_input": respond_email}, _cfg())
+
+    assert "__interrupt__" in result
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "notify_internal"
+
+
 def test_classify_category_surfaces_instructions(tmp_path):
     path = tmp_path / "categories.yaml"
     path.write_text(CATEGORIES_WITH_INSTRUCTIONS)
@@ -533,3 +789,240 @@ def test_workflow_instructions_appear_only_for_owning_workflow(monkeypatch):
         config={"configurable": {"thread_id": str(uuid.uuid4())}},
     )
     assert "Workflow Instructions" not in spy.last_system_content
+
+
+# --- Workstream D: contact model unification ---
+
+def _directory_contact(**overrides):
+    from src.contacts import Contact
+
+    fields = {"email": "vip@company.example", "audience": "prospect", "category": "internal", "priority": "urgent"}
+    fields.update(overrides)
+    return Contact(**fields)
+
+
+def test_classify_unchanged_for_existing_fixtures(tmp_path, monkeypatch):
+    """The critical regression guard: with an empty unified directory, classify_category
+    must behave byte-for-byte like it did before the directory existed."""
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    before_contact_override = classify_category(
+        {"author": "VIP <vip@company.example>", "subject": "hello"}, cfg
+    )
+    before_rule_match = classify_category(
+        {"author": "Client <ana@client.example>", "subject": "urgent issue"}, cfg
+    )
+
+    assert before_contact_override["category"] == "internal"
+    assert before_contact_override["priority"] == "urgent"
+    assert before_rule_match["category"] == "reclamation"
+
+
+def test_rules_match_before_the_directory_contact(tmp_path, monkeypatch):
+    directory_contact = _directory_contact(email="ana@client.example", category="internal")
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [directory_contact])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    # What the message is about wins over who sent it: the 'reclamation' rule
+    # matches this sender domain and subject, so it decides, even though the
+    # directory files this contact under 'internal'. The reverse order meant a
+    # single directory entry swallowed every workflow the owner had configured.
+    claimed = classify_category({"author": "Client <ana@client.example>", "subject": "urgent issue"}, cfg)
+    assert claimed["category"] == "reclamation"
+
+    # With nothing for a rule to match on, the contact's category still applies.
+    unclaimed = classify_category({"author": "Client <ana@client.example>", "subject": "bonjour"}, cfg)
+    assert unclaimed["category"] == "internal"
+
+
+def test_legacy_contact_still_matches_when_absent_from_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(CATEGORIES_YAML)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "VIP <vip@company.example>", "subject": "hello"}, cfg)
+    assert result["category"] == "internal"
+
+
+def test_directory_wins_over_legacy_for_same_email(tmp_path, monkeypatch):
+    # Sender domain deliberately outside every rule's `when`, so the comparison
+    # is purely directory-contact vs legacy-contact.
+    legacy_yaml = CATEGORIES_YAML + "\n  - email: vip@partner.example\n    category: internal\n"
+    directory_contact = _directory_contact(email="vip@partner.example", category="reclamation", priority="low")
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [directory_contact])
+    path = tmp_path / "categories.yaml"
+    path.write_text(legacy_yaml)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "VIP <vip@partner.example>", "subject": "hello"}, cfg)
+
+    # The legacy contact says 'internal'; the directory says 'reclamation'.
+    assert result["category"] == "reclamation"
+    assert result["priority"] == "low"
+
+
+def test_exact_email_beats_domain_match(tmp_path, monkeypatch):
+    # A domain-wide legacy contact says 'internal'; an exact-email legacy contact
+    # for the same sender says 'reclamation'. Exact email must win (precedence 2 vs 4).
+    legacy_yaml = CATEGORIES_YAML + (
+        "\n  - domain: client.example\n    category: internal\n"
+        "  - email: ana@client.example\n    category: reclamation\n"
+    )
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(legacy_yaml)
+    cfg = load_categories(path)
+
+    result = classify_category({"author": "Client <ana@client.example>", "subject": "hello"}, cfg)
+    assert result["category"] == "reclamation"
+
+
+def test_domain_only_legacy_contact_matches_by_domain(tmp_path, monkeypatch):
+    legacy_yaml = CATEGORIES_YAML + "\n  - domain: client.example\n    category: internal\n"
+    monkeypatch.setattr("src.contacts.list_contacts", lambda **kwargs: [])
+    path = tmp_path / "categories.yaml"
+    path.write_text(legacy_yaml)
+    cfg = load_categories(path)
+
+    # No exact-email contact for this sender, and no rule claims the message
+    # (the 'reclamation' rule needs 'urgent' in the subject too), so the
+    # domain-only contact decides.
+    result = classify_category({"author": "Someone <other@client.example>", "subject": "bonjour"}, cfg)
+    assert result["category"] == "internal"
+
+
+def test_rule_when_matches_sender_regex_and_body_contains():
+    from src.automation import RuleWhen
+    from src.categories import matches_when
+
+    email = {
+        "author": "Leads <north-africa@partner.example>",
+        "subject": "Hello",
+        "email_thread": "Bonjour, nous demandons un devis pour 12 licences.",
+    }
+
+    assert matches_when(
+        RuleWhen(sender_regex=[r"north-.*@partner\.example"], body_contains=["devis"]),
+        email,
+    )
+    assert not matches_when(RuleWhen(sender_regex=["[broken"]), email)
+    assert not matches_when(RuleWhen(body_contains=["facture"]), email)
+
+
+def test_llm_tagged_category_executes_auto_draft_policy(monkeypatch, fake_llms):
+    import src.graph as g
+    from src.categories import CategoriesConfig, Category, Template
+    from src.automation import RuleWhen
+    from types import SimpleNamespace
+
+    class _CategoryRouter:
+        def invoke(self, _messages, config=None):
+            return SimpleNamespace(classification="ignore", category="support")
+
+    cfg = CategoriesConfig(
+        enabled=True,
+        categories=[Category(
+            name="support",
+            display_name="Support",
+            policy="auto_draft",
+            template="support_reply",
+            when=RuleWhen(subject_contains=["never-match-this"]),
+        )],
+        templates=[Template(
+            name="support_reply",
+            subject="Re: {{subject}}",
+            body="Bonjour,\n\nNous revenons vers vous rapidement.\n\nCordialement",
+            variables=[],
+        )],
+    )
+    fake_llms(classification="ignore")
+    monkeypatch.setattr(g, "llm_router", _CategoryRouter())
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
+
+    email = {
+        "author": "Client <client@example.com>",
+        "to": "Me <me@example.com>",
+        "subject": "Question produit",
+        "email_thread": "Pouvez-vous aider ?",
+    }
+    result = g.email_assistant.invoke({"email_input": email}, _cfg())
+
+    assert result.get("classification_decision") == "respond"
+    assert result.get("category") == "support"
+    assert result.get("messages")[-1].tool_calls[0]["name"] == "write_email"
+
+
+def test_template_name_placeholder_falls_back_to_polished_greeting():
+    from src.categories import render_template_text
+
+    rendered = render_template_text(
+        "Bonjour {{name}}\n\nMerci pour votre message.",
+        {"subject": "Question", "author": "client@example.com"},
+    )
+
+    assert "{{name}}" not in rendered
+    assert rendered.startswith("Bonjour,\n")
+
+
+def _config_with_contact_and_rules():
+    from src.categories import CategoriesConfig, Category, Contact
+    from src.automation import RuleWhen
+
+    return CategoriesConfig(
+        enabled=True,
+        contacts=[
+            Contact(email="client@example.com", category="finance_requests", priority="urgent")
+        ],
+        categories=[
+            Category(
+                name="finance_requests",
+                display_name="Finance",
+                policy="auto_draft",
+                priority="normal",
+            ),
+            Category(
+                name="reclamation",
+                display_name="Réclamation",
+                policy="notify",
+                priority="normal",
+                when=RuleWhen(subject_contains=["reclamation"]),
+            ),
+        ],
+    )
+
+
+def test_subject_rule_beats_the_sender_category():
+    # One directory entry used to file every message from that sender under its
+    # own category, so a complaint from a known client never reached the
+    # complaint workflow the owner had configured.
+    result = classify_category(
+        {"author": "client@example.com", "subject": "Reclamation commande 88213", "email_thread": ""},
+        _config_with_contact_and_rules(),
+    )
+    assert result["category"] == "reclamation"
+    assert result["policy"] == "notify"
+
+
+def test_sender_category_still_applies_when_no_rule_matches():
+    result = classify_category(
+        {"author": "client@example.com", "subject": "Question diverse", "email_thread": ""},
+        _config_with_contact_and_rules(),
+    )
+    assert result["category"] == "finance_requests"
+
+
+def test_contact_priority_still_overrides_on_a_rule_match():
+    # The contact keeps saying how urgent this sender is, even when the subject
+    # decides which workflow handles the message.
+    result = classify_category(
+        {"author": "client@example.com", "subject": "Reclamation urgente", "email_thread": ""},
+        _config_with_contact_and_rules(),
+    )
+    assert result["category"] == "reclamation"
+    assert result["priority"] == "urgent"

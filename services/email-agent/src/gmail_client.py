@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import html as _html
 from email.message import EmailMessage
-from email.utils import getaddresses
 
 try:
     import pypdf as _pypdf
@@ -12,12 +11,29 @@ except ImportError:
 
 from src.config import SERVICE_ROOT, settings
 from src.gmail_budget import record_gmail_call
+from src.outbound_guard import (  # noqa: F401 — OutboundRecipientBlocked re-exported for callers
+    OutboundRecipientBlocked,
+    email_addresses,
+    enforce_outbound_allowlist as _enforce_outbound_allowlist,
+)
 from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
-GMAIL_SCOPES = ["https://mail.google.com/"]
+# `gmail.modify` covers everything this agent does: read, send, drafts, labels,
+# archive and trash. The only thing it withholds is permanent deletion, which
+# nothing here performs — `trash_email` calls users.messages.trash.
+#
+# Deliberately NOT `https://mail.google.com/`. That is the maximal Gmail scope:
+# it grants irreversible deletion and reads as "this app can do anything to your
+# mail" on the consent screen, which is indefensible for a mailbox holding
+# financial correspondence. Both are Google restricted scopes and require OAuth
+# verification plus a CASA assessment before production use.
+#
+# Changing this invalidates existing refresh tokens: a mailbox authorised under
+# the old scope must reconnect once. See docs/mail-providers.md.
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 
 def gmail_resource(user_id: str | None = None):
@@ -81,6 +97,37 @@ def fetch_sent(max_messages: int = 50, resource=None) -> list[dict]:
                 "id": message.get("id", ref.get("id")),
                 "thread_id": message.get("threadId", ref.get("threadId")),
                 "to": to,
+                "subject": _header_value(message, "Subject"),
+                "date": _header_value(message, "Date"),
+                "body": body,
+            }
+        )
+    return samples
+
+
+def fetch_recent(max_messages: int = 50, resource=None) -> list[dict]:
+    """Return recent inbox message samples (read or unread), newest first.
+
+    Unlike fetch_unread, this does not depend on unread state — used by the
+    instance onboarding pipeline to seed contacts/persona suggestions from
+    whatever the mailbox already contains."""
+    resource = resource or gmail_resource()
+    refs = (
+        resource.users()
+        .messages()
+        .list(userId="me", q="in:inbox", maxResults=max_messages)
+        .execute()
+        .get("messages", [])
+    )
+    samples: list[dict] = []
+    for ref in refs:
+        message = get_message(ref["id"], resource=resource)
+        body = _extract_message_part(message.get("payload", {})).strip()
+        samples.append(
+            {
+                "id": message.get("id", ref.get("id")),
+                "thread_id": message.get("threadId", ref.get("threadId")),
+                "from": _header_value(message, "From"),
                 "subject": _header_value(message, "Subject"),
                 "date": _header_value(message, "Date"),
                 "body": body,
@@ -170,7 +217,19 @@ def search_messages(query: str, max_results: int, resource=None) -> list[dict]:
     return results.get("messages", [])
 
 
-_INBOX_METADATA_HEADERS = ["From", "Subject", "Date"]
+# Date/From/Subject drive the inbox list; the remaining headers are the bulk-mail
+# signals the junk gate reads (src/junk_gate.py). Without them a prefetched
+# message reaches the gate with half its evidence missing.
+_INBOX_METADATA_HEADERS = [
+    "From",
+    "To",
+    "Subject",
+    "Date",
+    "List-Unsubscribe",
+    "List-Id",
+    "Precedence",
+    "Auto-Submitted",
+]
 
 
 def _inbox_metadata_request(resource, msg_id: str):
@@ -465,6 +524,7 @@ def _send_email_message(
     resource=None,
     rich: bool = True,
 ) -> dict:
+    _enforce_outbound_allowlist(to)
     resource = resource or gmail_resource()
     message = _build_email_message(
         to, subject, body, extra_headers=extra_headers, rich=rich,
@@ -505,6 +565,9 @@ def send_html_message(
     """
     if respect_dry_run and effective_dry_run():
         return _dry_run_result("send_html", to=to, subject=subject)
+    # Campaign broadcasts build their own MIME message instead of going through
+    # _send_email_message, so the allowlist has to be enforced here as well.
+    _enforce_outbound_allowlist(to)
     resource = resource or gmail_resource()
     message = EmailMessage()
     message["To"] = to
@@ -533,15 +596,7 @@ def _prefixed_subject(prefix: str, subject: str) -> str:
 
 
 def _email_addresses(*values: str) -> list[str]:
-    seen: set[str] = set()
-    results: list[str] = []
-    for _name, address in getaddresses([v for v in values if v]):
-        address = address.strip()
-        key = address.lower()
-        if address and key not in seen:
-            seen.add(key)
-            results.append(address)
-    return results
+    return email_addresses(*values)
 
 
 def _self_address(resource) -> str:
@@ -698,6 +753,20 @@ def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
         f"{_extract_message_part(original.get('payload', {}))}"
     )
     return _send_email_message(to=to, subject=subject, body=body, resource=resource)
+
+
+def notify_internal_message(to: str | list[str], subject: str, note: str, resource=None) -> dict:
+    """Send an internal-only workflow notification.
+
+    Unlike forward_message, this never re-fetches or re-sends the original
+    message body — only the synthesized note text. Untrusted email content
+    the note references (sender, subject line) is never expanded past what
+    the caller already put in `note`.
+    """
+    if effective_dry_run():
+        return _dry_run_result("notify_internal_message", to=to, subject=subject)
+    resource = resource or gmail_resource()
+    return _send_email_message(to=to, subject=subject, body=note, resource=resource)
 
 
 def reply_all_message(message_id: str, body: str, resource=None) -> dict:
@@ -877,4 +946,7 @@ def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = Non
         "labels": message.get("labelIds", []),
         "list_unsubscribe": bool(_header(headers, "List-Unsubscribe", "")),
         "precedence_bulk": _header(headers, "Precedence", "").strip().lower() in {"bulk", "list", "junk"},
+        "list_id": bool(_header(headers, "List-Id", "")),
+        # RFC 3834: anything but "no" marks generated mail (auto-replied, auto-generated).
+        "auto_submitted": _header(headers, "Auto-Submitted", "").strip().lower() not in {"", "no"},
     }

@@ -38,6 +38,7 @@ auto_organize:
 |------------|------|--------|----------|
 | `email` | `write_email(to, subject, content)` | Sends a new email | HITL |
 | `email` | `forward_email(to, note)` | Forwards the current email | HITL |
+| `email` | `notify_internal(to, subject, note)` | Sends an internal workflow notice — synthesized note only, never the original message body | HITL |
 | `email` | `reply_all(content)` | Replies to all participants on the current thread | HITL |
 | `email` | `Done(done)` | Ends the run | None |
 | `inbox` | `apply_label(label)` | Applies or creates a Gmail label on the current email | None |
@@ -50,6 +51,12 @@ auto_organize:
 
 Inbox and thread tools do not accept Gmail message ids from model-provided arguments. `tool_node` injects trusted `email_id` and `gmail_thread_id` from the poller-derived `EmailInput` using context variables.
 
+A category's `policy: notify` (routing to `owner`/`approver`/`route_to`) calls `notify_internal`,
+not `forward_email` — the workflow note (category, owner, approver, original sender/subject) is
+sent on its own, without re-fetching and re-sending the original message body verbatim. Since it
+never needs the original Gmail message, `notify_internal` works for manually-submitted runs too
+(unlike a true `forward_email`, which needs a trusted `email_id` to fetch what it forwards).
+
 ## Security Policy
 
 When `AGENT_SECURITY_ENABLED=true`, every tool call is authorized through the security service before execution.
@@ -61,10 +68,28 @@ Default policy decisions:
 | `apply_label`, `remove_label`, `mark_read`, `mark_unread`, `archive_email` | `allow` |
 | `create_draft` | `allow` with recipient/content caps |
 | `trash_email` | `hitl` |
-| `write_email`, `forward_email`, `reply_all` | `hitl` |
+| `write_email`, `forward_email`, `notify_internal`, `reply_all` | `hitl` |
 | unknown tools | `deny` |
 
 The security service remains default-deny: adding a new tool also requires adding an explicit `policy.yaml` rule.
+
+### Per-workflow approval policy
+
+A category (`categories.yaml`) can layer two extra rules on top of the tool-level table above.
+Both are strictly additive — they can only make a workflow's tool calls stricter, never less
+strict than the tool's own default:
+
+- `require_approval: true` — escalates that category's tool calls from `allow` to `hitl`, even
+  when the tool's own policy default is `allow` (e.g. forcing human review before an `organize`
+  category auto-labels and archives).
+- `external_send_allowed: false` — blocks that category's send-style tool calls (`write_email`,
+  `forward_email`, `notify_internal`, `reply_all`) from reaching any recipient outside
+  `AGENT_INTERNAL_DOMAINS`. With no internal domains configured, this fails closed (blocks
+  every recipient) rather than silently doing nothing.
+
+Both are enforced in `tool_node`, independent of `AGENT_SECURITY_ENABLED` — they are a local
+workflow-policy rule, not a call to the external security service. Configurable per category via
+`PUT /categories/{name}` (`require_approval`, `external_send_allowed`) or the Workflows page.
 
 ### Output audit before send
 
@@ -117,5 +142,11 @@ authorization, HITL, dry-run, and trusted message context all still apply.
 - Forwarding does not include attachments from the original message.
 - `reply_all` recipients are derived from the Gmail thread and are not submitted to recipient policy checks.
 - `reply_all` sets `References` to the original `Message-ID` only.
+- `notify_internal`'s note still interpolates the original sender address and subject line
+  as plain text (not the full body) — content caps and HITL review still apply, since those
+  fields are untrusted-content-derived.
 - Auto-organization can perform reversible allowed actions without human approval when enabled.
 - In the Phase 4 compose stack, security rate limits use Redis; local dev can still use the in-memory backend.
+- Every capability tool above runs through the mail provider layer, so it works on Gmail and
+  Outlook alike — see `docs/mail-providers.md` for the mapping and for the Outlook caveats
+  (no push notifications, no live verification yet).

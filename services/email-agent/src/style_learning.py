@@ -67,6 +67,52 @@ def build_style_text(profile: StyleProfile) -> str:
     )
 
 
+_SCALAR_LABELS = {
+    "Greeting:": "greeting",
+    "Tone:": "tone",
+    "Sign-off:": "sign_off",
+    "Typical length:": "typical_length",
+}
+_LIST_LABELS = {
+    "Recurring phrases:": "recurring_phrases",
+    "Do not:": "donts",
+    "Do:": "dos",
+}
+
+
+def parse_style_text(text: str) -> StyleProfile:
+    """Inverse of `build_style_text` — the structured profile behind the stored text.
+
+    The store only keeps the rendered text, so the UI's structured "learned profile"
+    panel has to be reconstructed from it. Unknown lines are ignored rather than
+    failing, since a hand-edited style is still worth showing.
+    """
+    profile = StyleProfile()
+    list_key: str | None = None
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for label, field in _SCALAR_LABELS.items():
+            if stripped.startswith(label):
+                value = stripped[len(label):].strip()
+                setattr(profile, field, "" if value == "not specified" else value)
+                list_key = None
+                break
+        else:
+            # "Do not:" must be tested before "Do:" — dict order guarantees it.
+            for label, field in _LIST_LABELS.items():
+                if stripped.startswith(label):
+                    list_key = field
+                    break
+            else:
+                if list_key and stripped.startswith("- "):
+                    item = stripped[2:].strip()
+                    if item and item != "none observed":
+                        getattr(profile, list_key).append(item)
+    return profile
+
+
 def seed_style(store, profile: StyleProfile, agent_instance_id: str | None = None) -> str:
     resolved = normalize_agent_instance_id(agent_instance_id or current_agent_instance_id())
     text = build_style_text(profile)

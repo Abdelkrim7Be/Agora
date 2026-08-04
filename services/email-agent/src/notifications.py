@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 
 from src.config import settings
-from src.gmail_client import send_message
+from src.mail import get_provider
 from src.roles import resolve_role
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def _send_system_notification(recipient: str | None, subject: str, body: str) ->
     if not settings.notify_enabled or not recipient:
         return False
     try:
-        send_message(to=recipient, subject=subject, body=body)
+        get_provider().send_message(to=recipient, subject=subject, body=body)
         return True
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("notifications: failed to send system mail to %s: %s", recipient, exc)

@@ -43,7 +43,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "gateway.owner.username=owner",
         "gateway.owner.password=ownerpass",
         "gateway.viewer.username=viewer",
-        "gateway.viewer.password=viewerpass"
+        "gateway.viewer.password=viewerpass",
+        "gateway.admin.username=admin",
+        "gateway.admin.password=adminpass"
 })
 class AuditTest {
 
@@ -130,9 +132,10 @@ class AuditTest {
     }
 
     @Test
-    void audit_endpoint_owner_only() throws Exception {
+    void audit_endpoint_admin_only() throws Exception {
         String viewerToken = login("viewer", "viewerpass");
         String ownerToken = login("owner", "ownerpass");
+        String adminToken = login("admin", "adminpass");
 
         mockMvc.perform(get("/audit")
                         .header("Authorization", "Bearer " + viewerToken))
@@ -140,6 +143,10 @@ class AuditTest {
 
         mockMvc.perform(get("/audit")
                         .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/audit")
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray());
     }
@@ -193,7 +200,7 @@ class AuditTest {
         // Two distinct audit-generating actions guarantee at least two linked rows.
         failedLogin("no-such-user-chain-1");
         failedLogin("no-such-user-chain-2");
-        String ownerToken = login("owner", "ownerpass");
+        String adminToken = login("admin", "adminpass");
 
         List<AuditEvent> rows = auditRepository.findAllByOrderByIdAsc();
         assertThat(rows.size()).isGreaterThanOrEqualTo(2);
@@ -203,7 +210,7 @@ class AuditTest {
         assertThat(rows).allMatch(row -> row.getHash() != null && row.getHash().length() == 64);
 
         mockMvc.perform(get("/audit/verify")
-                        .header("Authorization", "Bearer " + ownerToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(true))
                 .andExpect(jsonPath("$.brokenAtId").doesNotExist());
@@ -217,7 +224,7 @@ class AuditTest {
                         && "no-such-user-tamper-target".equals(e.getUsername()))
                 .reduce((a, b) -> { throw new AssertionError("more than one matching row"); })
                 .orElseThrow(() -> new AssertionError("no matching row"));
-        String ownerToken = login("owner", "ownerpass");
+        String adminToken = login("admin", "adminpass");
 
         // Simulate a direct database edit — the one thing the append-only repository
         // interface cannot do itself, which is exactly the threat this chain defends against.
@@ -227,18 +234,23 @@ class AuditTest {
         }
 
         mockMvc.perform(get("/audit/verify")
-                        .header("Authorization", "Bearer " + ownerToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(false))
                 .andExpect(jsonPath("$.brokenAtId").value(tampered.getId()));
     }
 
     @Test
-    void audit_verify_endpoint_owner_only() throws Exception {
+    void audit_verify_endpoint_admin_only() throws Exception {
         String viewerToken = login("viewer", "viewerpass");
+        String ownerToken = login("owner", "ownerpass");
 
         mockMvc.perform(get("/audit/verify")
                         .header("Authorization", "Bearer " + viewerToken))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/audit/verify")
+                        .header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isForbidden());
     }
 }

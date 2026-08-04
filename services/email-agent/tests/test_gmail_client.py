@@ -20,6 +20,7 @@ from src.gmail_client import (
     mark_as_read,
     mark_as_unread,
     modify_labels,
+    notify_internal_message,
     reply_all_message,
     render_rich_email_html,
     send_message,
@@ -695,6 +696,36 @@ def test_reply_all_message_fetches_original_and_sends_thread_reply(monkeypatch):
     assert "<p>Reply body</p>" in _html_body(decoded)
 
 
+def test_notify_internal_message_respects_dry_run(monkeypatch):
+    monkeypatch.setattr(settings, "dry_run", True)
+
+    assert notify_internal_message("ops@example.com", "Route", "FYI") == {
+        "dry_run": True,
+        "action": "notify_internal_message",
+        "to": "ops@example.com",
+        "subject": "Route",
+    }
+
+
+def test_notify_internal_message_never_fetches_the_original_message(monkeypatch):
+    """The whole point of notify_internal vs forward_email: it sends only the
+    caller-supplied note, never re-fetching (and re-sending) the original message."""
+    monkeypatch.setattr(settings, "dry_run", False)
+    resource = _FakeGmailResource(messages={})
+
+    result = notify_internal_message("ops@example.com", "Route", "Please handle this.", resource=resource)
+
+    assert result["id"] == "sent-1"
+    calls = resource.users().messages().calls
+    assert calls == [calls[0]]
+    assert calls[0][0] == "send"
+    sent = calls[0][1]["body"]
+    decoded = _decoded(sent["raw"])
+    assert decoded["To"] == "ops@example.com"
+    assert decoded["Subject"] == "Route"
+    assert _plain_body(decoded) == "Please handle this."
+
+
 def test_render_rich_email_html_preserves_markdown_structure():
     html = render_rich_email_html("Bonjour,\n\n- Point A\n- Point B\n\n**Merci**")
 
@@ -780,6 +811,8 @@ def test_gmail_to_email_input_maps_all_fields():
         "labels": [],
         "list_unsubscribe": False,
         "precedence_bulk": False,
+        "list_id": False,
+        "auto_submitted": False,
     }
 
 

@@ -9,7 +9,7 @@ import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
-import { actionArgs } from '../../utils/format';
+import { actionArgs, workflowLabelFr } from '../../utils/format';
 import {
   usePendingRunsQuery,
   useApproveRun,
@@ -19,6 +19,7 @@ import {
   useToneRun,
   useBulkDecision,
   useSyncGmail,
+  useCategoriesQuery,
 } from '../../api/queries';
 import { useRunEvents } from '../../hooks/useRunEvents';
 
@@ -36,6 +37,10 @@ export default function ValidationPage() {
   const canApprove = hasRole('approver');
 
   const [page, setPage] = useState(0);
+  const [priority, setPriority] = useState('');
+  const [category, setCategory] = useState('');
+  const [search, setSearch] = useState('');
+  const [since, setSince] = useState('');
   const [selectedRuns, setSelectedRuns] = useState(new Set());
   const [activeRunId, setActiveRunId] = useState(null);
   const [editedFields, setEditedFields] = useState({});
@@ -44,7 +49,9 @@ export default function ValidationPage() {
   const [busyRuns, setBusyRuns] = useState(new Set());
   const announcedInitialLoad = useRef(false);
 
-  const query = usePendingRunsQuery(page);
+  const query = usePendingRunsQuery(page, { category, priority, q: search.trim(), since });
+  const categoriesQuery = useCategoriesQuery();
+  const availableCategories = categoriesQuery.data?.parsed?.categories || [];
   useRunEvents();
   const approveRun = useApproveRun();
   const rejectRun = useRejectRun();
@@ -56,10 +63,12 @@ export default function ValidationPage() {
 
   const runs = query.data?.runs || [];
 
+  useEffect(() => { setPage(0); }, [category, priority, search, since]);
+
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
       announcedInitialLoad.current = true;
-      setStatus('Validation chargée.', 'ok');
+      setStatus('Validations à jour.', 'ok');
     }
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -70,7 +79,11 @@ export default function ValidationPage() {
   // Prune selection/edits to runs still present.
   useEffect(() => {
     const present = new Set(runs.map((run) => run.run_id));
-    setSelectedRuns((prev) => new Set([...prev].filter((id) => present.has(id))));
+    setSelectedRuns((prev) => {
+      const kept = [...prev].filter((id) => present.has(id));
+      if (kept.length === prev.size) return prev;
+      return new Set(kept);
+    });
   }, [runs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setBusy = (runId, busy) => {
@@ -252,8 +265,8 @@ export default function ValidationPage() {
     });
   };
 
-  const handleBulk = async (decision) => {
-    const runIds = [...selectedRuns];
+  const handleBulk = async (decision, explicitRunIds = null) => {
+    const runIds = explicitRunIds || [...selectedRuns];
     if (!runIds.length) return;
     const confirmed = await confirmDialog({
       title: decision === 'approve' ? 'Approuver la sélection' : 'Rejeter la sélection',
@@ -265,7 +278,12 @@ export default function ValidationPage() {
     try {
       const result = await bulkDecision.mutateAsync({ runIds, decision });
       const errors = (result.results || []).filter((item) => item.status === 'error');
-      setSelectedRuns(new Set());
+      setSelectedRuns((prev) => {
+        if (!explicitRunIds) return new Set();
+        const next = new Set(prev);
+        runIds.forEach((id) => next.delete(id));
+        return next;
+      });
       setStatus(errors.length ? `${errors.length} échec(s) sur ${runIds.length}.` : `${runIds.length} décision(s) appliquée(s).`, errors.length ? 'error' : 'ok');
     } catch (error) {
       setStatus(`Action groupée échouée : ${error.message}`, 'error');
@@ -313,21 +331,56 @@ export default function ValidationPage() {
 
   const hasMore = query.data?.hasMore ?? false;
   const selectedCount = selectedRuns.size;
+  const categoryGroups = runs.reduce((acc, run) => {
+    const label = workflowLabelFr({ display_name: run.category_display_name, category: run.category });
+    (acc[label] ||= []).push(run);
+    return acc;
+  }, {});
+  const categoryGroupEntries = Object.entries(categoryGroups);
+  const selectCategory = (items) => {
+    setSelectedRuns((prev) => {
+      const next = new Set(prev);
+      items.forEach((run) => next.add(run.run_id));
+      return next;
+    });
+  };
 
   return (
     <>
       <PageHeading view="validation" />
+      <div className="notice">
+        <strong>Décisions à prendre :</strong> seules les actions qui attendent une validation humaine apparaissent ici.
+      </div>
       <div className="toolbar">
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
           <span>Actualiser</span>
         </button>
-        <button className="primary" type="button" onClick={handleSync}>
+        <button className="primary" type="button" onClick={handleSync} disabled={syncGmail.isPending}>
           <span className="material-symbols-outlined" aria-hidden="true">mark_email_read</span>
           <span>Vérifier Gmail</span>
         </button>
+        {syncGmail.isPending ? (
+          <div className="progress-track">
+            <span className="progress-track-dot" aria-hidden="true" />
+            <div className="progress-bar-indeterminate" role="progressbar" aria-label="Vérification Gmail en cours" />
+            <span className="progress-track-label">Synchronisation...</span>
+          </div>
+        ) : null}
+        <select aria-label="Filtre de cas métier" value={category} onChange={(event) => setCategory(event.target.value)}>
+          <option value="">Tous les cas métier</option>
+          {availableCategories.map((c) => <option key={c.name} value={c.name}>{c.display_name || c.name}</option>)}
+        </select>
+        <select aria-label="Filtre de priorité" value={priority} onChange={(event) => setPriority(event.target.value)}>
+          <option value="">Toutes priorités</option>
+          <option value="urgent">Urgent</option>
+          <option value="normal">Normal</option>
+          <option value="low">Basse</option>
+        </select>
+        <input aria-label="Recherche expéditeur ou sujet" placeholder="Rechercher" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <input aria-label="Depuis le" type="date" value={since} onChange={(event) => setSince(event.target.value)} />
         <span className="counter">{runs.length} en attente</span>
-        <span className="kbd-legend">Raccourcis : j/k naviguer · a approuver · r rejeter · e retoucher · x sélectionner</span>
+        <span className="kbd-legend" title="Raccourcis clavier disponibles">Clavier disponible</span>
         <span className="toolbar-spacer"></span>
         <Pager page={page} hasMore={hasMore} onPrev={() => setPage((p) => Math.max(0, p - 1))} onNext={() => setPage((p) => p + 1)} />
       </div>
@@ -340,6 +393,31 @@ export default function ValidationPage() {
           <button className="danger" type="button" onClick={() => handleBulk('reject')}>Rejeter la sélection</button>
         </div>
       )}
+
+      {canApprove && categoryGroupEntries.length > 1 ? (
+        <div className="category-bulk-panel" aria-label="Actions groupées par cas métier">
+          {categoryGroupEntries.map(([label, items]) => {
+            const ids = items.map((run) => run.run_id);
+            const allSelected = ids.every((id) => selectedRuns.has(id));
+            return (
+              <div className="category-bulk-row" key={label}>
+                <div>
+                  <strong>{label}</strong>
+                  <span>{items.length} brouillon{items.length > 1 ? 's' : ''}</span>
+                </div>
+                <button type="button" onClick={() => selectCategory(items)} disabled={allSelected}>
+                  <span className="material-symbols-outlined" aria-hidden="true">select_check_box</span>
+                  <span>{allSelected ? 'Sélectionnée' : 'Sélectionner'}</span>
+                </button>
+                <button className="primary" type="button" onClick={() => handleBulk('approve', ids)}>
+                  <span className="material-symbols-outlined" aria-hidden="true">send</span>
+                  <span>Approuver ce cas</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div id="pending-list">
         {!runs.length ? (

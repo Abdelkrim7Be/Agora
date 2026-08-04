@@ -20,9 +20,17 @@ export function useRunEvents() {
     const connect = () => {
       if (stopped) return;
       controller = new AbortController();
-      streamApi('/api/agent/events', { signal: controller.signal }, ({ event }) => {
+      streamApi('/api/agent/events', { signal: controller.signal }, ({ event, data }) => {
         if (event === 'run_updated') {
           queryClient.invalidateQueries({ queryKey: ['pending-runs'] });
+          queryClient.invalidateQueries({ queryKey: ['drafts'] });
+          queryClient.invalidateQueries({ queryKey: ['notifications'] });
+          queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
+          if (document.hidden && window.Notification?.permission === 'granted') {
+            const title = data?.status === 'pending_approval' ? 'Brouillon prêt à valider' : 'Activité de l’agent';
+            const body = [data?.subject, data?.author].filter(Boolean).join(' · ');
+            new Notification(title, { body: body || 'Agora AI a mis à jour une exécution.' });
+          }
         }
       })
         .catch(() => {})

@@ -7,7 +7,15 @@ tools:
   write_email:
     decision: hitl            # sends always go through the human approval gate
     args:
-      to: { allow_trust: [TRUSTED, INTERNAL] }
+      # Mail arriving from outside is UNTRUSTED by baseline and the classifier can
+      # only push it further down to HOSTILE, never up — so this list means "any
+      # recipient except one lifted from content classified hostile". Listing only
+      # TRUSTED/INTERNAL here would block every reply to an external customer,
+      # which is most of what this agent does. The protection is the HOSTILE
+      # exclusion, and it is only worth anything while something actually
+      # classifies content: see AGENT_SECURITY_DEEP_CHECK_DRAFTS, which puts every
+      # drafted reply through the quarantined classifier before it is approvable.
+      to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
     recipients:
       allow_domains: []       # empty = any domain (still subject to deny_domains)
       deny_domains: []
@@ -49,6 +57,11 @@ tools:
     limits:
       max_content_chars: 20000
 
+  # NOTE: send tools no longer take a `to` argument — the agent resolves the
+  # destination from the message headers or the workflow's routing and declares
+  # it in `recipients`, which the `recipients:` blocks below check. The
+  # `to: { allow_trust: ... }` rules are kept as defence in depth for any tool
+  # that does pass a recipient argument; they are inert for the ones that don't.
   # Sending actions always go through HITL and share send-like recipient/content caps.
   forward_email:
     decision: hitl
@@ -59,6 +72,23 @@ tools:
       deny_domains: []
     limits:
       max_content_chars: 20000
+      max_per_run: 20
+      max_per_day: 500
+  # Internal workflow routing notice: synthesized note only, never the original
+  # message body, so it gets a much smaller content cap than an actual forward.
+  # Same recipient-trust rule as forward_email/reply_all (workflow-configured
+  # recipients read as TRUSTED, replies within a known-internal thread as
+  # INTERNAL) — never UNTRUSTED, since that's a recipient lifted from
+  # unsanitized email content.
+  notify_internal:
+    decision: hitl
+    args:
+      to: { allow_trust: [TRUSTED, INTERNAL] }
+    recipients:
+      allow_domains: []
+      deny_domains: []
+    limits:
+      max_content_chars: 2000
       max_per_run: 20
       max_per_day: 500
   reply_all:

@@ -13,6 +13,7 @@ from src.models import (
     TrustLevel,
 )
 from src.quarantine_llm import build_quarantine_classifier
+from src.redact import redact
 
 # Initialized lazily on first real invocation; patched to a fake in tests.
 # No bind_tools: the quarantine LLM has no tool surface by construction.
@@ -74,11 +75,20 @@ def _unique_reasons(*groups: list[str]) -> list[str]:
 def sanitize(req: SanitizeRequest) -> SanitizeResponse:
     source_content = f"{req.subject}\n{req.content}"
     h_reasons = heuristics.scan(source_content)
-    source_verdict = classify_source(
-        ClassifySourceRequest(source="gmail_thread", content=source_content),
-        prefilter_reasons=h_reasons,
-    )
-    source_trust = source_verdict.trust
+    if h_reasons or settings.sanitize_always_llm:
+        source_verdict = classify_source(
+            ClassifySourceRequest(source="gmail_thread", content=source_content),
+            prefilter_reasons=h_reasons,
+        )
+        source_trust = source_verdict.trust
+        unavailable = source_verdict.classifier_unavailable
+    else:
+        # Fast path for ordinary mail: no heuristic injection signal means the
+        # content remains untrusted, but deterministic workflow matching and HITL
+        # draft creation do not wait for a full classifier LLM round-trip.
+        source_verdict = None
+        source_trust = "UNTRUSTED"
+        unavailable = False
     run_llm = (
         settings.sanitize_always_llm
         or bool(h_reasons)
@@ -89,7 +99,6 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
     llm_spam = False
     llm_reasons: list[str] = []
     cleaned = req.content
-    unavailable = source_verdict.classifier_unavailable
 
     if run_llm:
         try:
@@ -110,7 +119,7 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
     spam = llm_spam
     reasons = _unique_reasons(
         h_reasons,
-        source_verdict.reasons,
+        source_verdict.reasons if source_verdict is not None else [],
         llm_reasons,
         ["classifier_unavailable"] if unavailable else [],
     )
@@ -129,6 +138,10 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
         "body": _tag(req.content, source_trust),
     }
 
+    # Redaction runs on the cleaned text, so the caller can hand `redacted_text`
+    # straight to a hosted drafting model and restore the values afterwards.
+    redaction = redact(cleaned) if settings.redact_pii else None
+
     return SanitizeResponse(
         classification=classification,
         injection_detected=injection,
@@ -138,4 +151,6 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
         classifier_unavailable=unavailable,
         source_trust=source_trust,
         fields=fields,
+        redacted_text=redaction.text if redaction else cleaned,
+        redaction_map=redaction.mapping if redaction else {},
     )

@@ -14,6 +14,12 @@ DEFAULT_POLICY_PATH = SERVICE_ROOT / "policy.yaml"
 class RecipientPolicy(BaseModel):
     allow_domains: list[str] = Field(default_factory=list)
     deny_domains: list[str] = Field(default_factory=list)
+    # Address-level lists, for when a domain is too coarse to express the rule —
+    # e.g. two named gmail.com mailboxes may exchange mail but no other gmail.com
+    # address may be written to. A non-empty allow_addresses list is the tightest
+    # rule available: every recipient must appear in it verbatim.
+    allow_addresses: list[str] = Field(default_factory=list)
+    deny_addresses: list[str] = Field(default_factory=list)
 
     @field_validator("allow_domains", "deny_domains")
     @classmethod
@@ -21,6 +27,11 @@ class RecipientPolicy(BaseModel):
         # Recipient domains are matched lowercased; normalize policy entries to match,
         # so an uppercase typo in policy.yaml can't silently bypass a deny rule.
         return [d.strip().lower() for d in v]
+
+    @field_validator("allow_addresses", "deny_addresses")
+    @classmethod
+    def _normalize_addresses(cls, v: list[str]) -> list[str]:
+        return [a.strip().lower() for a in v]
 
 
 class LimitsPolicy(BaseModel):

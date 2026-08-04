@@ -12,10 +12,20 @@ from src.policy import PolicyConfig, load_policy
 _ADDR_RE = re.compile(r"[\w.+-]+@[\w.-]+")
 
 
-def _extract_domains(to: str) -> list[str]:
-    """Return lowercased domains from a comma-separated to field. Empty list if unparseable."""
-    addresses = _ADDR_RE.findall(to)
-    return [addr.split("@")[1].lower() for addr in addresses]
+def _recipient_text(to) -> str:
+    if isinstance(to, list):
+        return ", ".join(str(item) for item in to if item)
+    return str(to or "")
+
+
+def _extract_addresses(to) -> list[str]:
+    """Return lowercased addresses from a string/list recipient field."""
+    return [addr.lower() for addr in _ADDR_RE.findall(_recipient_text(to))]
+
+
+def _extract_domains(to) -> list[str]:
+    """Return lowercased domains from a string/list recipient field."""
+    return [addr.split("@")[1] for addr in _extract_addresses(to)]
 
 
 def _domain_matches(domain: str, entries) -> bool:
@@ -27,18 +37,32 @@ def _domain_matches(domain: str, entries) -> bool:
     return any(domain == e or domain.endswith("." + e) for e in entries)
 
 
-def _check_recipients(to: str, recipients) -> str | None:
+def _check_recipients(to, recipients) -> str | None:
     """Return a deny-reason string if the recipient fails policy, else None."""
-    if not to or not to.strip():
+    normalized_to = _recipient_text(to).strip()
+    if not normalized_to:
         return "recipient 'to' field is empty"
 
-    domains = _extract_domains(to)
-    if not domains:
+    addresses = _extract_addresses(normalized_to)
+    if not addresses:
         return f"could not parse a valid email address from 'to': {to!r}"
+    domains = [addr.split("@")[1] for addr in addresses]
+
+    for address in addresses:
+        if address in recipients.deny_addresses:
+            return f"recipient address '{address}' is on the deny list"
 
     for domain in domains:
         if _domain_matches(domain, recipients.deny_domains):
             return f"recipient domain '{domain}' is on the deny list"
+
+    # Address allow list is checked before the domain one and is strictly
+    # narrower: when set, membership is per-address and a permitted domain no
+    # longer implies a permitted mailbox.
+    if recipients.allow_addresses:
+        for address in addresses:
+            if address not in recipients.allow_addresses:
+                return f"recipient address '{address}' is not on the allow list"
 
     if recipients.allow_domains:
         for domain in domains:
@@ -86,7 +110,10 @@ def authorize(
 
     # Recipient check — fires only when the policy block exists and 'to' arg is present.
     if tool.recipients is not None:
-        deny = _check_recipients(req.args.get("to", ""), tool.recipients)
+        # Prefer the caller-declared recipients; fall back to a "to" argument so
+        # older clients and non-send tools keep working.
+        declared = req.recipients or req.args.get("to", "")
+        deny = _check_recipients(declared, tool.recipients)
         if deny:
             inc_counter("agora_security_authorize_total", decision="deny", action=req.action)
             return AuthorizeResponse(decision="deny", reason=deny)

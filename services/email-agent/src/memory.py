@@ -47,13 +47,25 @@ def namespace(
     )
 
 
-def wrap_preferences(text: str) -> dict:
+# Where a stored preference came from, surfaced to the user as provenance.
+ORIGIN_SETUP = "setup"      # seeded by the onboarding wizard
+ORIGIN_LEARNED = "learned"  # distilled by the agent from real activity
+ORIGIN_MANUAL = "manual"    # typed or edited by a human in the UI
+ORIGIN_DEFAULT = "default"  # never written — falling back to config.yaml
+
+
+def wrap_preferences(text: str, origin: str | None = None) -> dict:
     """Store shape for a preferences string.
 
     The BaseStore contract expects a dict value; the Postgres (JSONB) store fails to
     deserialize a bare string. Anything writing preferences must go through this.
+    `origin` records provenance so the UI can say whether the user configured this
+    or the agent learned it; rows written before it existed simply have none.
     """
-    return {"preferences": text}
+    wrapped = {"preferences": text}
+    if origin:
+        wrapped["origin"] = origin
+    return wrapped
 
 
 def preferences_text(value) -> str:
@@ -66,6 +78,14 @@ def preferences_text(value) -> str:
     return value or ""
 
 
+def preferences_origin(value) -> str | None:
+    """Provenance of a stored value, or None for rows written before it was tracked."""
+    if isinstance(value, dict):
+        origin = value.get("origin")
+        return origin if isinstance(origin, str) and origin else None
+    return None
+
+
 # Backwards-compatible internal alias.
 _unwrap = preferences_text
 
@@ -75,7 +95,7 @@ def get_memory(store, ns: tuple, default_content: str) -> str:
     item = store.get(ns, "user_preferences")
     if item:
         return preferences_text(item.value)
-    store.put(ns, "user_preferences", wrap_preferences(default_content))
+    store.put(ns, "user_preferences", wrap_preferences(default_content, ORIGIN_DEFAULT))
     return default_content
 
 
@@ -100,6 +120,7 @@ def update_memory(
     """Synthesize feedback from messages and write updated preferences back to store."""
     item = store.get(ns, "user_preferences")
     current = preferences_text(item.value) if item else ""
+    current_origin = preferences_origin(item.value) if item else None
     prompt_messages = [
         {
             "role": "system",
@@ -117,7 +138,7 @@ def update_memory(
     # Guard against destructive rewrites: small models sometimes replace the
     # whole profile with a one-line summary of the latest feedback. A real
     # incremental update never collapses an established profile.
-    if current and len(current) > 200 and len(updated) < len(current) // 2:
+    if current_origin != ORIGIN_DEFAULT and current and len(current) > 200 and len(updated) < len(current) // 2:
         print(
             f"memory: preference update rejected for {ns}: proposed profile "
             f"({len(updated)} chars) would collapse the current one ({len(current)} chars)"
@@ -133,4 +154,4 @@ def update_memory(
             )
             return
         updated = verdict.get("cleaned_text") or updated
-    store.put(ns, "user_preferences", wrap_preferences(updated))
+    store.put(ns, "user_preferences", wrap_preferences(updated, ORIGIN_LEARNED))
