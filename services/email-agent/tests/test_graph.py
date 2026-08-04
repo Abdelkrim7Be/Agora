@@ -123,8 +123,9 @@ def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
     assert result["workflow_route_to"] == ["finance"]
 
 
-def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, respond_email):
+def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, fake_llms, respond_email):
     """A 2-recipient route_to produces ONE approval; approving it notifies both."""
+    fake_llms(classification="notify")
     import src.graph as g
     from src.categories import CategoriesConfig
     from langgraph.types import Command

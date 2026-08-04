@@ -264,3 +264,35 @@ def route_targets(*addresses: str):
         yield
     finally:
         current_route_targets.reset(token)
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_llm_calls(request, monkeypatch):
+    """Fail loudly instead of quietly calling a real model.
+
+    `fake_llms` is opt-in, so a test that forgot it used whatever LLM endpoint the
+    developer happened to have running. The suite then passed on a laptop with
+    Ollama up and failed in CI with a bare "Connection error", and a green local
+    run meant nothing. Any test that genuinely needs a model must ask for
+    `fake_llms` (or patch the binding itself); everything else gets a stub that
+    explains what is missing.
+    """
+    if "fake_llms" in request.fixturenames or "allow_real_llm" in request.keywords:
+        return
+
+    import src.graph as g
+
+    class _Unstubbed:
+        def __init__(self, attr): self._attr = attr
+        def _fail(self, *_a, **_k):
+            raise AssertionError(
+                f"{request.node.name} invoked the real {self._attr}. Add the "
+                "'fake_llms' fixture, or mark the test with @pytest.mark.allow_real_llm."
+            )
+        invoke = __call__ = _fail
+        def bind_tools(self, *a, **k): return self
+        def with_structured_output(self, *a, **k): return self
+
+    for attr in ("llm", "llm_router", "llm_with_tools", "llm_memory", "llm_redraft"):
+        if hasattr(g, attr):
+            monkeypatch.setattr(g, attr, _Unstubbed(attr), raising=False)
