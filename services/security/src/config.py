@@ -33,6 +33,12 @@ class Settings:
 
     policy_path: str = os.getenv("SECURITY_POLICY_PATH", "policy.yaml")
 
+    # Strip financial and personal identifiers from mail content before it can
+    # reach a hosted model. Default on: the cost of redacting content that never
+    # leaves the host is a few regex passes; the cost of not redacting content
+    # that does is a personal-data incident.
+    redact_pii: bool = os.getenv("SECURITY_REDACT_PII", "true").lower() == "true"
+
     database_url: str = get_secret("SECURITY", "DATABASE_URL")
     redis_url: str = get_secret("SECURITY", "REDIS_URL")
     ratelimit_backend: str = os.getenv("SECURITY_RATELIMIT_BACKEND", "redis" if redis_url else "memory")
