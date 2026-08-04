@@ -276,7 +276,10 @@ services:
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
       # Invitation links point at the public web app; SMTP is optional — with no
       # relay the endpoints return the setup link instead of mailing it.
-      GATEWAY_APP_URL: ${GATEWAY_APP_URL:-https://localhost}
+      # Invitation links are built from this, so it must be the URL a person can
+      # actually open in a browser — scheme, host AND port. Override it in .env
+      # for any deployment that is not the local compose stack.
+      GATEWAY_APP_URL: ${GATEWAY_APP_URL:-http://localhost:${WEB_PORT:-5173}}
       GATEWAY_INVITE_EXPIRY_HOURS: ${GATEWAY_INVITE_EXPIRY_HOURS:-48}
       GATEWAY_SMTP_HOST: ${GATEWAY_SMTP_HOST:-}
       GATEWAY_SMTP_PORT: ${GATEWAY_SMTP_PORT:-587}

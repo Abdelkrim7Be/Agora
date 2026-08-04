@@ -26,6 +26,11 @@ const COMING_SOON_AGENT_TYPES = [
   },
 ];
 
+function displayAgentName(type) {
+  if (type.id === 'email-agent') return 'Agent e-mail';
+  return type.display_name || type.id;
+}
+
 export default function AgentTypesPage() {
   const { setStatus } = useStatus();
   const query = useAgentTypesQuery();
@@ -64,7 +69,7 @@ export default function AgentTypesPage() {
               >
                 <div className="card-header">
                   <div>
-                    <h2>{type.display_name || type.id}</h2>
+                    <h2>{displayAgentName(type)}</h2>
                     <div className="meta">
                       <span>{type.id}</span>
                       <StatusBadge

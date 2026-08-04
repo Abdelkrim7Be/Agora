@@ -85,7 +85,7 @@ export default function LoginPage() {
           <div className="login-proof-grid">
             <div><strong>Supervision</strong><span>Chaque action sensible passe par une validation claire.</span></div>
             <div><strong>Traçabilité</strong><span>Les accès et décisions restent consultables.</span></div>
-            <div><strong>Connecteurs</strong><span>Boîtes mail, workflows et routage métier dans un seul espace.</span></div>
+            <div><strong>Connecteurs</strong><span>Boîtes mail, cas métier et routage dans un seul espace.</span></div>
           </div>
         </div>
       </aside>

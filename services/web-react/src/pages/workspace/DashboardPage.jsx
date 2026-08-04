@@ -22,7 +22,7 @@ export default function DashboardPage() {
     if (!summary) return;
     if (!announcedInitialLoad.current) {
       announcedInitialLoad.current = true;
-      setStatus('Tableau de bord chargé.', 'ok');
+      setStatus('Tableau de bord à jour.', 'ok');
     }
   }, [summary]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -45,33 +45,36 @@ export default function DashboardPage() {
           <option value="month">Mois en cours</option>
         </select>
         <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger le tableau de bord</span>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Actualiser</span>
         </button>
         <span className="counter">{summary?.agent_instance_id || instanceId}</span>
       </div>
-      <div className="cost-summary-grid">
+      <div className="cost-summary-grid dashboard-summary-grid">
         <div><strong>{formatCountFr(totals.emails_handled)}</strong><span>E-mails traités</span></div>
         <div><strong>{formatPercentFr(totals.approval_rate_pct)}</strong><span>Taux d'approbation</span></div>
         <div><strong>{formatDurationFr(totals.avg_turnaround_seconds)}</strong><span>Délai moyen</span></div>
         <div><strong>{formatCountFr(totals.pending)}</strong><span>En attente</span></div>
       </div>
-      <div className="cost-layout">
-        <Card>
+      <div className="notice dashboard-notice">
+        Ce tableau de bord mesure l’activité de l’agent sélectionné. Les e-mails sortants restent bloqués tant qu’une validation humaine est requise.
+      </div>
+      <div className="cost-layout dashboard-chart-layout">
+        <Card className="dashboard-chart-card">
           <h2 className="section-title">Volume traité</h2>
           <VerticalBarChart points={summary?.volume_timeline || []} emptyLabel="Aucune donnée pour cette période." />
         </Card>
-        <Card>
-          <h2 className="section-title">Top workflows</h2>
+        <Card className="dashboard-chart-card dashboard-focus-card">
+          <h2 className="section-title">Cas métier les plus actifs</h2>
           <HorizontalBarChart rows={summary?.top_categories || []} emptyLabel="Aucune donnée pour cette période." />
         </Card>
       </div>
       <div className="cost-layout cost-recent">
         <div>
-          <h2 className="section-title">Par workflow</h2>
+          <h2 className="section-title">Par cas métier</h2>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
-                <tr><th>Workflow</th><th>Volume</th><th>En attente</th><th>Approuvés</th><th>Rejetés</th><th>Délai moyen</th></tr>
+                <tr><th>Cas métier</th><th>Volume</th><th>En attente</th><th>Approuvés</th><th>Rejetés</th><th>Délai moyen</th></tr>
               </thead>
               <tbody>
                 {workflows.length ? workflows.map((row, i) => (
@@ -83,7 +86,7 @@ export default function DashboardPage() {
                     <td>{formatCountFr(row.rejected)}</td>
                     <td>{formatDurationFr(row.avg_turnaround_seconds)}</td>
                   </tr>
-                )) : <tr><td colSpan={6} className="empty-cell">Aucun workflow sur cette période.</td></tr>}
+                )) : <tr><td colSpan={6} className="empty-cell">Aucun cas métier sur cette période.</td></tr>}
               </tbody>
             </table>
           </div>

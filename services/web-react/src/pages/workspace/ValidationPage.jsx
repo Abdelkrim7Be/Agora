@@ -68,7 +68,7 @@ export default function ValidationPage() {
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
       announcedInitialLoad.current = true;
-      setStatus('Validation chargée.', 'ok');
+      setStatus('Validations à jour.', 'ok');
     }
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -348,6 +348,9 @@ export default function ValidationPage() {
   return (
     <>
       <PageHeading view="validation" />
+      <div className="notice">
+        <strong>Décisions à prendre :</strong> seules les actions qui attendent une validation humaine apparaissent ici.
+      </div>
       <div className="toolbar">
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
@@ -364,8 +367,8 @@ export default function ValidationPage() {
             <span className="progress-track-label">Synchronisation...</span>
           </div>
         ) : null}
-        <select aria-label="Filtre de catégorie" value={category} onChange={(event) => setCategory(event.target.value)}>
-          <option value="">Toutes catégories</option>
+        <select aria-label="Filtre de cas métier" value={category} onChange={(event) => setCategory(event.target.value)}>
+          <option value="">Tous les cas métier</option>
           {availableCategories.map((c) => <option key={c.name} value={c.name}>{c.display_name || c.name}</option>)}
         </select>
         <select aria-label="Filtre de priorité" value={priority} onChange={(event) => setPriority(event.target.value)}>
@@ -377,7 +380,7 @@ export default function ValidationPage() {
         <input aria-label="Recherche expéditeur ou sujet" placeholder="Rechercher" value={search} onChange={(event) => setSearch(event.target.value)} />
         <input aria-label="Depuis le" type="date" value={since} onChange={(event) => setSince(event.target.value)} />
         <span className="counter">{runs.length} en attente</span>
-        <span className="kbd-legend">Raccourcis : j/k naviguer · a approuver · r rejeter · e retoucher · x sélectionner</span>
+        <span className="kbd-legend" title="Raccourcis clavier disponibles">Clavier disponible</span>
         <span className="toolbar-spacer"></span>
         <Pager page={page} hasMore={hasMore} onPrev={() => setPage((p) => Math.max(0, p - 1))} onNext={() => setPage((p) => p + 1)} />
       </div>
@@ -392,7 +395,7 @@ export default function ValidationPage() {
       )}
 
       {canApprove && categoryGroupEntries.length > 1 ? (
-        <div className="category-bulk-panel" aria-label="Actions groupées par catégorie">
+        <div className="category-bulk-panel" aria-label="Actions groupées par cas métier">
           {categoryGroupEntries.map(([label, items]) => {
             const ids = items.map((run) => run.run_id);
             const allSelected = ids.every((id) => selectedRuns.has(id));
@@ -408,7 +411,7 @@ export default function ValidationPage() {
                 </button>
                 <button className="primary" type="button" onClick={() => handleBulk('approve', ids)}>
                   <span className="material-symbols-outlined" aria-hidden="true">send</span>
-                  <span>Approuver cette catégorie</span>
+                  <span>Approuver ce cas</span>
                 </button>
               </div>
             );

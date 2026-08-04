@@ -19,7 +19,7 @@ export function VerticalBarChart({ points, emptyLabel }) {
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Volume traité sur la période">
-      <line x1={left} y1={top + chartHeight} x2={width - right} y2={top + chartHeight} stroke="#cbd5e1" strokeWidth="1" />
+      <line x1={left} y1={top + chartHeight} x2={width - right} y2={top + chartHeight} stroke="var(--outline)" strokeWidth="1" />
       {rows.map((point, index) => {
         const value = Number(point.count || 0);
         const x = left + index * (barWidth + gap);
@@ -27,10 +27,10 @@ export function VerticalBarChart({ points, emptyLabel }) {
         const y = top + chartHeight - barHeight;
         return (
           <g key={point.label ?? index}>
-            <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 2)} rx="6" fill="#2563eb" />
-            <text x={x + barWidth / 2} y={Math.max(y - 6, 12)} textAnchor="middle" fontSize="11" fill="#0f172a">{value}</text>
+            <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 2)} rx="6" fill="var(--primary)" />
+            <text x={x + barWidth / 2} y={Math.max(y - 6, 12)} textAnchor="middle" fontSize="11" fill="var(--text)">{value}</text>
             {index % labelEvery === 0 && (
-              <text x={x + barWidth / 2} y={height - 18} textAnchor="middle" fontSize="11" fill="#6b7280">{point.label || ''}</text>
+              <text x={x + barWidth / 2} y={height - 18} textAnchor="middle" fontSize="11" fill="var(--muted)">{point.label || ''}</text>
             )}
           </g>
         );
@@ -52,17 +52,17 @@ export function HorizontalBarChart({ rows, emptyLabel }) {
   const barWidth = width - left - right;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Top workflows sur la période">
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Cas métier les plus actifs sur la période">
       {items.map((row, index) => {
         const value = Number(row.count || 0);
         const y = 8 + index * rowHeight;
         const widthPx = Math.max(6, Math.round((value / maxValue) * barWidth));
         return (
           <g key={row.category ?? row.display_name ?? index}>
-            <text x="10" y={y + 15} fontSize="12" fill="#0f172a">{workflowLabelFr(row)}</text>
-            <rect x={left} y={y} width={barWidth} height="16" rx="8" fill="#e2e8f0" />
-            <rect x={left} y={y} width={widthPx} height="16" rx="8" fill="#0f766e" />
-            <text x={left + widthPx + 8} y={y + 13} fontSize="12" fill="#0f172a">{value}</text>
+            <text x="10" y={y + 15} fontSize="12" fill="var(--text)">{workflowLabelFr(row)}</text>
+            <rect x={left} y={y} width={barWidth} height="16" rx="8" fill="var(--surface-high)" />
+            <rect x={left} y={y} width={widthPx} height="16" rx="8" fill="var(--primary)" />
+            <text x={left + widthPx + 8} y={y + 13} fontSize="12" fill="var(--text)">{value}</text>
           </g>
         );
       })}
