@@ -133,7 +133,13 @@ public class AgentRegistryService {
                 request.description(),
                 request.status() == null || request.status().isBlank() ? "active" : request.status(),
                 type.getBasePath(),
-                admin && request.allowedRoles() != null && !request.allowedRoles().isBlank() ? request.allowedRoles() : "owner",
+                // Private by default. allowed_roles grants access to every account
+                // holding that global role, so defaulting it to "owner" meant a
+                // second owner-role user could read this mailbox by naming the
+                // instance in X-Agora-Agent-Instance — verified reading another
+                // tenant's real inbox. Only an admin may deliberately widen it;
+                // everyone else gets creator + explicit grants + admin.
+                admin && request.allowedRoles() != null && !request.allowedRoles().isBlank() ? request.allowedRoles() : "",
                 username,
                 request.color() == null || request.color().isBlank() ? type.getColor() : request.color(),
                 request.icon() == null || request.icon().isBlank() ? type.getIcon() : request.icon()
