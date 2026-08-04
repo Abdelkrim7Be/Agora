@@ -154,6 +154,19 @@ def patch_provider(monkeypatch, module, **methods) -> FakeProvider:
     return provider
 
 
+class _UnusedToolLLM:
+    """Stands in for the drafting model on a path that should never reach it."""
+
+    def invoke(self, *_args, **_kwargs):
+        raise AssertionError(
+            "the drafting LLM was called, but this test declared no tool_sequence. "
+            "Pass fake_llms(tool_sequence=[...]) if the path really drafts."
+        )
+
+    def bind_tools(self, *_a, **_k):
+        return self
+
+
 @pytest.fixture
 def fake_llms(monkeypatch):
     """Patch the graph's router, tool LLM, and memory LLM for offline deterministic tests."""
@@ -167,8 +180,15 @@ def fake_llms(monkeypatch):
         import src.graph as g
 
         monkeypatch.setattr(g, "llm_router", _FakeRouter(classification))
+        # Always replace the tool LLM, even when the test supplies no sequence.
+        # Leaving it real meant a test that only faked the router still reached
+        # whatever endpoint the developer had running: green here, "Connection
+        # error" in CI. A test that needs the drafting model passes a sequence;
+        # anything else gets a stub that says so.
         if tool_sequence is not None:
             monkeypatch.setattr(g, "llm_with_tools", _FakeToolLLM(tool_sequence))
+        else:
+            monkeypatch.setattr(g, "llm_with_tools", _UnusedToolLLM())
         monkeypatch.setattr(g, "llm_memory", _FakeMemoryLLM(memory_preference))
         monkeypatch.setattr(
             g,

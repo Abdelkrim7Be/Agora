@@ -8,7 +8,7 @@ from langgraph.store.memory import InMemoryStore
 
 from src.categories import classify_category, load_categories
 from src.run_registry import list_runs, upsert_run
-from tests.conftest import patch_provider
+from tests.conftest import ai_tool_call, patch_provider
 
 
 def _cfg() -> dict:
@@ -656,7 +656,9 @@ def test_external_send_allowed_false_blocks_recipient_outside_internal_domains(m
     notify_internal's own tool-level policy would otherwise allow (post-HITL) the
     send. With no internal domains configured, this fails closed (blocks everything)
     rather than silently no-op-ing."""
-    fake_llms(classification="notify")
+    # The run continues past the notify approval into the agent loop, so the
+    # drafting model must be stubbed too or the test reaches the network.
+    fake_llms(classification="notify", tool_sequence=[ai_tool_call("Done", {"done": True})])
     import src.graph as g
     from src.categories import CategoriesConfig
 
