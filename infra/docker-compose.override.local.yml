@@ -8,9 +8,6 @@ x-outbound-allowlist: &outbound_allowlist
   AGENT_OUTBOUND_ALLOWLIST: "test.inbox@example.com,owner@example.com"
 
 services:
-  ollama-init:
-    entrypoint: []
-
   ollama:
     gpus: !reset []
     environment:
@@ -27,11 +24,11 @@ services:
       <<: *outbound_allowlist
       AGENT_DRY_RUN: "false"
       AGENT_DEFAULT_SEND_MODE: "live"
-      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8081/api/agent/connect/gmail/callback
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:${GATEWAY_PORT:-8081}/api/agent/connect/gmail/callback
       # Prod leaves this empty (Traefik puts web + gateway on one origin, so a
       # relative redirect from the OAuth callback just works). Local dev splits
       # them across ports, so the callback needs to know where the web app is.
-      AGENT_APP_BASE_URL: http://localhost:5173
+      AGENT_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
 
   security:
     volumes:
@@ -41,11 +38,11 @@ services:
 
   gateway:
     ports:
-      - "8081:8080"
+      - "${GATEWAY_PORT:-8081}:8080"
 
   web:
     ports:
-      - "5173:8080"
+      - "${WEB_PORT:-5173}:8080"
 
   # docker-compose.yml has no poller service at all (only the demo overlay
   # does, tuned for a single live mailbox). Without one, fetched inbox mail
