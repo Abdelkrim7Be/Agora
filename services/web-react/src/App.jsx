@@ -6,13 +6,15 @@ import { I18nProvider } from './contexts/I18nContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryCache, QueryClientProvider } from '@tanstack/react-query';
+import { recordFailure, clearFailure } from './api/failureLog';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import PlatformLayout from './components/layout/PlatformLayout';
 import WorkspaceLayout from './components/layout/WorkspaceLayout';
 import LoginPage from './pages/LoginPage';
 import InviteSetupPage from './pages/InviteSetupPage';
+import PlatformDashboardPage from './pages/platform/PlatformDashboardPage';
 import InstancesPage from './pages/platform/InstancesPage';
-import MailboxesPage from './pages/platform/MailboxesPage';
 import AgentTypesPage from './pages/platform/AgentTypesPage';
 import HealthPage from './pages/platform/HealthPage';
 import AuditPage from './pages/platform/AuditPage';
@@ -43,10 +45,25 @@ import GuidePage from './pages/workspace/GuidePage';
 import JunkPage from './pages/workspace/JunkPage';
 import NotificationsPage from './pages/workspace/NotificationsPage';
 import OAuthCallbackPage from './pages/OAuthCallbackPage';
+import NotFoundPage from './pages/NotFoundPage';
 
-const queryClient = new QueryClient();
-
-// Placeholder pages — real content lands tab by tab in later slices.
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) => recordFailure(query.queryKey, error),
+    onSuccess: (_data, query) => clearFailure(query.queryKey),
+  }),
+  defaultOptions: {
+    queries: {
+      // A 401/403/404 is an answer, not a hiccup. Retrying them three times only
+      // delays the error the person needs to see.
+      retry: (failureCount, error) => {
+        const message = error?.message || '';
+        if (message.includes('Interdit') || message.includes('Session expiree')) return false;
+        return failureCount < 2;
+      },
+    },
+  },
+});
 
 function ProtectedRoute({ children }) {
   const { token } = useAuth();
@@ -85,6 +102,7 @@ export default function App() {
                 <DialogProvider>
                   <SessionBodyClass />
                   <BrowserRouter>
+                    <ErrorBoundary>
                     <Routes>
                       <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
                       <Route path="/invite/:token" element={<InviteSetupPage />} />
@@ -93,8 +111,8 @@ export default function App() {
 
                       {/* Platform views */}
                       <Route path="/" element={<ProtectedRoute><PlatformLayout /></ProtectedRoute>}>
-                        <Route index element={<InstancesPage />} />
-                        <Route path="mailboxes" element={<MailboxesPage />} />
+                        <Route index element={<PlatformDashboardPage />} />
+                        <Route path="instances" element={<InstancesPage />} />
                         <Route path="agent-types" element={<AgentTypesPage />} />
                         {/* Route segments below deliberately avoid "health"/"audit"/"users" as a
                             leading path segment: nginx.conf (and the dev proxy mirroring it) proxy
@@ -116,6 +134,7 @@ export default function App() {
                         <Route path="validation" element={<ValidationPage />} />
                         <Route path="drafts" element={<DraftsPage />} />
                         <Route path="inbox" element={<InboxPage />} />
+                        <Route path="sent" element={<InboxPage initialMailbox="sent" />} />
                         <Route path="run/:runId" element={<RunDetailPage />} />
                         <Route path="gmail" element={<GmailPage />} />
                         <Route path="config" element={<PersonaPage />} />
@@ -133,7 +152,11 @@ export default function App() {
                         <Route path="dlq" element={<DlqPage />} />
                         <Route path="costs" element={<CostsPage />} />
                       </Route>
+
+                      {/* A mistyped or stale link used to render a blank page. */}
+                      <Route path="*" element={<NotFoundPage />} />
                     </Routes>
+                    </ErrorBoundary>
                   </BrowserRouter>
                 </DialogProvider>
               </StatusProvider>

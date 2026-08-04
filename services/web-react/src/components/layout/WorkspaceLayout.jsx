@@ -8,6 +8,7 @@ import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { inboxQueryKey, inboxQueryPath, useAgentInstancesQuery, useInstanceSetupQuery } from '../../api/queries';
 import { useApi } from '../../api/useApi';
+import { DataErrorBanner } from '../ui/DataErrorBanner';
 
 export default function WorkspaceLayout() {
   const { instanceId: paramId } = useParams();
@@ -130,6 +131,7 @@ export default function WorkspaceLayout() {
       <main className="workspace">
         <Topbar />
         <div className="content-stage">
+          <DataErrorBanner />
           {isGated && !onSetupRoute ? <SetupPage /> : <Outlet />}
         </div>
       </main>
