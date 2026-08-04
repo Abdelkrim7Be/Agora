@@ -66,7 +66,10 @@ def test_gmail_connect_start_builds_signed_offline_consent_url(monkeypatch):
     assert params["access_type"] == ["offline"]
     assert params["prompt"] == ["consent"]
     assert body["agent_instance_id"] == "ceo-email-agent"
-    assert "https://mail.google.com/" in body["scopes"]
+    # gmail.modify, not the maximal mail.google.com scope: the agent never
+    # permanently deletes mail, so it must not ask for permission to.
+    assert "https://www.googleapis.com/auth/gmail.modify" in body["scopes"]
+    assert "https://mail.google.com/" not in body["scopes"]
     assert _FakeFlow.last.redirect_uri == "https://gateway.example/api/agent/connect/gmail/callback"
     assert _FakeFlow.last.kwargs["autogenerate_code_verifier"] is False
 
