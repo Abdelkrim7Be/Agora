@@ -21,7 +21,19 @@ from src.token_store import prepared_token_file
 from src.state import EmailInput
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
-GMAIL_SCOPES = ["https://mail.google.com/"]
+# `gmail.modify` covers everything this agent does: read, send, drafts, labels,
+# archive and trash. The only thing it withholds is permanent deletion, which
+# nothing here performs — `trash_email` calls users.messages.trash.
+#
+# Deliberately NOT `https://mail.google.com/`. That is the maximal Gmail scope:
+# it grants irreversible deletion and reads as "this app can do anything to your
+# mail" on the consent screen, which is indefensible for a mailbox holding
+# financial correspondence. Both are Google restricted scopes and require OAuth
+# verification plus a CASA assessment before production use.
+#
+# Changing this invalidates existing refresh tokens: a mailbox authorised under
+# the old scope must reconnect once. See docs/mail-providers.md.
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 
 def gmail_resource(user_id: str | None = None):

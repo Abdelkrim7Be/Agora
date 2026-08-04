@@ -3747,6 +3747,7 @@ async def inbox(
                         "id": item.get("id"),
                         "thread_id": item.get("thread_id"),
                         "from": item.get("to", ""),
+                        "to": item.get("to", ""),
                         "subject": item.get("subject", ""),
                         "snippet": item.get("body", "")[:240],
                         "date": item.get("date", ""),
@@ -3762,13 +3763,18 @@ async def inbox(
                     message["mailbox"] = "inbox"
             _inbox_cache_put(cache_key, messages)
         except Exception as exc:
-            return await _inbox_unavailable(exc, user_id, user_dept, limit)
+            return await _inbox_unavailable(exc, user_id, user_dept, limit, mailbox)
     return await _inbox_with_verdicts(messages, user_dept)
 
 
-async def _inbox_unavailable(exc: Exception, user_id: str, user_dept: str | None, limit: int) -> dict:
+async def _inbox_unavailable(exc: Exception, user_id: str, user_dept: str | None, limit: int, mailbox: str = "inbox") -> dict:
     """Gmail is unreachable: fall back to the last runs this instance recorded."""
     print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
+    if mailbox == "sent":
+        return {
+            "messages": [],
+            "warning": "Sent mail is unavailable. Check OAuth credentials and container network access.",
+        }
     runs = await asyncio.to_thread(
         list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
     )
