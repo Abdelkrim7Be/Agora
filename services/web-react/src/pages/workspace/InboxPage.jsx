@@ -7,18 +7,19 @@ import { useDialog } from '../../contexts/DialogContext';
 import { useInboxQuery, useInboxAction, useForceAgentOnMessage, useCategorizeContact, useCategoriesQuery, useContactsQuery } from '../../api/queries';
 import { decodeHtmlEntities, formatDateTimeFr, parseSenderEmail, senderDomain } from '../../utils/format';
 
-export default function InboxPage() {
+export default function InboxPage({ initialMailbox = 'inbox' }) {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog, selectDialog } = useDialog();
   const navigate = useNavigate();
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
-  const [mailbox, setMailbox] = useState('inbox');
+  const [mailbox, setMailbox] = useState(initialMailbox);
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
-  const query = useInboxQuery(mailbox);
+  const query = useInboxQuery(mailbox, refreshNonce);
   const inboxAction = useInboxAction();
   const forceAgent = useForceAgentOnMessage();
   const categorizeContact = useCategorizeContact();
@@ -28,6 +29,7 @@ export default function InboxPage() {
 
   const messages = query.data?.messages || [];
   const warning = query.data?.warning;
+  const isSentMailbox = mailbox === 'sent';
 
   const contacts = contactsQuery.data?.contacts || [];
   const categoryByEmail = useMemo(() => {
@@ -66,19 +68,28 @@ export default function InboxPage() {
   }, [messages, availableCategories, categoryByEmail]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredMessages = useMemo(() => (
-    categoryFilter === 'all' ? messages : messages.filter((msg) => categoryForMessage(msg) === categoryFilter)
-  ), [messages, categoryFilter, categoryByEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+    isSentMailbox || categoryFilter === 'all' ? messages : messages.filter((msg) => categoryForMessage(msg) === categoryFilter)
+  ), [messages, categoryFilter, categoryByEmail, isSentMailbox]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setMailbox(initialMailbox);
+    setSelectedIds(new Set());
+  }, [initialMailbox]);
 
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
       announcedInitialLoad.current = true;
-      setStatus(warning ? `Boîte indisponible : ${warning}` : (messages.length ? 'Messages chargés.' : 'Aucun message.'), warning ? 'error' : 'ok');
+      setStatus(warning ? `Boîte indisponible : ${warning}` : (messages.length ? 'Messages à jour.' : 'Aucun message.'), warning ? 'error' : 'ok');
     }
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (query.error) setStatus(`Impossible de charger la boîte de réception : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRefresh = () => {
+    setRefreshNonce((value) => value + 1);
+  };
 
   const handleOpen = (msg) => {
     if (msg.run_status === 'pending_approval') {
@@ -232,19 +243,19 @@ export default function InboxPage() {
 
   return (
     <>
-      <PageHeading view="inbox" />
+      <PageHeading view={isSentMailbox ? 'sent' : 'inbox'} />
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
+        <button type="button" onClick={handleRefresh} disabled={query.isFetching}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
-          <span>Actualiser</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
         {query.isFetching && query.data ? <span className="counter">mise à jour en arrière-plan</span> : null}
         <div className="inbox-switcher">
-          <button type="button" className={mailbox === 'inbox' ? 'primary' : ''} onClick={() => { setMailbox('inbox'); setSelectedIds(new Set()); }}>
+          <button type="button" className={!isSentMailbox ? 'primary' : ''} onClick={() => { setMailbox('inbox'); setSelectedIds(new Set()); }}>
             <span className="material-symbols-outlined" aria-hidden="true">inbox</span>
             <span>Reçus</span>
           </button>
-          <button type="button" className={mailbox === 'sent' ? 'primary' : ''} onClick={() => { setMailbox('sent'); setSelectedIds(new Set()); }}>
+          <button type="button" className={isSentMailbox ? 'primary' : ''} onClick={() => { setMailbox('sent'); setSelectedIds(new Set()); }}>
             <span className="material-symbols-outlined" aria-hidden="true">send</span>
             <span>Envoyés</span>
           </button>
@@ -261,19 +272,21 @@ export default function InboxPage() {
           </>
         ) : null}
       </div>
-      <div className="folder-tabs" role="tablist" aria-label="Dossiers de catégories">
-        {folderOptions.map((folder) => (
-          <button
-            key={folder.value}
-            type="button"
-            className={categoryFilter === folder.value ? 'active' : ''}
-            onClick={() => setCategoryFilter(folder.value)}
-          >
-            <span>{folder.label}</span>
-            <strong>{folderCounts[folder.value] || 0}</strong>
-          </button>
-        ))}
-      </div>
+      {!isSentMailbox ? (
+        <div className="folder-tabs" role="tablist" aria-label="Dossiers par cas métier">
+          {folderOptions.map((folder) => (
+            <button
+              key={folder.value}
+              type="button"
+              className={categoryFilter === folder.value ? 'active' : ''}
+              onClick={() => setCategoryFilter(folder.value)}
+            >
+              <span>{folder.label}</span>
+              <strong>{folderCounts[folder.value] || 0}</strong>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="table-wrap">
         <table className="data-table">
           <thead>
@@ -287,7 +300,7 @@ export default function InboxPage() {
                   disabled={!filteredMessages.length}
                 />
               </th>
-              <th>{mailbox === 'sent' ? 'À' : 'De'}</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th>
+              <th>{isSentMailbox ? 'À' : 'De'}</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -301,7 +314,7 @@ export default function InboxPage() {
                       <span>Ouvrir la synchronisation Gmail</span>
                     </button>
                   </div>
-                ) : (mailbox === 'sent' ? 'Aucun message envoyé.' : (categoryFilter === 'all' ? 'Boîte de réception vide.' : 'Aucun message dans ce dossier.'))}
+                ) : (isSentMailbox ? 'Aucun e-mail envoyé trouvé dans la boîte connectée.' : (categoryFilter === 'all' ? 'Boîte de réception vide.' : 'Aucun message dans ce dossier.'))}
               </td></tr>
             ) : (
               filteredMessages.map((msg) => {
@@ -318,34 +331,34 @@ export default function InboxPage() {
                         onChange={() => toggleSelected(msg.id)}
                       />
                     </td>
-                    <td>{msg.from || 'Inconnu'}</td>
+                    <td>{isSentMailbox ? (msg.to || msg.from || 'Destinataire inconnu') : (msg.from || 'Inconnu')}</td>
                     <td>{msg.unread ? <strong>{decodeHtmlEntities(msg.subject) || '(sans objet)'}</strong> : (decodeHtmlEntities(msg.subject) || '(sans objet)')}<div className="muted">{decodeHtmlEntities(msg.snippet)}</div></td>
                     <td>{formatDateTimeFr(msg.date)}</td>
                     <td>{msg.run_id ? <button className="link-button" type="button" onClick={() => handleOpen(msg)}>{verdictLabel}</button> : <span className="muted">aucun</span>}</td>
                     <td>
                       <div className="actions">
-                        {canManage && mailbox !== 'sent' && (
+                        {canManage && !isSentMailbox && (
                           <button type="button" onClick={() => handleAction(msg.unread ? 'read' : 'unread', msg.id)}>
                             {msg.unread ? 'Marquer lu' : 'Marquer non lu'}
                           </button>
                         )}
-                        {canManage && mailbox !== 'sent' && <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>}
-                        {canManage && mailbox !== 'sent' && (
+                        {canManage && !isSentMailbox && <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>}
+                        {canManage && !isSentMailbox && (
                           <button type="button" title="Catégoriser l’expéditeur" onClick={() => handleCategorize(msg, false)}>
                             Catégoriser l’expéditeur
                           </button>
                         )}
-                        {canManage && mailbox !== 'sent' && (
+                        {canManage && !isSentMailbox && (
                           <button type="button" title="Catégoriser le domaine" onClick={() => handleCategorize(msg, true)}>
                             Catégoriser le domaine
                           </button>
                         )}
-                        {canManage && mailbox !== 'sent' && (
+                        {canManage && !isSentMailbox && (
                           <button type="button" disabled={forceAgent.isPending} onClick={() => handleForceAgent(msg.id)}>
                             Forcer l’agent
                           </button>
                         )}
-                        {canManage && mailbox !== 'sent' && <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>}
+                        {canManage && !isSentMailbox && <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>}
                       </div>
                     </td>
                   </tr>

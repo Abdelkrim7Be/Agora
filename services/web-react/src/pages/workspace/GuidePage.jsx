@@ -10,8 +10,8 @@ const EVERYDAY_SECTIONS = [
     icon: 'route',
     body: [
       'La boîte est relevée automatiquement. Chaque nouveau message passe d’abord par le filtre anti-bruit : newsletters, alertes, notifications automatiques et accusés de réception sont écartés sans jamais recevoir de réponse.',
-      'Ce qui reste est rangé dans une de vos catégories. La règle de la catégorie (mots-clés du sujet ou du corps) décide en premier ; si aucune ne correspond, la catégorie du contact expéditeur s’applique.',
-      'Selon la politique de la catégorie, l’agent prépare un brouillon de réponse, prévient une personne en interne, ou classe et archive.',
+      'Ce qui reste est rangé dans un de vos cas métier. La règle du cas (mots-clés du sujet ou du corps) décide en premier ; si aucune ne correspond, le cas métier du contact expéditeur s’applique.',
+      'Selon la politique du cas métier, l’agent prépare un brouillon de réponse, prévient une personne en interne, ou classe et archive.',
     ],
   },
   {
@@ -20,7 +20,7 @@ const EVERYDAY_SECTIONS = [
     body: [
       'Rien ne part sans vous. Un brouillon vous attend dans Validation : vous pouvez l’accepter, le modifier avant envoi, demander une nouvelle version en expliquant ce qui ne va pas, ou l’ignorer.',
       'Chaque correction est apprise : modifier un brouillon ajuste le style des suivants, en ignorer un ajuste le tri.',
-      'Brouillons regroupe tout ce qui est en attente, avec filtres par catégorie, priorité, texte et date.',
+      'Brouillons regroupe tout ce qui est en attente, avec filtres par cas métier, priorité, texte et date.',
     ],
   },
   {
@@ -28,7 +28,7 @@ const EVERYDAY_SECTIONS = [
     icon: 'mail',
     body: [
       'La vue Messages montre la boîte réelle, lue et non lue, avec le verdict de l’agent en face de chaque message.',
-      'Vous pouvez y classer un message à la main dans une catégorie : c’est la façon la plus rapide d’apprendre à l’agent une famille de messages qu’il n’avait pas reconnue.',
+      'Vous pouvez y rattacher un message à un cas métier : c’est la façon la plus rapide d’apprendre à l’agent une famille de messages qu’il n’avait pas reconnue.',
     ],
   },
 ];
@@ -36,22 +36,22 @@ const EVERYDAY_SECTIONS = [
 // Where the owner shapes the agent's behavior.
 const OWNER_SECTIONS = [
   {
-    title: 'Catégories',
+    title: 'Cas métier',
     icon: 'category',
     body: [
-      'Une catégorie décrit une famille de messages : banque, fournisseurs, réclamations, candidatures. Elle porte des mots-clés, une priorité, et une politique.',
+      'Un cas métier décrit une famille de messages : banque, fournisseurs, réclamations, candidatures. Il porte des mots-clés, une priorité, et une politique.',
       'Politiques disponibles : brouillon automatique (l’agent rédige), notification interne (l’agent prévient une personne sans répondre), classement (étiquette et archive), ignorer.',
       'La politique d’approbation permet d’exiger une validation humaine même pour une action normalement automatique, et d’interdire tout envoi hors de vos domaines internes.',
-      'Une catégorie dont l’expéditeur est une machine (facturation automatique, tickets) doit cocher « accepte le courrier automatique », sinon le filtre anti-bruit l’écarte.',
+      'Un cas métier dont l’expéditeur est une machine (facturation automatique, tickets) doit accepter le courrier automatique, sinon le filtre anti-bruit l’écarte.',
     ],
   },
   {
     title: 'Contacts, segments et rôles',
     icon: 'contact_mail',
     body: [
-      'Contacts : l’annuaire des expéditeurs connus. Un contact peut porter une catégorie par défaut et une priorité, appliquées quand aucune règle de sujet ne correspond.',
+      'Contacts : l’annuaire des expéditeurs connus. Un contact peut porter un cas métier par défaut et une priorité, appliqués quand aucune règle de sujet ne correspond.',
       'Segments : des regroupements de contacts, utilisés pour les campagnes.',
-      'Annuaire des rôles : associe un nom de rôle (Support, RH, Direction) à des adresses, pour que les catégories routent vers un rôle plutôt qu’une adresse en dur.',
+      'Annuaire des rôles : associe un nom de rôle (Support, RH, Direction) à des adresses, pour que les cas métier routent vers un rôle plutôt qu’une adresse en dur.',
     ],
   },
   {
@@ -80,7 +80,7 @@ const ADMIN_SECTIONS = [
     icon: 'shield',
     body: [
       'Active ou désactive les outils que l’agent peut utiliser : envoi, brouillons, étiquettes, archivage, transfert, réponse à tous.',
-      'Un outil désactivé disparaît complètement du champ d’action de l’agent, quelles que soient les catégories.',
+      'Un outil désactivé disparaît complètement du champ d’action de l’agent, quels que soient les cas métier.',
     ],
   },
   {
@@ -88,7 +88,7 @@ const ADMIN_SECTIONS = [
     icon: 'admin_panel_settings',
     body: [
       'Gère les comptes et leurs rôles. L’administration de la plateforme — création d’instances, droits, audit, coûts — est réservée au rôle administrateur.',
-      'Le propriétaire d’une instance gère le contenu de son espace de travail : catégories, contacts, règles, validations.',
+      'Le propriétaire d’une instance gère le contenu de son espace de travail : cas métier, contacts, règles, validations.',
     ],
   },
   {

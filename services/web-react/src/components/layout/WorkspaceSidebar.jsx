@@ -14,6 +14,7 @@ const TAB_GROUPS = [
       { to: 'validation', icon: 'inbox', label: 'Validation' },
       { to: 'drafts', icon: 'drafts', label: 'Brouillons' },
       { to: 'inbox', icon: 'mail', label: 'Messages' },
+      { to: 'sent', icon: 'send', label: 'Envoyés' },
       { to: 'notifications', icon: 'notifications', label: 'Notifications' },
     ],
   },
@@ -37,7 +38,7 @@ const TAB_GROUPS = [
   {
     label: 'Gestion',
     tabs: [
-      { to: 'categories', icon: 'category', label: 'Catégories' },
+      { to: 'categories', icon: 'category', label: 'Cas métier' },
       { to: 'contacts', icon: 'contact_mail', label: 'Contacts' },
       { to: 'segments', icon: 'group_work', label: 'Segments' },
       { to: 'roles', icon: 'groups', label: 'Annuaire des rôles' },

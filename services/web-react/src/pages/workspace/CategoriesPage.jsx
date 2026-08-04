@@ -103,14 +103,14 @@ export default function CategoriesPage() {
     setYamlText(query.data.categories_yaml || '');
     if (!announcedInitialLoad.current) {
       announcedInitialLoad.current = true;
-      setStatus('Workflows chargés.', 'ok');
+      setStatus('Cas métier à jour.', 'ok');
     }
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!query.error || announcedError.current === query.error.message) return;
     announcedError.current = query.error.message;
-    setStatus(`Impossible de charger les workflows : ${query.error.message}`, 'error');
+    setStatus(`Impossible de charger les cas métier : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -170,7 +170,7 @@ export default function CategoriesPage() {
   const handleAcceptProposal = async (proposal) => {
     try {
       await acceptProposal.mutateAsync({ proposal_id: proposal.id });
-      setStatus(`Proposition « ${proposal.display_name} » créée comme workflow désactivé.`, 'ok');
+      setStatus(`Proposition « ${proposal.display_name} » créée comme cas désactivé.`, 'ok');
     } catch (error) {
       setStatus(`Impossible d'accepter la proposition : ${error.message}`, 'error');
     }
@@ -207,7 +207,7 @@ export default function CategoriesPage() {
       setCategoryContactForm(EMPTY_CATEGORY_CONTACT);
       setStatus(`${email} ajouté à ${selectedCategory.display_name || selectedCategory.name}.`, 'ok');
     } catch (error) {
-      setStatus(`Impossible d'ajouter l'e-mail à la catégorie : ${error.message}`, 'error');
+      setStatus(`Impossible d'ajouter l'e-mail au cas métier : ${error.message}`, 'error');
     }
   };
 
@@ -217,7 +217,7 @@ export default function CategoriesPage() {
       await saveContact.mutateAsync({ email: contact.email, payload: contactPayload(contact, { category: null, category_source: 'manual' }) });
       setStatus(`${contact.email} retiré de ${selectedCategory.display_name || selectedCategory.name}.`, 'ok');
     } catch (error) {
-      setStatus(`Impossible de retirer l'e-mail de la catégorie : ${error.message}`, 'error');
+      setStatus(`Impossible de retirer l'e-mail du cas métier : ${error.message}`, 'error');
     }
   };
 
@@ -267,10 +267,10 @@ export default function CategoriesPage() {
       };
       try {
         await saveEdit.mutateAsync({ name: editingName, payload });
-        setStatus(`Workflow « ${payload.display_name} » mis à jour.`, 'ok');
+        setStatus(`Cas métier « ${payload.display_name} » mis à jour.`, 'ok');
         resetForm();
       } catch (error) {
-        setStatus(`Impossible de mettre à jour le workflow : ${error.message}`, 'error');
+        setStatus(`Impossible de mettre à jour le cas métier : ${error.message}`, 'error');
       }
       return;
     }
@@ -295,10 +295,10 @@ export default function CategoriesPage() {
     setYamlText(nextYaml);
     try {
       await saveYaml.mutateAsync(nextYaml);
-      setStatus(`Workflow « ${form.name.trim()} » ajouté.`, 'ok');
+      setStatus(`Cas métier « ${form.name.trim()} » ajouté.`, 'ok');
       resetForm();
     } catch (error) {
-      setStatus(`Impossible d'enregistrer les workflows : ${error.message}`, 'error');
+      setStatus(`Impossible d'enregistrer les cas métier : ${error.message}`, 'error');
     }
   };
 
@@ -323,9 +323,9 @@ export default function CategoriesPage() {
     const enabled = category.enabled === false;
     try {
       await saveEdit.mutateAsync({ name: category.name, payload: categoryUpdatePayload(category, { enabled }) });
-      setStatus(`Workflow ${category.name} ${enabled ? 'activé' : 'désactivé'}.`, 'ok');
+      setStatus(`Cas métier ${category.name} ${enabled ? 'activé' : 'désactivé'}.`, 'ok');
     } catch (error) {
-      setStatus(`Impossible de ${enabled ? 'activer' : 'désactiver'} le workflow : ${error.message}`, 'error');
+      setStatus(`Impossible de ${enabled ? 'activer' : 'désactiver'} le cas métier : ${error.message}`, 'error');
     }
   };
 
@@ -335,26 +335,26 @@ export default function CategoriesPage() {
     setYamlText(nextYaml);
     try {
       await saveYaml.mutateAsync(nextYaml);
-      setStatus(`Workflows ${!parsed?.enabled ? 'activés' : 'désactivés'}.`, 'ok');
+      setStatus(`Cas métier ${!parsed?.enabled ? 'activés' : 'désactivés'}.`, 'ok');
     } catch (error) {
-      setStatus(`Impossible d'enregistrer les workflows : ${error.message}`, 'error');
+      setStatus(`Impossible d'enregistrer les cas métier : ${error.message}`, 'error');
     }
   };
 
   const handleDuplicate = async (name) => {
     try {
       const result = await duplicateCategory.mutateAsync(name);
-      setStatus(`Workflow dupliqué sous « ${result.new_name} ».`, 'ok');
+      setStatus(`Cas métier dupliqué sous « ${result.new_name} ».`, 'ok');
     } catch (error) {
-      setStatus(`Impossible de dupliquer le workflow : ${error.message}`, 'error');
+      setStatus(`Impossible de dupliquer le cas métier : ${error.message}`, 'error');
     }
   };
 
   const handleDelete = async (name) => {
     const confirmed = await confirmDialog({
-      title: 'Supprimer le workflow',
-      message: `Supprimer le workflow « ${name} » ? Irréversible.`,
-      confirmLabel: 'Supprimer le workflow',
+      title: 'Supprimer le cas métier',
+      message: `Supprimer le cas métier « ${name} » ? Cette action est irréversible.`,
+      confirmLabel: 'Supprimer le cas',
       confirmIcon: 'delete',
       variant: 'danger',
     });
@@ -362,9 +362,9 @@ export default function CategoriesPage() {
     try {
       await deleteCategory.mutateAsync(name);
       if (editingName === name) resetForm();
-      setStatus(`Workflow « ${name} » supprimé.`, 'ok');
+      setStatus(`Cas métier « ${name} » supprimé.`, 'ok');
     } catch (error) {
-      setStatus(`Impossible de supprimer le workflow : ${error.message}`, 'error');
+      setStatus(`Impossible de supprimer le cas métier : ${error.message}`, 'error');
     }
   };
 
@@ -382,9 +382,9 @@ export default function CategoriesPage() {
   const handleSaveYamlRaw = async () => {
     try {
       await saveYaml.mutateAsync(yamlText);
-      setStatus('Workflows enregistrés.', 'ok');
+      setStatus('Cas métier enregistrés.', 'ok');
     } catch (error) {
-      setStatus(`Impossible d'enregistrer les workflows : ${error.message}`, 'error');
+      setStatus(`Impossible d'enregistrer les cas métier : ${error.message}`, 'error');
     }
   };
 
@@ -397,20 +397,20 @@ export default function CategoriesPage() {
       <PageHeading view="categories" />
       <div className="toolbar">
         <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les workflows</span>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Actualiser</span>
         </button>
         <button className="primary" type="button" onClick={handleSaveYamlRaw}>
-          <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer les workflows</span>
+          <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer</span>
         </button>
-        <span className="counter">{query.data?.storage || 'default-instance-yaml'}</span>
+        <span className="counter">{query.data?.storage ? 'Source configurée' : 'Configuration par défaut'}</span>
       </div>
-      <div className="notice"><strong>Catégories et actions :</strong> chaque catégorie définit comment traiter les e-mails qui correspondent. Choisissez Rédiger pour créer un brouillon, Notifier pour validation humaine, Classer pour organiser sans brouillon, ou Ignorer/archiver pour ne pas créer de brouillon.</div>
+      <div className="notice"><strong>Cas métier et actions :</strong> chaque cas décrit une famille d’e-mails et le traitement attendu. Choisissez Rédiger pour préparer une réponse, Notifier pour demander une validation humaine, Classer pour organiser sans brouillon, ou Ignorer/archiver pour écarter le message.</div>
 
       <Card className="editor-card">
         <div className="card-header">
           <div>
-            <h2>Propositions de catégories</h2>
-            <p>Analyse metadata uniquement : expéditeur, domaine, objet, extrait et libellés Gmail. Les catégories existantes ne sont pas reproposées.</p>
+            <h2>Propositions de cas métier</h2>
+            <p>Analyse limitée aux informations de message : expéditeur, domaine, objet, extrait et libellés Gmail. Les cas déjà configurés ne sont pas reproposés.</p>
           </div>
           <button type="button" onClick={() => proposalsQuery.refetch()}>
             <span className="material-symbols-outlined" aria-hidden="true">manage_search</span><span>Scanner 500 messages</span>
@@ -419,7 +419,7 @@ export default function CategoriesPage() {
         {proposalsQuery.isError ? (
           <p className="empty-cell">Propositions indisponibles : {proposalsQuery.error.message}</p>
         ) : !categoryProposals.length ? (
-          <div className="empty">Aucune nouvelle catégorie détectée pour le moment.</div>
+          <div className="empty">Aucune proposition pour l’instant. Lancez un scan après avoir reçu de nouveaux messages.</div>
         ) : (
           <div className="rule-list">
             {categoryProposals.slice(0, 6).map((proposal) => (
@@ -453,8 +453,8 @@ export default function CategoriesPage() {
       <Card className="workflow-builder">
         <div className="card-header">
           <div>
-            <h2>{editingName ? `Modifier le workflow : ${form.name}` : 'Ajouter un workflow'}</h2>
-            <div className="meta">Créez un playbook métier sans éditer le YAML manuellement.</div>
+            <h2>{editingName ? `Modifier le cas : ${form.name}` : 'Ajouter un cas métier'}</h2>
+            <div className="meta">Décrivez quand ce cas s’applique et ce que l’agent doit préparer.</div>
           </div>
         </div>
         <form className="workflow-form" onSubmit={handleSubmit}>
@@ -529,7 +529,7 @@ export default function CategoriesPage() {
           )}
           <div className="workflow-wide instructions-fieldset">
             <strong>Instructions opérationnelles (optionnel)</strong>
-            <div className="meta">Transmis à l'agent comme contexte cadré pour ce workflow uniquement — pas un texte libre.</div>
+            <div className="meta">Transmis à l'agent comme contexte cadré pour ce cas uniquement.</div>
             <label><span>SLA</span><input value={form.sla} onChange={(e) => setForm({ ...form, sla: e.target.value })} placeholder="Répondre sous 24h" /></label>
             <label><span>Données requises</span><input value={form.requiredData} onChange={(e) => setForm({ ...form, requiredData: e.target.value })} placeholder="numéro de commande, date d'achat" /></label>
             <label><span>Règle d'escalade</span><input value={form.escalation} onChange={(e) => setForm({ ...form, escalation: e.target.value })} placeholder="Notifier le responsable finance pour les remboursements > 1000 EUR" /></label>
@@ -539,13 +539,13 @@ export default function CategoriesPage() {
           <div className="workflow-wide instructions-fieldset">
             <strong>Politique d'approbation</strong>
             <div className="meta">Vient s'ajouter à la politique de sécurité par défaut de l'outil — ne peut jamais la relâcher, seulement la renforcer.</div>
-            <label className="workflow-checkbox"><input type="checkbox" checked={form.requireApproval} onChange={(e) => setForm({ ...form, requireApproval: e.target.checked })} /><span>Toujours exiger une validation humaine pour ce workflow</span></label>
+            <label className="workflow-checkbox"><input type="checkbox" checked={form.requireApproval} onChange={(e) => setForm({ ...form, requireApproval: e.target.checked })} /><span>Toujours exiger une validation humaine pour ce cas</span></label>
             <label className="workflow-checkbox"><input type="checkbox" checked={!form.externalSendAllowed} onChange={(e) => setForm({ ...form, externalSendAllowed: !e.target.checked })} /><span>Interdire l'envoi en dehors des domaines internes</span></label>
           </div>
           <div className="workflow-form-actions workflow-wide">
             <button className="primary" type="submit">
               <span className="material-symbols-outlined" aria-hidden="true">{editingName ? 'save' : 'add'}</span>
-              <span>{editingName ? 'Enregistrer les modifications' : 'Ajouter le workflow'}</span>
+              <span>{editingName ? 'Enregistrer les modifications' : 'Ajouter le cas'}</span>
             </button>
             {editingName && <button className="ghost" type="button" onClick={resetForm}>Annuler la modification</button>}
           </div>
@@ -554,7 +554,7 @@ export default function CategoriesPage() {
 
       <Card className="workflow-test-match">
         <div className="card-header">
-          <div><h2>Tester avec un e-mail</h2><div className="meta">Prévisualisez quel workflow un e-mail correspondrait, sans rien envoyer.</div></div>
+          <div><h2>Tester avec un e-mail</h2><div className="meta">Prévisualisez quel cas métier serait choisi, sans rien envoyer.</div></div>
         </div>
         <div className="workflow-form">
           <label><span>De</span><input value={testAuthor} onChange={(e) => setTestAuthor(e.target.value)} placeholder="client@example.com" /></label>
@@ -566,7 +566,7 @@ export default function CategoriesPage() {
           </div>
           <div className="workflow-wide rules-preview">
             {testError ? <div className="empty">{`Impossible de tester la correspondance : ${testError}`}</div> : !testResult ? 'Aucun test lancé.' : !testResult.matched ? (
-              <div className="empty">Aucun workflow ne correspond à cet e-mail — il passerait au triage IA.</div>
+              <div className="empty">Aucun cas métier ne correspond à cet e-mail. Il passerait au triage de l’agent.</div>
             ) : (
               <div className="rule-row workflow-row">
                 <div>
@@ -583,8 +583,8 @@ export default function CategoriesPage() {
       <Card className="category-management-card">
         <div className="card-header">
           <div>
-            <h2>Gestion de catégorie</h2>
-            <div className="meta">Visualisez l'action, les responsables et les e-mails rattachés à une catégorie.</div>
+            <h2>Gestion du cas métier</h2>
+            <div className="meta">Visualisez l'action, les responsables et les e-mails rattachés à ce cas.</div>
           </div>
           {categories.length ? (
             <select value={selectedCategoryName} onChange={(e) => setSelectedCategoryName(e.target.value)}>
@@ -592,7 +592,7 @@ export default function CategoriesPage() {
             </select>
           ) : null}
         </div>
-        {!selectedCategory ? <div className="empty">Aucune catégorie à gérer.</div> : (
+        {!selectedCategory ? <div className="empty">Aucun cas métier à gérer.</div> : (
           <div className="category-management-grid">
             <div className="category-profile-panel">
               <div className="directory-icon"><span className="material-symbols-outlined" aria-hidden="true">category</span></div>
@@ -619,7 +619,7 @@ export default function CategoriesPage() {
               {canManage && (
                 <div className="toolbar compact-toolbar">
                   <button type="button" onClick={() => startEdit(selectedCategory)}>
-                    <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier cette catégorie</span>
+                    <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier ce cas</span>
                   </button>
                   <button type="button" onClick={() => navigate(`../contacts?category=${encodeURIComponent(selectedCategory.name)}`)}>
                     <span className="material-symbols-outlined" aria-hidden="true">group</span><span>Ouvrir les contacts</span>
@@ -631,7 +631,7 @@ export default function CategoriesPage() {
               <div className="card-header compact-card-header">
                 <div>
                   <h3>E-mails et utilisateurs</h3>
-                  <div className="meta">Ces expéditeurs déclenchent cette catégorie avant les mots-clés.</div>
+                  <div className="meta">Ces expéditeurs déclenchent ce cas avant les mots-clés.</div>
                 </div>
                 <span className="counter">{selectedCategoryContacts.length}</span>
               </div>
@@ -648,7 +648,7 @@ export default function CategoriesPage() {
                 </form>
               )}
               <div className="rule-list category-member-list">
-                {!selectedCategoryContacts.length ? <div className="empty">Aucun e-mail manuel dans cette catégorie.</div> : selectedCategoryContacts.map((contact) => (
+                {!selectedCategoryContacts.length ? <div className="empty">Aucun expéditeur manuel dans ce cas.</div> : selectedCategoryContacts.map((contact) => (
                   <div className="directory-row compact category-member-row" key={contact.email}>
                     <div className="directory-icon"><span className="material-symbols-outlined" aria-hidden="true">alternate_email</span></div>
                     <div className="directory-main">
@@ -676,13 +676,13 @@ export default function CategoriesPage() {
       </Card>
 
       <Card className="editor-card">
-        <strong>Catégories configurées</strong>
+        <strong>Cas métier configurés</strong>
         <div className="rules-preview">
           <div className="rules-toggle-row">
             {canManage && (
               <button className={`toggle-pill ${parsed?.enabled ? 'on' : 'off'}`} type="button" onClick={handleToggleGlobalEnabled}>
                 <span className="toggle-dot" aria-hidden="true" />
-                <span>Moteur workflows : {parsed?.enabled ? 'Activé' : 'Désactivé'}</span>
+                <span>Moteur de cas : {parsed?.enabled ? 'Activé' : 'Désactivé'}</span>
               </button>
             )}
             <span className="counter">{activeCount}/{categories.length} actifs</span>
@@ -694,7 +694,7 @@ export default function CategoriesPage() {
             <div><strong>{parsed?.enabled ? 'On' : 'Off'}</strong><span>Correspondance</span></div>
           </div>
           <div className="rule-list directory-list">
-            {!categories.length ? <div className="empty">Aucune catégorie configurée.</div> : (
+            {!categories.length ? <div className="empty">Aucun cas métier configuré.</div> : (
               <>
                 {pageCategories.map((category) => {
                   const policy = category.policy || 'notify';
@@ -722,7 +722,7 @@ export default function CategoriesPage() {
                             type="button"
                             className={`mini-chip chip-link ${selectedCategoryName === category.name ? 'selected' : ''}`}
                             onClick={() => setSelectedCategoryName(category.name)}
-                            title="Gérer les e-mails de cette catégorie"
+                            title="Gérer les e-mails de ce cas"
                           >
                             {`${contactCountByCategory[category.name] || 0} e-mail(s)`}
                           </button>
@@ -762,7 +762,7 @@ export default function CategoriesPage() {
         </div>
         <details className="advanced-yaml">
           <summary>Éditer le YAML brut (avancé)</summary>
-          <p className="muted">Réservé au réglage fin (commentaires, champs non exposés par le formulaire). « Enregistrer les workflows » persiste ce contenu.</p>
+          <p className="muted">Réservé au réglage fin (commentaires, champs non exposés par le formulaire). Le bouton « Enregistrer » persiste ce contenu.</p>
           <textarea spellCheck={false} value={yamlText} onChange={(e) => setYamlText(e.target.value)} />
         </details>
       </Card>

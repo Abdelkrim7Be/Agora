@@ -1,7 +1,7 @@
 {
   "nav": {
-    "instances": "Tableau de bord",
-    "mailboxes": "Mes boîtes",
+    "platformDashboard": "Tableau de bord",
+    "instances": "Instances d’agents",
     "agentTypes": "Catalogue d’agents",
     "health": "Santé système",
     "audit": "Audit & conformité",
@@ -9,10 +9,15 @@
     "account": "Compte"
   },
   "view": {
-    "instances": {
-      "title": "Pilotage des agents",
+    "platformDashboard": {
+      "title": "Tableau de bord plateforme",
       "kicker": "Agora AI",
-      "description": "Supervisez les agents métiers actifs, leurs boîtes connectées et les actions qui nécessitent une validation humaine."
+      "description": "Vue globale des agents IA, des boîtes connectées et des accès qui structurent la plateforme."
+    },
+    "instances": {
+      "title": "Instances d’agents",
+      "kicker": "Agora AI",
+      "description": "Créez, ouvrez et administrez les espaces de travail des agents IA actifs sur la plateforme."
     },
     "agentTypes": {
       "title": "Catalogue d’agents",
@@ -40,14 +45,19 @@
       "description": "Approuvez, ajustez ou rejetez les actions proposées avant qu’elles n’affectent vos systèmes ou vos clients."
     },
     "drafts": {
-      "title": "Brouillons",
-      "kicker": "File d'approbation",
-      "description": "Passez en revue les brouillons d'e-mails en attente groupés par catégorie et priorité."
+      "title": "File de brouillons",
+      "kicker": "Travail préparé",
+      "description": "Retrouvez les brouillons générés par l’agent, groupés par cas métier et priorité."
     },
     "inbox": {
       "title": "Messages",
       "kicker": "Contexte de l'agent",
       "description": "Inspectez les messages ou événements récents et ouvrez l'exécution attachée."
+    },
+    "sent": {
+      "title": "E-mails envoyés",
+      "kicker": "Historique sortant",
+      "description": "Consultez les derniers e-mails envoyés depuis la boîte connectée et vérifiez ce qui est réellement parti."
     },
     "run-detail": {
       "title": "Détail du traitement",
@@ -100,9 +110,9 @@
       "description": "Activez les capacités autorisées et vérifiez la politique appliquée avant toute action sensible."
     },
     "categories": {
-      "title": "Catégories",
+      "title": "Cas métier",
       "kicker": "Gestion des e-mails",
-      "description": "Définissez les catégories, leurs actions, les responsables et les e-mails qui doivent déclencher chaque traitement."
+      "description": "Définissez les familles d’e-mails, leurs actions, les responsables et les expéditeurs qui déclenchent chaque traitement."
     },
     "roles": {
       "title": "Annuaire des rôles",
@@ -127,7 +137,7 @@
     "analytics": {
       "title": "Tableau de bord",
       "kicker": "Pilotage",
-      "description": "Suivez le volume traité, les workflows les plus chargés, le délai d’approbation et la charge par département pour l’instance sélectionnée."
+      "description": "Suivez le volume traité, les cas métier les plus chargés, le délai d’approbation et la charge par département pour l’instance sélectionnée."
     },
     "campaigns": {
       "title": "Campagnes",
@@ -158,11 +168,6 @@
       "title": "Filtre anti-bruit",
       "kicker": "Tri automatique",
       "description": "Ce qui est écarté avant toute analyse : diffusions, alertes et réponses automatiques."
-    },
-    "mailboxes": {
-      "title": "Mes boîtes",
-      "kicker": "Supervision",
-      "description": "L’état de connexion de chaque boîte à laquelle vous avez accès, sans avoir à ouvrir chaque espace de travail."
     }
   },
   "global": {

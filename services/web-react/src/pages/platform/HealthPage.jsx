@@ -112,7 +112,7 @@ export default function HealthPage() {
           <div className="muted" style={{ marginTop: 10 }}>
             {workflows.map((row) => {
               const label = row.display_name || row.workflow || row.category || '';
-              const safe = (!label || label === 'uncategorized') ? 'Sans workflow' : label;
+              const safe = (!label || label === 'uncategorized') ? 'Sans cas métier' : label;
               return `${safe} : ${formatCountFr(row.count ?? row.total ?? 0)}`;
             }).join(' · ')}
           </div>

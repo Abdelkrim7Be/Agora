@@ -7,7 +7,7 @@ import { currentUsername } from '../../utils/jwt';
 
 const ROLE_SUMMARY = {
   admin: 'Peut gérer les utilisateurs et consulter les vues opérationnelles de la plateforme.',
-  owner: 'Peut configurer les instances, workflows, permissions, approbations et contrôles de coûts.',
+  owner: 'Peut configurer les instances, cas métier, permissions, approbations et contrôles de coûts.',
   approver: 'Peut relire, prendre en charge, approuver, rejeter et répondre aux validations assignées.',
   viewer: 'Peut consulter les tableaux de bord, la boîte, les exécutions et la configuration sans les modifier.',
 };
