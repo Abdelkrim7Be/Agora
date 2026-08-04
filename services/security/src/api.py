@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -29,6 +30,26 @@ from src.policy import SERVICE_ROOT
 from src.sanitize import sanitize
 
 app = FastAPI(title="agora-security")
+
+logger = logging.getLogger("agora.security")
+
+
+@app.on_event("startup")
+def warn_about_non_default_policy() -> None:
+    """Say so, loudly, when the service is not running the production policy.
+
+    policy.live-test.yaml pins every send-style tool to a two-address allow list.
+    That is correct for the live-mail harness and completely wrong for real use —
+    and the difference is invisible from the UI, so it needs to be visible in the
+    logs of whatever host it lands on.
+    """
+    policy = settings.policy_path
+    if Path(policy).name != "policy.yaml":
+        logger.warning(
+            "security policy is %r, not policy.yaml — send tools may be restricted "
+            "to a test allow list. Set SECURITY_POLICY_PATH=policy.yaml for production.",
+            policy,
+        )
 
 
 @app.get("/health")
