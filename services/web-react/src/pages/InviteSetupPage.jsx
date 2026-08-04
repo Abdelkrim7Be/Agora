@@ -25,7 +25,7 @@ function passwordRules(password, confirm) {
 
 export default function InviteSetupPage() {
   const { token = '' } = useParams();
-  const { gatewayBase } = useAuth();
+  const { gatewayBase, signOut } = useAuth();
   const navigate = useNavigate();
   const [status, setStatus] = useState('loading');
   const [summary, setSummary] = useState('Vérification du lien d’invitation...');
@@ -87,6 +87,10 @@ export default function InviteSetupPage() {
       if (!response.ok) throw new Error(readableError(response, text));
       setStatus('done');
       setSummary('Votre accès Agora AI est activé.');
+      // Whoever was already signed in on this browser is not the person who
+      // just claimed the invitation. Without clearing that session the sign-in
+      // page bounces straight back to the previous account's workspace.
+      signOut();
       window.setTimeout(() => navigate('/login', { replace: true }), 1800);
     } catch (error) {
       setMessage(error.message || 'Activation impossible.');

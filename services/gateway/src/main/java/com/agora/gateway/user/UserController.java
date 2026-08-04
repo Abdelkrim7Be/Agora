@@ -10,6 +10,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -46,9 +47,23 @@ public class UserController {
         this.mailer = mailer;
     }
 
-    public record UserResponse(Long id, String username, String email, String role, String department, boolean enabled) {
-        static UserResponse from(AppUser u) {
-            return new UserResponse(u.getId(), u.getUsername(), u.getEmail(), u.getRole(), u.getDepartment(), u.isEnabled());
+    public record UserResponse(
+            Long id,
+            String username,
+            String email,
+            String role,
+            String department,
+            boolean enabled,
+            boolean pendingInvitation,
+            boolean invitationExpired,
+            Instant invitationExpiresAt
+    ) {
+        static UserResponse from(AppUser u, UserInvitation invitation) {
+            Instant now = Instant.now();
+            boolean pending = invitation != null && invitation.isUsable(now);
+            boolean expired = invitation != null && !invitation.isConsumed() && invitation.isExpired(now);
+            return new UserResponse(u.getId(), u.getUsername(), u.getEmail(), u.getRole(), u.getDepartment(),
+                    u.isEnabled(), pending, expired, invitation != null ? invitation.getExpiresAt() : null);
         }
     }
 
@@ -69,7 +84,7 @@ public class UserController {
 
     @GetMapping
     public List<UserResponse> list() {
-        return users.findAll().stream().map(UserResponse::from).toList();
+        return users.findAll().stream().map(user -> UserResponse.from(user, currentInvitation(user))).toList();
     }
 
     @PostMapping
@@ -167,7 +182,7 @@ public class UserController {
             u.setDepartment(req.department());
             users.save(u);
             audit(auth, "update_user", "/users/" + id, "success");
-            return ResponseEntity.ok(UserResponse.from(u));
+            return ResponseEntity.ok(UserResponse.from(u, currentInvitation(u)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -190,8 +205,12 @@ public class UserController {
             u.setEnabled(enabled);
             users.save(u);
             audit(auth, action, "/users/" + id, "success");
-            return ResponseEntity.ok(UserResponse.from(u));
+            return ResponseEntity.ok(UserResponse.from(u, currentInvitation(u)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    private UserInvitation currentInvitation(AppUser user) {
+        return invitations.currentOpenInvitation(user).orElse(null);
     }
 
     private void audit(Authentication auth, String action, String path, String outcome) {

@@ -121,12 +121,69 @@ export function useSetUserEnabled() {
   });
 }
 
+export function useUpdateUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, role, department }) => api(`/users/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ role, department: department || null }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
 export function useInviteUser() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/invite`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useInstanceGrantsQuery(instances, enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const ids = (instances || []).map((instance) => instance.id).filter(Boolean);
+  return useQuery({
+    queryKey: ['instance-grants', ids.join('|')],
+    queryFn: async () => {
+      const pairs = await Promise.all(ids.map(async (id) => {
+        const grants = await api(`/agent-instances/${encodeURIComponent(id)}/grants`);
+        return grants.map((grant) => ({ ...grant, agent_instance_id: grant.agent_instance_id || id }));
+      }));
+      return pairs.flat();
+    },
+    enabled: Boolean(token) && enabled && ids.length > 0,
+  });
+}
+
+export function useAddInstanceGrant() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId, userId, role }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, role }),
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
+    },
+  });
+}
+
+export function useRemoveInstanceGrant() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId, userId }) =>
+      api(`/agent-instances/${encodeURIComponent(instanceId)}/grants/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
+    },
   });
 }
 
@@ -261,19 +318,20 @@ const INBOX_PAGE_SIZE = 25;
 
 export const inboxQueryKey = (instanceId, mailbox = 'inbox') => ['inbox', instanceId, mailbox];
 
-export const inboxQueryPath = (mailbox = 'inbox') => {
+export const inboxQueryPath = (mailbox = 'inbox', refresh = false) => {
   const params = new URLSearchParams({ limit: String(INBOX_PAGE_SIZE) });
   if (mailbox === 'sent') params.set('mailbox', 'sent');
+  if (refresh) params.set('refresh', 'true');
   return `/api/agent/inbox?${params.toString()}`;
 };
 
-export function useInboxQuery(mailbox = 'inbox') {
+export function useInboxQuery(mailbox = 'inbox', refreshNonce = 0) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
-    queryKey: inboxQueryKey(instanceId, mailbox),
-    queryFn: () => api(inboxQueryPath(mailbox)),
+    queryKey: [...inboxQueryKey(instanceId, mailbox), refreshNonce],
+    queryFn: () => api(inboxQueryPath(mailbox, refreshNonce > 0)),
     enabled: Boolean(token),
     placeholderData: (previous) => previous,
   });
