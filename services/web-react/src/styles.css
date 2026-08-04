@@ -4878,3 +4878,21 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
     grid-template-columns: 1fr;
   }
 }
+
+/* Recipient shown for approval: a fact about where this will go, not a field. */
+.resolved-recipient {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface-lowest);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.resolved-recipient span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
