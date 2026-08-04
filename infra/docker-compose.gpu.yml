@@ -1,0 +1,13 @@
+# Opt-in GPU overlay for the local model runner.
+#
+# Only use this on a host that actually has an NVIDIA GPU and the container
+# toolkit installed. Without one, `gpus: all` makes the whole stack fail to
+# start, so it is deliberately not in the base file.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+services:
+  ollama:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all

@@ -30,7 +30,7 @@ services:
       - /tmp:size=16m,noexec,nosuid,nodev
     depends_on:
       web:
-        condition: service_started
+        condition: service_healthy
     networks:
       - agora
 
@@ -129,11 +129,13 @@ services:
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: 24h
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - ollama_data:/root/.ollama
-    gpus: all
+    # No `gpus: all` here on purpose. It aborts the entire `docker compose up`
+    # on a host without an accelerator ("failed to discover GPU vendor from
+    # CDI"), which is every ordinary OVH instance. Ollama runs on CPU, just
+    # slower. On a GPU host, add the overlay:
+    #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -147,7 +149,11 @@ services:
     image: ollama/ollama:0.32.1
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command: ["sh", "-c", "ollama pull qwen2.5:3b && ollama create qwen2.5:3b-8k -f /models/qwen2.5-3b-8k.Modelfile"]
+    # The image's entrypoint is `ollama`, so a bare command list is passed to it
+    # as arguments — this ran `ollama sh -c ...` and died with "unknown command
+    # sh", meaning a clean deploy never created the model the agent needs.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull qwen2.5:3b && ollama create qwen2.5:3b-8k -f /models/qwen2.5-3b-8k.Modelfile"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -312,6 +318,14 @@ services:
         condition: service_healthy
       email-agent:
         condition: service_healthy
+    # Without this nothing notices a gateway that started but never became
+    # usable, and web/ingress happily route to it.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
     networks:
       - agora
 
@@ -323,7 +337,17 @@ services:
     mem_limit: 256m
     cpus: 0.5
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: this image resolves localhost to ::1 first and
+      # nginx binds IPv4 only, so the probe never succeeded and the container
+      # stayed unhealthy forever — which blocks ingress via depends_on.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - agora
 
