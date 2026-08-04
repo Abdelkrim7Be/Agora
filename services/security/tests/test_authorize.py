@@ -583,3 +583,38 @@ def test_metrics_endpoint_available():
     r = client.get("/metrics")
     assert r.status_code == 200
     assert "agora_security_health" in r.text
+
+
+def test_declared_recipients_are_checked_when_no_to_argument():
+    """Send tools no longer pass a `to` argument.
+
+    The caller resolves the destination from trusted context and declares it, so
+    recipient policy must read that instead of silently seeing an empty field.
+    """
+    from src.models import AuthorizeRequest
+    from src.authorize import authorize
+    from src.policy import load_policy
+
+    policy = load_policy("policy.yaml")
+    policy.tools["write_email"].recipients.deny_addresses = ["attacker@evil.example"]
+
+    denied = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"subject": "hi", "content": "body"},
+            recipients=["attacker@evil.example"],
+        ),
+        policy,
+    )
+    assert denied.decision == "deny"
+    assert "attacker@evil.example" in denied.reason
+
+    allowed = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"subject": "hi", "content": "body"},
+            recipients=["client@example.com"],
+        ),
+        policy,
+    )
+    assert allowed.decision != "deny"

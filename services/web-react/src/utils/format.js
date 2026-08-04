@@ -184,12 +184,13 @@ export function setupStatusLabelFr(status) {
 
 export function instanceSummaryFields(instance, summary) {
   const health = summary.service_health || instance.status || 'unknown';
-  const connection = summary.mailbox_connection || (instance.mailbox_identity ? 'configured' : 'unknown');
+  const connection = summary.mailbox_connection || (instance.mailbox_identity ? 'configured' : 'pending');
+  const execution = summary.sync_status || (health === 'unknown' ? 'pending' : health);
   const fields = [
     ['Travail en attente', summary.pending_drafts ?? 0],
     ['Coût du jour', formatCostEur(summary.today_cost_eur ?? 0)],
-    ['Connexion', statusLabelFr(connection)],
-    ['Exécution', statusLabelFr(summary.sync_status || health)],
+    ['Connexion', connection === 'pending' ? 'À connecter' : statusLabelFr(connection)],
+    ['Exécution', execution === 'pending' ? 'En attente' : statusLabelFr(execution)],
   ];
   if (summary.setup_status && summary.setup_status !== 'not_started' && summary.setup_status !== 'unknown') {
     const percent = summary.setup_status === 'ready' ? '' : ` (${summary.setup_percent ?? 0}%)`;
@@ -245,7 +246,10 @@ export const ACTION_ARG_LABELS_FR = {
   name: 'Nom',
 };
 
-export const ACTION_ARG_HIDDEN = new Set(['email_id', 'gmail_thread_id', 'run_id', 'action_id']);
+// Runtime-supplied context, never editable by the approver. `_recipients` is
+// the resolved destination the agent reports for preview; it is rendered by the
+// route banner above, not as a text field someone could retarget.
+export const ACTION_ARG_HIDDEN = new Set(['email_id', 'gmail_thread_id', 'run_id', 'action_id', '_recipients']);
 
 export function actionArgLabel(key) {
   if (ACTION_ARG_LABELS_FR[key]) return ACTION_ARG_LABELS_FR[key];
@@ -277,6 +281,29 @@ export function actionArgs(run) {
   return actionRequest(run).args || {};
 }
 
+/**
+ * Where an action will actually deliver.
+ *
+ * Send tools take no recipient argument — the agent resolves the destination
+ * from the message headers or the workflow's own routing, so a prompt injection
+ * has no field through which to redirect mail. The agent reports the resolved
+ * recipients separately; they are shown, never edited. `args.to` is read as a
+ * fallback so runs stored before that change still render.
+ */
+export function actionRecipients(run) {
+  const request = actionRequest(run);
+  const declared = request.recipients;
+  if (Array.isArray(declared) && declared.length) return declared;
+  const legacy = actionArgs(run).to;
+  if (Array.isArray(legacy)) return legacy;
+  return legacy ? [legacy] : [];
+}
+
+export function formatRecipients(run, fallback = 'destinataire') {
+  const recipients = actionRecipients(run);
+  return recipients.length ? recipients.join(', ') : fallback;
+}
+
 export function redraftCapable(run) {
   const request = actionRequest(run);
   const args = actionArgs(run);
@@ -293,7 +320,7 @@ export function workflowLabelFr(row) {
   const name = String(row.display_name || '').trim();
   if (name && name !== 'uncategorized') return name;
   const category = String(row.category || '').trim();
-  return (!category || category === 'uncategorized') ? 'Sans workflow' : category;
+  return (!category || category === 'uncategorized') ? 'Sans cas métier' : category;
 }
 
 // Run Detail's trace table uses plain (non-locale) formatting, distinct from

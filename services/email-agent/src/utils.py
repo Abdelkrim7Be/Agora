@@ -41,6 +41,17 @@ def format_draft_markdown(args: dict) -> str:
     return f"**To**: {to}\n**Subject**: {subject}\n\n{content}"
 
 
+def _recipients_line(args: dict) -> str:
+    """Recipients for the approval preview.
+
+    Send tools no longer take a `to` argument — tool_node passes the trusted
+    recipients under `_recipients` so the approver still sees the destination.
+    `to` is still read for older stored runs and for direct callers.
+    """
+    value = args.get("_recipients") or args.get("to") or ""
+    return ", ".join(value) if isinstance(value, (list, tuple)) else str(value)
+
+
 def format_action_description(name: str, args: dict) -> str:
     """Render a human-readable approval preview for any HITL-gated tool call.
 
@@ -55,16 +66,12 @@ def format_action_description(name: str, args: dict) -> str:
     if name == "reply_all":
         return f"**Reply-all draft**\n\n{args.get('content', '')}"
     if name == "forward_email":
-        to = args.get("to", "")
-        targets = ", ".join(to) if isinstance(to, list) else str(to)
         note = args.get("note", "")
-        return f"**Forward to**: {targets}\n\n{note}"
+        return f"**Forward to**: {_recipients_line(args)}\n\n{note}"
     if name == "notify_internal":
-        to = args.get("to", "")
-        targets = ", ".join(to) if isinstance(to, list) else str(to)
         subject = args.get("subject", "")
         note = args.get("note", "")
-        return f"**Internal notification to**: {targets}\n**Subject**: {subject}\n\n{note}"
+        return f"**Internal notification to**: {_recipients_line(args)}\n**Subject**: {subject}\n\n{note}"
     if name == "trash_email":
         return "**Move this email to trash?**"
     return f"Approve '{name}'?"

@@ -57,6 +57,11 @@ tools:
     limits:
       max_content_chars: 20000
 
+  # NOTE: send tools no longer take a `to` argument — the agent resolves the
+  # destination from the message headers or the workflow's routing and declares
+  # it in `recipients`, which the `recipients:` blocks below check. The
+  # `to: { allow_trust: ... }` rules are kept as defence in depth for any tool
+  # that does pass a recipient argument; they are inert for the ones that don't.
   # Sending actions always go through HITL and share send-like recipient/content caps.
   forward_email:
     decision: hitl

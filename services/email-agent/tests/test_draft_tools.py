@@ -6,7 +6,7 @@ from langgraph.store.memory import InMemoryStore
 
 from src.capabilities import current_gmail_thread_id
 from src.capabilities import draft_tools
-from tests.conftest import ai_tool_call, patch_provider
+from tests.conftest import ai_tool_call, patch_provider, reply_to
 
 
 @contextmanager
@@ -28,11 +28,11 @@ def test_create_draft_uses_trusted_thread_context(monkeypatch):
     patch_provider(monkeypatch, draft_tools, create_draft=_create)
 
     with _thread_context("thread-1"):
-        result = draft_tools.create_draft.invoke({
-            "to": "alice@example.com",
-            "subject": "Re: question",
-            "content": "Draft body",
-        })
+        with reply_to("alice@example.com"):
+            result = draft_tools.create_draft.invoke({
+                "subject": "Re: question",
+                "content": "Draft body",
+            })
 
     assert result == "Created draft 'draft-1' to alice@example.com with subject 'Re: question'."
     assert calls == [{
@@ -53,11 +53,11 @@ def test_create_draft_allows_standalone_draft_without_thread(monkeypatch):
     patch_provider(monkeypatch, draft_tools, create_draft=_create)
 
     with _thread_context(None):
-        result = draft_tools.create_draft.invoke({
-            "to": "alice@example.com",
-            "subject": "Hello",
-            "content": "Draft body",
-        })
+        with reply_to("alice@example.com"):
+            result = draft_tools.create_draft.invoke({
+                "subject": "Hello",
+                "content": "Draft body",
+            })
 
     assert result == "Created draft to alice@example.com with subject 'Hello'."
     assert calls == [{
@@ -70,7 +70,8 @@ def test_create_draft_allows_standalone_draft_without_thread(monkeypatch):
 
 def test_tool_schema_does_not_expose_thread_id():
     schema = draft_tools.create_draft.args_schema.model_json_schema()
-    assert set(schema["properties"]) == {"to", "subject", "content"}
+    # No "to" either: the draft always replies to the message's own sender.
+    assert set(schema["properties"]) == {"subject", "content"}
 
 
 def test_tool_node_injects_current_thread_id_for_draft_tools(monkeypatch):
@@ -87,11 +88,13 @@ def test_tool_node_injects_current_thread_id_for_draft_tools(monkeypatch):
     patch_provider(monkeypatch, draft_tools, create_draft=_create)
 
     state = {
-        "email_input": {"gmail_thread_id": "thread-context"},
+        # tool_node derives the recipient from the message's own From header,
+        # so the model does not supply one.
+        "email_input": {"gmail_thread_id": "thread-context", "author": "A <a@example.com>"},
         "messages": [
             ai_tool_call(
                 "create_draft",
-                {"to": "a@example.com", "subject": "Re", "content": "Body"},
+                {"subject": "Re", "content": "Body"},
                 "call-draft",
             )
         ],

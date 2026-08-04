@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from contextlib import contextmanager
+
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -233,3 +235,32 @@ def mock_mailbox() -> list[dict]:
 @pytest.fixture
 def empty_mailbox() -> list[dict]:
     return []
+
+
+@contextmanager
+def reply_to(address: str | None):
+    """Set the trusted reply recipient tool_node would supply for a message.
+
+    Send tools take no `to` argument: the recipient comes from graph context so
+    that untrusted mail cannot redirect it. Tests calling a tool directly have
+    to stand in for tool_node and set that context.
+    """
+    from src.capabilities import current_reply_to
+
+    token = current_reply_to.set(address)
+    try:
+        yield
+    finally:
+        current_reply_to.reset(token)
+
+
+@contextmanager
+def route_targets(*addresses: str):
+    """Set the workflow-configured recipients tool_node would supply."""
+    from src.capabilities import current_route_targets
+
+    token = current_route_targets.set(tuple(addresses))
+    try:
+        yield
+    finally:
+        current_route_targets.reset(token)

@@ -1,4 +1,4 @@
-import { actionRequest, actionArgs, actionArgLabel, formatEditableValue, coerceEditedValue, ACTION_ARG_HIDDEN } from '../../utils/format';
+import { actionRequest, actionArgs, actionArgLabel, formatEditableValue, coerceEditedValue, formatRecipients, ACTION_ARG_HIDDEN } from '../../utils/format';
 
 export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
   const request = actionRequest(run);
@@ -9,14 +9,14 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
     <div className="action-preview">
       {request.action === 'forward_email' ? (
         <div className="route-preview">
-          <strong>Transférer cet e-mail à {args.to || 'destinataire'}</strong>
-          <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du workflow'}</span>
+          <strong>Transférer cet e-mail à {formatRecipients(run)}</strong>
+          <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du cas métier'}</span>
         </div>
       ) : null}
       {request.action === 'notify_internal' ? (
         <div className="route-preview">
-          <strong>Notifier en interne {args.to || 'destinataire'}</strong>
-          <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du workflow'}</span>
+          <strong>Notifier en interne {formatRecipients(run)}</strong>
+          <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du cas métier'}</span>
         </div>
       ) : null}
       {fields.length ? fields.map(([key, value]) => (
