@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.utils import parseaddr, parsedate_to_datetime
 import json
 from pathlib import Path
@@ -93,6 +94,11 @@ class WorkingHoursConfig(BaseModel):
     start_hour: int = Field(default=9, ge=0, le=23)
     end_hour: int = Field(default=18, ge=1, le=24)
     days: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+    # The business's own timezone. This used to be read off the host clock, so the
+    # same message was "outside working hours" or not depending on where the
+    # container ran — a mailbox on a UTC server answered differently from the same
+    # mailbox on a Paris laptop, for two hours of every working day.
+    timezone: str = Field(default="Europe/Paris")
 
     @field_validator("days")
     @classmethod
@@ -295,10 +301,21 @@ def _received_outside_working_hours(
     if received is None:
         return None
     if received.tzinfo is not None:
-        received = received.astimezone()
+        received = received.astimezone(_business_tz(working_hours.timezone))
     if received.isoweekday() not in working_hours.days:
         return True
     return not (working_hours.start_hour <= received.hour < working_hours.end_hour)
+
+
+def _business_tz(name: str) -> timezone | ZoneInfo:
+    """The configured business timezone, falling back to UTC on a bad name.
+
+    A typo in configuration must not make the host clock authoritative again.
+    """
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
 
 
 def _tool_call(name: str, args: dict, call_id: str) -> dict:

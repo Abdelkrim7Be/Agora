@@ -650,12 +650,13 @@ def test_require_approval_escalates_organize_policy_to_hitl(fake_llms, monkeypat
     assert request["action_request"]["action"] == "apply_label"
 
 
-def test_external_send_allowed_false_blocks_recipient_outside_internal_domains(monkeypatch, respond_email):
+def test_external_send_allowed_false_blocks_recipient_outside_internal_domains(monkeypatch, fake_llms, respond_email):
     """A category with external_send_allowed=False must not let its notify_internal
     routing reach a recipient outside AGENT_INTERNAL_DOMAINS — even though
     notify_internal's own tool-level policy would otherwise allow (post-HITL) the
     send. With no internal domains configured, this fails closed (blocks everything)
     rather than silently no-op-ing."""
+    fake_llms(classification="notify")
     import src.graph as g
     from src.categories import CategoriesConfig
 
