@@ -100,6 +100,11 @@ public class InvitationService {
                 .orElseGet(Status::invalid);
     }
 
+    public Optional<UserInvitation> currentOpenInvitation(AppUser user) {
+        if (user == null || user.getId() == null) return Optional.empty();
+        return invitations.findByUserIdAndConsumedAtIsNull(user.getId()).stream().findFirst();
+    }
+
     /**
      * Set the password and burn the token, or return false if the token is not usable.
      *
