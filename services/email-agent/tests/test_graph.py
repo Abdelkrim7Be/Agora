@@ -75,7 +75,10 @@ def test_notify_workflow_routes_to_notify_approval(monkeypatch, respond_email):
     assert result["workflow_route_to"] == ["zinebbellagnech@gmail.com"]
     request = result["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "notify_internal"
-    assert request["action_request"]["args"]["to"] == ["zinebbellagnech@gmail.com"]
+    # The recipient is no longer an argument the model can set; tool_node
+    # resolves it and exposes it read-only so the approver still sees it.
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["zinebbellagnech@gmail.com"]
     assert "Réclamation" in request["action_request"]["args"]["note"]
 
 
@@ -115,7 +118,8 @@ def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
     result = email_assistant.invoke({"email_input": email}, _cfg())
 
     request = result["__interrupt__"][0].value[0]
-    assert request["action_request"]["args"]["to"] == ["finance@example.com", "backup@example.com"]
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["finance@example.com", "backup@example.com"]
     assert result["workflow_route_to"] == ["finance"]
 
 
@@ -146,7 +150,8 @@ def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, r
     paused = email_assistant.invoke({"email_input": email}, run_cfg)
     request = paused["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "notify_internal"
-    assert request["action_request"]["args"]["to"] == ["ops@example.com", "quality@example.com"]
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["ops@example.com", "quality@example.com"]
 
     sent_to = []
     from src.capabilities import email_tools
@@ -193,7 +198,8 @@ def test_notify_manual_workflow_routes_without_trusted_email_id(monkeypatch, res
     assert not result.get("email_send_failed")
     request = result["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "notify_internal"
-    assert request["action_request"]["args"]["to"] == ["ops@example.com"]
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["ops@example.com"]
 
 
 def test_ignore_email_ends_after_triage(fake_llms, ignore_email):

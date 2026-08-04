@@ -3,7 +3,13 @@ from __future__ import annotations
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
-from src.capabilities import current_email_id, hitl_approved
+from src.capabilities import (
+    UntrustedRecipientError,
+    current_email_id,
+    current_reply_to,
+    current_route_targets,
+    hitl_approved,
+)
 from src.config import settings  # noqa: F401 — tests patch dry_run through this module
 from src.mail import get_provider
 from src.send_mode import SIMULATED_NOTE, effective_dry_run
@@ -18,6 +24,35 @@ def _message_id() -> str:
     return message_id
 
 
+def _reply_recipient() -> str:
+    """The address the current message came from.
+
+    Read from the message headers by the graph, never from the model. A tool
+    that can only reply to its own sender cannot be redirected by an injected
+    instruction, whatever the mail body says.
+    """
+    address = current_reply_to.get()
+    if not address:
+        raise UntrustedRecipientError(
+            "No trusted reply address is available for this message, so nothing was sent."
+        )
+    return address
+
+
+def _routed_recipients() -> list[str]:
+    """Destinations the workspace configured for this workflow.
+
+    Sourced from the workflow's route_to / owner and resolved through the roles
+    directory before the model ever runs.
+    """
+    targets = [t for t in current_route_targets.get() if t]
+    if not targets:
+        raise UntrustedRecipientError(
+            "This workflow has no internal recipient configured, so no notification was sent."
+        )
+    return targets
+
+
 def _require_approval(tool_name: str) -> None:
     if not hitl_approved.get():
         raise RuntimeError(
@@ -26,8 +61,9 @@ def _require_approval(tool_name: str) -> None:
 
 
 @tool
-def write_email(to: str, subject: str, content: str) -> str:
-    """Write and send an email."""
+def write_email(subject: str, content: str) -> str:
+    """Reply to the sender of the email currently being handled."""
+    to = _reply_recipient()
     if effective_dry_run():
         return f"Email sent to {to} with subject '{subject}' ({SIMULATED_NOTE})"
     _require_approval("write_email")
@@ -39,14 +75,10 @@ def write_email(to: str, subject: str, content: str) -> str:
 
 
 @tool
-def forward_email(to: str | list[str], note: str = "") -> str:
-    """Forward the current email to a recipient or list of recipients."""
+def forward_email(note: str = "") -> str:
+    """Forward the current email to this workflow's configured internal recipients."""
     message_id = _message_id()
-    recipients = [to] if isinstance(to, str) else to
-    recipients = [r for r in recipients if r]
-
-    if not recipients:
-        return "No recipients provided to forward to."
+    recipients = _routed_recipients()
 
     if effective_dry_run():
         return f"Forwarded current email to {', '.join(recipients)} ({SIMULATED_NOTE})"
@@ -66,13 +98,9 @@ def forward_email(to: str | list[str], note: str = "") -> str:
 
 
 @tool
-def notify_internal(to: str | list[str], subject: str, note: str) -> str:
+def notify_internal(subject: str, note: str) -> str:
     """Send an internal workflow notification (not a forward of the original email)."""
-    recipients = [to] if isinstance(to, str) else to
-    recipients = [r for r in recipients if r]
-
-    if not recipients:
-        return "No recipients provided to notify."
+    recipients = _routed_recipients()
 
     if effective_dry_run():
         return f"Notified {', '.join(recipients)} ({SIMULATED_NOTE})"
@@ -113,9 +141,9 @@ class Done(BaseModel):
 
 TOOLS = [write_email, forward_email, notify_internal, reply_all, Done]
 TOOLS_PROMPT = """
-1. write_email(to, subject, content) - Send emails to specified recipients
-2. forward_email(to, note) - Forward the current email to a recipient or list of recipients
-3. notify_internal(to, subject, note) - Send an internal workflow notification, not a forward
+1. write_email(subject, content) - Reply to the sender of the current email
+2. forward_email(note) - Forward the current email to this workflow's configured recipients
+3. notify_internal(subject, note) - Notify this workflow's configured recipients, not a forward
 4. reply_all(content) - Reply to all participants on the current email thread
 5. Done - E-mail has been sent
 """

@@ -50,6 +50,11 @@ class SanitizeResponse(BaseModel):
     classifier_unavailable: bool = False
     source_trust: TrustLevel
     fields: dict[str, TrustField] = Field(default_factory=dict)
+    # Content with financial/personal identifiers replaced by placeholders, plus
+    # the mapping needed to put them back. The caller sends `redacted_text` to a
+    # hosted model and restores the values in whatever comes back.
+    redacted_text: str = ""
+    redaction_map: dict[str, str] = Field(default_factory=dict)
 
 
 class AuditOutputRequest(BaseModel):
@@ -66,11 +71,34 @@ class AuditOutputResponse(BaseModel):
     classifier_unavailable: bool = False
 
 
+class RedactRequest(BaseModel):
+    text: str = ""
+
+
+class RedactResponse(BaseModel):
+    redacted_text: str
+    mapping: dict[str, str] = Field(default_factory=dict)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class RestoreRequest(BaseModel):
+    text: str = ""
+    mapping: dict[str, str] = Field(default_factory=dict)
+
+
+class RestoreResponse(BaseModel):
+    text: str
+
+
 class AuthorizeRequest(BaseModel):
     action: str
     args: dict = Field(default_factory=dict)
     context: dict = Field(default_factory=dict)
     arg_trust: dict = Field(default_factory=dict)
+    # Where this action will actually deliver. Send tools no longer take a
+    # recipient argument — the caller resolves it from trusted context and
+    # states it here, so recipient policy still has something to check.
+    recipients: list[str] = Field(default_factory=list)
 
 
 class AuthorizeResponse(BaseModel):

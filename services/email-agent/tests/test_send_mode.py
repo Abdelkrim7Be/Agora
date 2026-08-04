@@ -8,6 +8,7 @@ from src.api import app
 from src.capabilities import email_tools
 from src.config import settings
 from src.send_mode import SIMULATED_NOTE, effective_dry_run, get_send_mode, set_send_mode
+from tests.conftest import reply_to
 
 
 @pytest.fixture
@@ -62,9 +63,10 @@ def test_simulation_mode_forces_dry_run_even_without_lock(monkeypatch):
 
 def test_write_email_simulated_message_is_french(monkeypatch):
     monkeypatch.setattr(settings, "dry_run", True)
-    result = email_tools.write_email.invoke(
-        {"to": "alice@example.com", "subject": "Re", "content": "Bonjour"}
-    )
+    with reply_to("alice@example.com"):
+        result = email_tools.write_email.invoke(
+            {"subject": "Re", "content": "Bonjour"}
+        )
     assert SIMULATED_NOTE in result
     assert "dry run" not in result
 

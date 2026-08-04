@@ -110,7 +110,10 @@ def authorize(
 
     # Recipient check — fires only when the policy block exists and 'to' arg is present.
     if tool.recipients is not None:
-        deny = _check_recipients(req.args.get("to", ""), tool.recipients)
+        # Prefer the caller-declared recipients; fall back to a "to" argument so
+        # older clients and non-send tools keep working.
+        declared = req.recipients or req.args.get("to", "")
+        deny = _check_recipients(declared, tool.recipients)
         if deny:
             inc_counter("agora_security_authorize_total", decision="deny", action=req.action)
             return AuthorizeResponse(decision="deny", reason=deny)

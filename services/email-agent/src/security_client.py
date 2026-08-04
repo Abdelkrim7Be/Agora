@@ -86,6 +86,7 @@ def authorize_action(
     run_id: str,
     action_id: str = "",
     arg_trust: dict | None = None,
+    recipients: list[str] | None = None,
 ) -> dict:
     """POST a proposed tool action to the security service /authorize endpoint.
 
@@ -106,6 +107,9 @@ def authorize_action(
         "args": args,
         "context": context,
         "arg_trust": arg_trust or {},
+        # Recipients are resolved from trusted context, not tool arguments, so
+        # they have to be stated explicitly for recipient policy to see them.
+        "recipients": list(recipients or []),
     }
     try:
         with httpx.Client(timeout=settings.security_timeout) as client:
