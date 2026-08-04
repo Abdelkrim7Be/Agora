@@ -57,7 +57,9 @@ public class AgentRegistryController {
     @PostMapping("/agent-instances")
     public ResponseEntity<AgentInstanceResponse> create(Authentication auth,
             @Valid @RequestBody AgentRegistryService.CreateAgentInstanceRequest request) {
-        AgentInstance instance = service.create(request, auth.getName());
+        AgentInstance instance = service.create(request, auth.getName(), role(auth));
+        auditService.record(auth.getName(), role(auth), "create_instance", "POST",
+                "/agent-instances", null, "created " + instance.getId());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(AgentInstanceResponse.from(instance, service.summary(instance, auth.getName()), "owner"));
     }
@@ -107,6 +109,16 @@ public class AgentRegistryController {
     @ExceptionHandler(AgentRegistryService.DuplicateAgentInstanceException.class)
     ResponseEntity<Map<String, String>> duplicateAgentInstance(AgentRegistryService.DuplicateAgentInstanceException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentRegistryService.AgentInstanceLimitException.class)
+    ResponseEntity<Map<String, String>> agentInstanceLimit(AgentRegistryService.AgentInstanceLimitException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentRegistryService.ForbiddenAgentInstanceOperationException.class)
+    ResponseEntity<Map<String, String>> forbiddenAgentInstanceOperation(AgentRegistryService.ForbiddenAgentInstanceOperationException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", ex.getMessage()));
     }
 
     private String role(Authentication auth) {

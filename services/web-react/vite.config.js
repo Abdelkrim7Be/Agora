@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '^/(api/|auth/|audit|users|agents|agent-instances|health)': {
+      '^/(api/|auth/|audit|users|agents|agent-instances|mailboxes|health)': {
         target: gatewayProxyTarget,
         changeOrigin: true,
       },

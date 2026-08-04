@@ -17,6 +17,19 @@ public class GatewayProperties {
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
     private Credentials admin = new Credentials();
+    /** Public base URL of the web app; invitation links are built from it. */
+    private String appUrl = "http://localhost:5173";
+    private long inviteExpiryHours = 48;
+    private Smtp smtp = new Smtp();
+
+    public String getAppUrl() { return appUrl; }
+    public void setAppUrl(String appUrl) { this.appUrl = appUrl; }
+
+    public long getInviteExpiryHours() { return inviteExpiryHours; }
+    public void setInviteExpiryHours(long inviteExpiryHours) { this.inviteExpiryHours = inviteExpiryHours; }
+
+    public Smtp getSmtp() { return smtp; }
+    public void setSmtp(Smtp smtp) { this.smtp = smtp; }
 
     public Upstream getUpstream() { return upstream; }
     public void setUpstream(Upstream upstream) { this.upstream = upstream; }
@@ -66,7 +79,7 @@ public class GatewayProperties {
             AgentType type = new AgentType();
             type.setId("email-agent");
             type.setDisplayName("Email Agent");
-            type.setDescription("Autonomous email triage, drafting, validation, style learning, and mailbox operations.");
+            type.setDescription("Trie les e-mails, rédige les réponses, apprend votre style et gère la boîte mail, chaque envoi restant sous validation.");
             type.setCapabilities(List.of("email_triage", "draft_approval", "gmail_sync", "style_learning", "cost_observability"));
             type.setBasePath("/api/agent");
             type.setHealthPath("/health");
@@ -147,6 +160,35 @@ public class GatewayProperties {
 
         public int getRecoveryCodeCount() { return recoveryCodeCount; }
         public void setRecoveryCodeCount(int recoveryCodeCount) { this.recoveryCodeCount = recoveryCodeCount; }
+    }
+
+    public static class Smtp {
+        private String host = "";
+        private int port = 587;
+        private String username = "";
+        private String password = "";
+        private String from = "";
+
+        /** Without a host and a From there is nothing to send with; the invitation
+         * endpoints fall back to returning the setup link for the admin to deliver. */
+        public boolean isConfigured() {
+            return host != null && !host.isBlank() && from != null && !from.isBlank();
+        }
+
+        public String getHost() { return host; }
+        public void setHost(String host) { this.host = host; }
+
+        public int getPort() { return port; }
+        public void setPort(int port) { this.port = port; }
+
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+
+        public String getFrom() { return from; }
+        public void setFrom(String from) { this.from = from; }
     }
 
     public static class Credentials {

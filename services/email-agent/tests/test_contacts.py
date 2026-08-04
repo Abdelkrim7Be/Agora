@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 from src import contacts as contacts_module
-from src.contacts import import_contacts_csv, list_contacts, list_segments, resolve_segment
+from src.contacts import (
+    Contact,
+    ContactCategoryError,
+    create_contact,
+    import_contacts_csv,
+    list_contacts,
+    list_segments,
+    migrate_legacy_category_contacts,
+    resolve_segment,
+    upsert_contact,
+)
 
 
 SEED_YAML = """
@@ -81,3 +91,92 @@ def test_import_contacts_csv_is_idempotent_and_reports_rejections(tmp_path, monk
     contacts = {contact.email: contact for contact in list_contacts()}
     assert contacts['carol@example.com'].name == 'Carol Updated'
     assert contacts['alice@example.com'].name == 'Alice Martin'
+
+
+class _FakeCategoriesConfig:
+    def __init__(self, names):
+        self.categories = [type('C', (), {'name': n})() for n in names]
+
+
+def test_unknown_category_rejected(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    monkeypatch.setattr('src.categories.load_categories', lambda **kw: _FakeCategoriesConfig(['support']))
+
+    try:
+        create_contact(Contact(email='new@example.com', audience='prospect', category='not_a_real_category'))
+        assert False, 'expected ContactCategoryError'
+    except ContactCategoryError as exc:
+        assert 'not_a_real_category' in str(exc)
+
+
+def test_known_category_accepted(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    monkeypatch.setattr('src.categories.load_categories', lambda **kw: _FakeCategoriesConfig(['support']))
+
+    contact = create_contact(Contact(email='new@example.com', audience='prospect', category='support'))
+    assert contact.category == 'support'
+
+
+def test_manual_beats_inferred(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    monkeypatch.setattr('src.categories.load_categories', lambda **kw: _FakeCategoriesConfig(['support', 'sales']))
+
+    upsert_contact(Contact(
+        email='lead@example.com', audience='prospect', category='support',
+        priority='urgent', category_source='manual',
+    ))
+    upserted = upsert_contact(Contact(
+        email='lead@example.com', audience='prospect', category='sales',
+        priority='low', category_source='inferred', category_confidence=0.95,
+    ))
+
+    assert upserted.category == 'support'
+    assert upserted.priority == 'urgent'
+    assert upserted.category_source == 'manual'
+
+
+def test_migrate_legacy_is_idempotent(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+
+    class _LegacyContact:
+        def __init__(self, email, category, name=None, priority=None):
+            self.email = email
+            self.category = category
+            self.name = name
+            self.priority = priority
+
+    class _LegacyConfig:
+        contacts = [_LegacyContact('vip@company.example', 'support', name='VIP')]
+        categories = [type('Cat', (), {'name': 'support'})()]
+
+    monkeypatch.setattr('src.categories.load_categories', lambda **kw: _LegacyConfig())
+
+    first = migrate_legacy_category_contacts()
+    second = migrate_legacy_category_contacts()
+
+    assert first == {'imported': 1, 'skipped': 0}
+    assert second == {'imported': 0, 'skipped': 1}
+    directory = {c.email: c for c in list_contacts()}
+    assert directory['vip@company.example'].category_source == 'imported'
+
+
+def test_migrate_legacy_leaves_categories_yaml_unchanged(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    calls = []
+
+    class _LegacyContact:
+        email = 'vip@company.example'
+        category = 'support'
+        name = None
+        priority = None
+
+    class _LegacyConfig:
+        contacts = [_LegacyContact()]
+        categories = [type('Cat', (), {'name': 'support'})()]
+
+    monkeypatch.setattr('src.categories.load_categories', lambda **kw: calls.append(kw) or _LegacyConfig())
+    # No save_categories/write_instance_text call is monkeypatched here — if
+    # migrate_legacy_category_contacts ever wrote back to categories.yaml, a
+    # missing attribute/import error would surface since none is stubbed.
+    migrate_legacy_category_contacts()
+    assert calls

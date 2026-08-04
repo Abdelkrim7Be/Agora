@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -16,14 +17,39 @@ from src.models import (
     AuthorizeResponse,
     ClassifySourceRequest,
     ClassifySourceResponse,
+    RedactRequest,
+    RedactResponse,
+    RestoreRequest,
+    RestoreResponse,
     SanitizeRequest,
     SanitizeResponse,
 )
 from src.output_audit import audit_output
+from src.redact import redact as redact_text, restore as restore_text
 from src.policy import SERVICE_ROOT
 from src.sanitize import sanitize
 
 app = FastAPI(title="agora-security")
+
+logger = logging.getLogger("agora.security")
+
+
+@app.on_event("startup")
+def warn_about_non_default_policy() -> None:
+    """Say so, loudly, when the service is not running the production policy.
+
+    policy.live-test.yaml pins every send-style tool to a two-address allow list.
+    That is correct for the live-mail harness and completely wrong for real use —
+    and the difference is invisible from the UI, so it needs to be visible in the
+    logs of whatever host it lands on.
+    """
+    policy = settings.policy_path
+    if Path(policy).name != "policy.yaml":
+        logger.warning(
+            "security policy is %r, not policy.yaml — send tools may be restricted "
+            "to a test allow list. Set SECURITY_POLICY_PATH=policy.yaml for production.",
+            policy,
+        )
 
 
 @app.get("/health")
@@ -53,6 +79,21 @@ def sanitize_endpoint(req: SanitizeRequest) -> SanitizeResponse:
 @app.post("/classify", response_model=ClassifySourceResponse)
 def classify_source_endpoint(req: ClassifySourceRequest) -> ClassifySourceResponse:
     return classify_source(req)
+
+
+@app.post("/redact", response_model=RedactResponse)
+def redact_endpoint(req: RedactRequest) -> RedactResponse:
+    """Strip identifiers from arbitrary text before it reaches a hosted model."""
+    result = redact_text(req.text)
+    return RedactResponse(
+        redacted_text=result.text, mapping=result.mapping, counts=result.kinds()
+    )
+
+
+@app.post("/restore", response_model=RestoreResponse)
+def restore_endpoint(req: RestoreRequest) -> RestoreResponse:
+    """Put redacted values back into content a model produced."""
+    return RestoreResponse(text=restore_text(req.text, req.mapping))
 
 
 @app.post("/authorize", response_model=AuthorizeResponse)

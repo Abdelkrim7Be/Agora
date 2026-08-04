@@ -394,3 +394,105 @@ def test_workflow_sla_snapshot_marks_overdue_and_uses_escalation_state(tmp_path)
     assert snapshot["overdue_by_seconds"] == 9000
     assert snapshot["escalated_at"] == "2026-06-16T10:30:00+00:00"
     assert snapshot["escalation_target"] == "owner@example.com"
+
+
+# --- Starter rules and working hours (plan 4.1) ---
+
+def _rules_with_after_hours(**hours):
+    from src.automation import (
+        AutomationRule,
+        RulesConfig,
+        RuleThen,
+        RuleWhen,
+        WorkingHoursConfig,
+    )
+
+    return RulesConfig(
+        enabled=True,
+        working_hours=WorkingHoursConfig(**hours) if hours else WorkingHoursConfig(),
+        rules=[
+            AutomationRule(
+                name="hors heures",
+                when=RuleWhen(outside_working_hours=True),
+                then=RuleThen(snooze_days=1),
+            )
+        ],
+    )
+
+
+def test_outside_working_hours_matches_evening_mail():
+    from src.automation import build_rule_plan
+
+    config = _rules_with_after_hours()
+    # Wednesday 22:10 local — outside the 09:00-18:00 window.
+    plan = build_rule_plan(
+        {"author": "a@corp.example", "subject": "s", "date": "Wed, 29 Jul 2026 22:10:00 +0200"},
+        config,
+    )
+    assert plan is not None
+    assert plan["matched_rules"] == ["hors heures"]
+
+
+def test_inside_working_hours_does_not_match():
+    from src.automation import build_rule_plan
+
+    plan = build_rule_plan(
+        {"author": "a@corp.example", "subject": "s", "date": "Wed, 29 Jul 2026 10:30:00 +0200"},
+        _rules_with_after_hours(),
+    )
+    assert plan is None
+
+
+def test_weekend_counts_as_outside_working_hours():
+    from src.automation import build_rule_plan
+
+    # Saturday mid-morning: inside the hour range but not a working day.
+    plan = build_rule_plan(
+        {"author": "a@corp.example", "subject": "s", "date": "Sat, 1 Aug 2026 10:30:00 +0200"},
+        _rules_with_after_hours(),
+    )
+    assert plan is not None
+
+
+def test_unparseable_date_never_fires_the_rule():
+    from src.automation import build_rule_plan
+
+    for value in ("", None, "not a date"):
+        assert build_rule_plan(
+            {"author": "a@corp.example", "subject": "s", "date": value},
+            _rules_with_after_hours(),
+        ) is None
+
+
+def test_starter_catalogue_flags_what_is_already_applied():
+    from src.automation import RulesConfig, apply_starter_rules, starter_rule_catalogue
+
+    config = RulesConfig()
+    before = {entry["id"]: entry["applied"] for entry in starter_rule_catalogue(config)}
+    assert not any(before.values())
+
+    config, added = apply_starter_rules(config, ["newsletters", "follow_ups"])
+    after = {entry["id"]: entry["applied"] for entry in starter_rule_catalogue(config)}
+    assert added == ["newsletters", "follow_ups"]
+    assert after["newsletters"] is True
+    assert after["follow_ups"] is True
+    assert after["gmail_categories"] is False
+    # A rule subsystem that is off would silently ignore the rule it just added.
+    assert config.enabled is True
+    assert config.follow_ups.enabled is True
+
+
+def test_applying_a_starter_rule_twice_does_not_duplicate_it():
+    from src.automation import RulesConfig, apply_starter_rules
+
+    config, _ = apply_starter_rules(RulesConfig(), ["newsletters"])
+    config, added = apply_starter_rules(config, ["newsletters"])
+    assert added == []
+    assert [rule.name for rule in config.rules].count("étiqueter et archiver les newsletters") == 1
+
+
+def test_unknown_starter_rule_is_rejected():
+    from src.automation import RulesConfig, apply_starter_rules
+
+    with pytest.raises(ValueError, match="unknown starter rule"):
+        apply_starter_rules(RulesConfig(), ["nope"])

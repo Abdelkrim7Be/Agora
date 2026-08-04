@@ -55,13 +55,13 @@ export function useAuditQuery(page, limit) {
   });
 }
 
-export function useUsersQuery() {
+export function useUsersQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   return useQuery({
     queryKey: ['users'],
     queryFn: () => api('/users'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -72,6 +72,23 @@ export function useRenameInstance() {
     mutationFn: ({ id, displayName }) => api(`/agent-instances/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: JSON.stringify({ display_name: displayName }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-instances'] }),
+  });
+}
+
+export function useCreateInstance() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentType, displayName, mailboxIdentity, assignedTo }) => api('/agent-instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        agent_type: agentType,
+        display_name: displayName,
+        mailbox_identity: mailboxIdentity || null,
+        assigned_to: assignedTo || null,
+      }),
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-instances'] }),
   });
@@ -104,15 +121,90 @@ export function useSetUserEnabled() {
   });
 }
 
+export function useUpdateUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, role, department }) => api(`/users/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ role, department: department || null }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useInviteUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/invite`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useInstanceGrantsQuery(instances, enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const ids = (instances || []).map((instance) => instance.id).filter(Boolean);
+  return useQuery({
+    queryKey: ['instance-grants', ids.join('|')],
+    queryFn: async () => {
+      const pairs = await Promise.all(ids.map(async (id) => {
+        const grants = await api(`/agent-instances/${encodeURIComponent(id)}/grants`);
+        return grants.map((grant) => ({ ...grant, agent_instance_id: grant.agent_instance_id || id }));
+      }));
+      return pairs.flat();
+    },
+    enabled: Boolean(token) && enabled && ids.length > 0,
+  });
+}
+
+export function useAddInstanceGrant() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId, userId, role }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, role }),
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
+    },
+  });
+}
+
+export function useRemoveInstanceGrant() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId, userId }) =>
+      api(`/agent-instances/${encodeURIComponent(instanceId)}/grants/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
+    },
+  });
+}
+
 // --- Validation (pending-approval queue) ---
 
-export function usePendingRunsQuery(page) {
+export function usePendingRunsQuery(page, filters = {}) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
+  const params = new URLSearchParams({
+    status: 'pending_approval',
+    limit: String(PENDING_PAGE_SIZE),
+    offset: String(page * PENDING_PAGE_SIZE),
+  });
+  if (filters.category) params.set('category', filters.category);
+  if (filters.priority) params.set('priority', filters.priority);
+  if (filters.q) params.set('q', filters.q);
+  if (filters.since) params.set('since', filters.since);
   return useQuery({
-    queryKey: ['pending-runs', instanceId, page],
-    queryFn: () => api(`/api/agent/runs?status=pending_approval&limit=${PENDING_PAGE_SIZE}&offset=${page * PENDING_PAGE_SIZE}`),
+    queryKey: ['pending-runs', instanceId, page, filters.category || '', filters.priority || '', filters.q || '', filters.since || ''],
+    queryFn: () => api(`/api/agent/runs?${params.toString()}`),
     enabled: Boolean(token),
     refetchInterval: 30_000,
   });
@@ -197,22 +289,24 @@ export function useSyncGmail() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api('/api/agent/sync?limit=50', { method: 'POST' }),
+    mutationFn: () => api('/api/agent/sync', { method: 'POST' }),
     onSuccess: () => invalidatePendingRuns(queryClient),
   });
 }
 
 // --- Drafts ---
 
-export function useDraftsQuery(category, priority) {
+export function useDraftsQuery(category, priority, q = '', since = '') {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   const params = new URLSearchParams({ limit: '100' });
   if (category) params.set('category', category);
   if (priority) params.set('priority', priority);
+  if (q) params.set('q', q);
+  if (since) params.set('since', since);
   return useQuery({
-    queryKey: ['drafts', instanceId, category, priority],
+    queryKey: ['drafts', instanceId, category, priority, q, since],
     queryFn: async () => (await api(`/api/agent/drafts?${params.toString()}`)).drafts || [],
     enabled: Boolean(token),
   });
@@ -220,18 +314,28 @@ export function useDraftsQuery(category, priority) {
 
 // --- Inbox ---
 
-export function useInboxQuery() {
+const INBOX_PAGE_SIZE = 25;
+
+export const inboxQueryKey = (instanceId, mailbox = 'inbox') => ['inbox', instanceId, mailbox];
+
+export const inboxQueryPath = (mailbox = 'inbox', refresh = false) => {
+  const params = new URLSearchParams({ limit: String(INBOX_PAGE_SIZE) });
+  if (mailbox === 'sent') params.set('mailbox', 'sent');
+  if (refresh) params.set('refresh', 'true');
+  return `/api/agent/inbox?${params.toString()}`;
+};
+
+export function useInboxQuery(mailbox = 'inbox', refreshNonce = 0) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
-    queryKey: ['inbox', instanceId],
-    queryFn: () => api(`/api/agent/inbox?limit=${INBOX_PAGE_SIZE}`),
+    queryKey: [...inboxQueryKey(instanceId, mailbox), refreshNonce],
+    queryFn: () => api(inboxQueryPath(mailbox, refreshNonce > 0)),
     enabled: Boolean(token),
+    placeholderData: (previous) => previous,
   });
 }
-
-const INBOX_PAGE_SIZE = 25;
 
 export function useInboxAction() {
   const { api } = useApi();
@@ -240,6 +344,20 @@ export function useInboxAction() {
   return useMutation({
     mutationFn: ({ msgId, command }) => api(`/api/agent/inbox/${msgId}/${command}`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] }),
+  });
+}
+
+export function useForceAgentOnMessage() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (msgId) => api(`/api/agent/inbox/${encodeURIComponent(msgId)}/force-agent`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['pending-runs', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
+    },
   });
 }
 
@@ -264,7 +382,8 @@ export function useGmailStatusQuery() {
   return useQuery({
     queryKey: ['gmail-status', instanceId],
     queryFn: () => api('/api/agent/sync/status'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
+    refetchInterval: (query) => (query.state.data?.connection_status === 'connected' ? false : 3000),
   });
 }
 
@@ -273,7 +392,7 @@ export function useGmailSyncNow() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: () => api('/api/agent/sync?limit=20', { method: 'POST' }),
+    mutationFn: () => api('/api/agent/sync', { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] });
       queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
@@ -306,8 +425,72 @@ export function useGmailDisconnect() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: () => api('/api/agent/disconnect/gmail', { method: 'POST' }),
+    // The route is provider-specific: deleting the wrong provider's token would
+    // report success while leaving the mailbox connected.
+    mutationFn: (provider = 'gmail') =>
+      api(`/api/agent/disconnect/${provider === 'outlook' ? 'outlook' : 'gmail'}`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}
+
+export function useMailboxesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['mailboxes'],
+    queryFn: () => api('/mailboxes'),
+    enabled: Boolean(token),
+    // The gateway fans out to every mailbox, so this is not free; refresh on a
+    // slow beat and let the page's own button cover "right now".
+    refetchInterval: 60000,
+  });
+}
+
+/** Probe one specific mailbox, whichever instance is currently selected. */
+export function useTestMailboxConnection() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (instanceId) =>
+      api('/api/agent/connect/test', {
+        method: 'POST',
+        headers: { 'X-Agora-Agent-Instance': instanceId },
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mailboxes'] }),
+  });
+}
+
+export function useMailboxConnectionTest() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/connect/test', { method: 'POST' }),
+    // The probe records its outcome server-side, so the status card is stale
+    // the moment it returns.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] }),
+  });
+}
+
+
+export function useRuntimeSettingsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['runtime-settings', instanceId],
+    queryFn: () => api('/api/agent/runtime-settings'),
+    enabled: Boolean(token) && Boolean(instanceId),
+  });
+}
+
+export function useSaveRuntimeSettings() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (settings) => api('/api/agent/runtime-settings', { method: 'PUT', body: JSON.stringify(settings) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runtime-settings', instanceId] }),
   });
 }
 
@@ -437,10 +620,153 @@ export function useUploadSignatureImage() {
   });
 }
 
+export function useApplySignatureToDraft() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ content, mode }) => api('/api/agent/signature/apply', {
+      method: 'POST',
+      body: JSON.stringify({ content, mode }),
+    }),
+  });
+}
+
 export function useDeleteSignatureImage() {
   const { api } = useApi();
   return useMutation({
     mutationFn: () => api('/api/agent/signature/image', { method: 'DELETE' }),
+  });
+}
+
+// --- Instance setup (onboarding pipeline) ---
+
+const SETUP_TERMINAL_STATUSES = new Set(['ready', 'failed']);
+
+export function useInstanceSetupQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['instance-setup', instanceId],
+    queryFn: () => api('/api/agent/instance-setup'),
+    enabled: Boolean(token) && Boolean(instanceId),
+    refetchInterval: (query) => (SETUP_TERMINAL_STATUSES.has(query.state.data?.status) ? false : 2000),
+  });
+}
+
+export function useSeedSetupCategories() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (categories) =>
+      api('/api/agent/instance-setup/categories', {
+        method: 'POST',
+        body: JSON.stringify({ categories }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] });
+    },
+  });
+}
+
+export function useStartSetup() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/instance-setup/start', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+export function useRetrySetup() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/instance-setup/retry', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+export function useRetrySetupStep() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (stepKey) => api(`/api/agent/instance-setup/steps/${encodeURIComponent(stepKey)}/retry`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+export function useSkipSetup() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/instance-setup/skip', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instance-setup', instanceId] }),
+  });
+}
+
+// --- Notifications ---
+
+export function useNotificationsQuery(unreadOnly = false) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['notifications', instanceId, unreadOnly],
+    queryFn: () => api(`/api/agent/notifications?unread_only=${unreadOnly ? 'true' : 'false'}&limit=50`),
+    enabled: Boolean(token) && Boolean(instanceId),
+  });
+}
+
+export function useUnreadCountQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['notifications-unread-count', instanceId],
+    queryFn: () => api('/api/agent/notifications/unread-count'),
+    enabled: Boolean(token) && Boolean(instanceId),
+    refetchInterval: 30_000,
+  });
+}
+
+function invalidateNotifications(queryClient, instanceId) {
+  queryClient.invalidateQueries({ queryKey: ['notifications', instanceId] });
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread-count', instanceId] });
+}
+
+export function useMarkNotificationRead() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (id) => api(`/api/agent/notifications/${id}/read`, { method: 'POST' }),
+    onSuccess: () => invalidateNotifications(queryClient, instanceId),
+  });
+}
+
+export function useMarkAllNotificationsRead() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: () => api('/api/agent/notifications/read-all', { method: 'POST' }),
+    onSuccess: () => invalidateNotifications(queryClient, instanceId),
+  });
+}
+
+export function useDeleteNotification() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (id) => api(`/api/agent/notifications/${id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateNotifications(queryClient, instanceId),
   });
 }
 
@@ -453,7 +779,7 @@ export function useMemorySummaryQuery() {
   return useQuery({
     queryKey: ['memory-summary', instanceId],
     queryFn: () => api('/api/agent/memory/summary'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
   });
 }
 
@@ -464,7 +790,7 @@ export function useMemoryQuery() {
   return useQuery({
     queryKey: ['memory', instanceId],
     queryFn: () => api('/api/agent/memory'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
   });
 }
 
@@ -474,7 +800,10 @@ export function useSaveMemory() {
   const { instanceId } = useInstance();
   return useMutation({
     mutationFn: (body) => api('/api/agent/memory', { method: 'PUT', body: JSON.stringify(body) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['memory', instanceId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['memory', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['memory-summary', instanceId] });
+    },
   });
 }
 
@@ -623,6 +952,19 @@ export function useSaveContact() {
     mutationFn: ({ email, payload }) => (email
       ? api(`/api/agent/contacts/${encodeURIComponent(email)}`, { method: 'PUT', body: JSON.stringify({ ...payload, email }) })
       : api('/api/agent/contacts', { method: 'POST', body: JSON.stringify(payload) })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
+  });
+}
+
+export function useCategorizeContact() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: ({ email, category, domainOnly }) => api('/api/agent/contacts/categorize', {
+      method: 'POST',
+      body: JSON.stringify({ email, category, domain_only: Boolean(domainOnly) }),
+    }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts', instanceId] }),
   });
 }
@@ -798,6 +1140,100 @@ export function useTestCategoryMatch() {
   });
 }
 
+export function useCategoryProposalsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['category-proposals', instanceId],
+    queryFn: () => api('/api/agent/categories/proposals?limit=500'),
+    enabled: Boolean(token) && Boolean(instanceId),
+    retry: false,
+  });
+}
+
+export function useAcceptCategoryProposal() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/categories/proposals/accept', { method: 'POST', body: JSON.stringify(payload) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['category-proposals', instanceId] });
+    },
+  });
+}
+
+export function useDismissCategoryProposal() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (proposalId) => api('/api/agent/categories/proposals/dismiss', { method: 'POST', body: JSON.stringify({ proposal_id: proposalId }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['category-proposals', instanceId] }),
+  });
+}
+
+// --- Junk gate ---
+
+export function useJunkQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['junk', instanceId],
+    queryFn: () => api('/api/agent/junk'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useSaveJunk() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/junk', { method: 'PUT', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['junk', instanceId] }),
+  });
+}
+
+export function useJunkSuggestionsQuery(enabled = false) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['junk-suggestions', instanceId],
+    queryFn: () => api('/api/agent/junk/suggestions'),
+    // Costs a Gmail round trip, so it only runs when the owner asks for it.
+    enabled: Boolean(token) && enabled,
+  });
+}
+
+export function useStarterRulesQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['starter-rules', instanceId],
+    queryFn: () => api('/api/agent/rules/starter'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useApplyStarterRules() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (ids) => api('/api/agent/rules/starter/apply', { method: 'POST', body: JSON.stringify({ ids }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rules', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['starter-rules', instanceId] });
+    },
+  });
+}
+
 // --- Rules ---
 
 export function useRulesQuery() {
@@ -954,15 +1390,20 @@ export function usePendingCampaignsQuery() {
   });
 }
 
-export function useCampaignPreviewQuery(segmentId, templateName) {
+export function useCampaignPreviewQuery(segmentId, templateName, overrides = {}) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
-    queryKey: ['campaign-preview', instanceId, segmentId, templateName],
+    queryKey: ['campaign-preview', instanceId, segmentId, templateName, overrides.subject || '', overrides.bodyMarkdown || ''],
     queryFn: () => api('/api/agent/campaigns/preview', {
       method: 'POST',
-      body: JSON.stringify({ segment_id: segmentId, template_name: templateName }),
+      body: JSON.stringify({
+        segment_id: segmentId,
+        template_name: templateName,
+        subject: overrides.subject || null,
+        body_markdown: overrides.bodyMarkdown || null,
+      }),
     }),
     enabled: Boolean(token) && Boolean(segmentId) && Boolean(templateName),
     retry: false,
@@ -974,13 +1415,21 @@ export function usePrepareCampaign() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: ({ segmentId, templateName }) => api('/api/agent/campaigns/prepare', {
+    mutationFn: ({ segmentId, templateName, name, subject, bodyMarkdown, scheduledAt, saveAsDraft }) => api('/api/agent/campaigns/prepare', {
       method: 'POST',
-      body: JSON.stringify({ segment_id: segmentId, template_name: templateName }),
+      body: JSON.stringify({
+        segment_id: segmentId,
+        template_name: templateName,
+        name: name || null,
+        subject: subject || null,
+        body_markdown: bodyMarkdown || null,
+        scheduled_at: scheduledAt || null,
+        save_as_draft: Boolean(saveAsDraft),
+      }),
     }),
     onSuccess: (result, { segmentId, templateName }) => {
       queryClient.invalidateQueries({ queryKey: ['campaigns-pending', instanceId] });
-      queryClient.setQueryData(['campaign-preview', instanceId, segmentId, templateName], result);
+      queryClient.invalidateQueries({ queryKey: ['campaign-preview', instanceId, segmentId, templateName] });
     },
   });
 }

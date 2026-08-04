@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useI18n } from '../../contexts/I18nContext';
-import { useSummarizeRun } from '../../api/queries';
+import { useSummarizeRun, useSignatureQuery, useApplySignatureToDraft } from '../../api/queries';
 import ActionArgsEditor from './ActionArgsEditor';
 import FeedbackChat from './FeedbackChat';
 import {
@@ -11,6 +11,11 @@ import {
   formatDurationFr,
   confidenceClass,
 } from '../../utils/format';
+
+const SIGNATURE_CHOICE_LABELS = {
+  preserve_provider_signature: 'Sans signature',
+  append_platform_signature: 'Avec signature',
+};
 
 const TONES = [
   { value: 'formel', label: 'Formel' },
@@ -50,12 +55,31 @@ export default function ValidationCard({
   const canApprove = hasRole('approver');
   const [summary, setSummary] = useState(null);
   const [summarizing, setSummarizing] = useState(false);
+  const [signatureChoice, setSignatureChoice] = useState('');
+  const [applyingSignature, setApplyingSignature] = useState(false);
   const summarizeRun = useSummarizeRun();
+  const signatureQuery = useSignatureQuery();
+  const applySignature = useApplySignatureToDraft();
 
   const args = actionArgs(run);
   const toneField = ['content', 'body', 'note'].find((key) => key in args);
   const badgeKey = run.action_type || 'unknown';
   const canRedraft = redraftCapable(run);
+  const contentField = ['content', 'body'].find((key) => key in args);
+  const showSignatureChoice = Boolean(contentField) && signatureQuery.data?.enabled && signatureQuery.data?.mode === 'ask_each_time';
+
+  const handleSignatureChoice = async (mode) => {
+    if (!contentField) return;
+    setSignatureChoice(mode);
+    setApplyingSignature(true);
+    try {
+      const baseContent = editedFields[contentField] ?? args[contentField] ?? '';
+      const result = await applySignature.mutateAsync({ content: baseContent, mode });
+      onFieldChange(run.run_id, contentField, result.content);
+    } finally {
+      setApplyingSignature(false);
+    }
+  };
 
   const handleSummarize = async () => {
     setSummarizing(true);
@@ -99,6 +123,23 @@ export default function ValidationCard({
       {run.review_reason ? <p className="review-reason"><strong>Pourquoi une validation ?</strong> {run.review_reason}</p> : null}
 
       <ActionArgsEditor run={run} editedFields={editedFields} onFieldChange={onFieldChange} />
+
+      {showSignatureChoice && (
+        <div className="signature-choice-row" role="group" aria-label="Signature de ce brouillon">
+          <span>Signature :</span>
+          {Object.entries(SIGNATURE_CHOICE_LABELS).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              className={`ghost signature-choice-btn${signatureChoice === mode ? ' selected' : ''}`}
+              disabled={applyingSignature}
+              onClick={() => handleSignatureChoice(mode)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {summary !== null && <div className="ai-summary">{summary}</div>}
 

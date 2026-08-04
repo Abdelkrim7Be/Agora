@@ -32,6 +32,21 @@ class CategoryInstructions(BaseModel):
 class Category(BaseModel):
     name: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
+    description: str | None = None
+    # Whether this category may claim mail the junk gate flagged as automated or
+    # bulk. Off by default: a category matching on a sender must not turn that
+    # sender's newsletters and alert digests into drafted replies. Turn it on for
+    # workflows whose input genuinely is machine-generated — invoices emitted by
+    # a billing system, ticket notifications from a helpdesk.
+    accepts_automated: bool = False
+    # How the category's template is used when the policy is auto_draft.
+    #   strict — send the rendered template as-is when every variable resolved.
+    #            Deterministic and free, right for a pure acknowledgement.
+    #   adapt  — always hand the template to the model as a starting point, with
+    #            the message in front of it. Costs a model call, but the reply
+    #            answers what was actually written instead of asking for details
+    #            the sender already gave.
+    template_mode: Literal["strict", "adapt"] = "strict"
     enabled: bool = True
     priority: Literal["urgent", "normal", "low"] = "normal"
     when: RuleWhen = Field(default_factory=RuleWhen)
@@ -42,6 +57,13 @@ class Category(BaseModel):
     approver: str | None = None
     route_to: list[str] = Field(default_factory=list)
     instructions: CategoryInstructions | None = None
+    # Per-workflow approval policy — layered on top of the tool-level default in
+    # security/policy.yaml, never looser than it. require_approval can only
+    # escalate allow -> hitl; it can never downgrade an existing hitl/deny to
+    # allow. external_send_allowed=False restricts this category's send-style
+    # tool calls to AGENT_INTERNAL_DOMAINS recipients only.
+    require_approval: bool = False
+    external_send_allowed: bool = True
 
     @field_validator("name")
     @classmethod
@@ -118,16 +140,25 @@ def matches_when(when: RuleWhen, email_input: dict) -> bool:
     predicate is only meaningful as a catch-all in automation rules, not for
     category classification where it would incorrectly catch every email.
     """
-    if not when.sender_contains and not when.sender_domain and not when.subject_contains and not when.labels:
+    if not when.sender_contains and not when.sender_regex and not when.sender_domain and not when.subject_contains and not when.body_contains and not when.labels:
         return False
     sender = email_input.get("author", "")
     subject = email_input.get("subject", "")
+    body = email_input.get("email_thread", "")
     labels = set(email_input.get("labels", []))
     if when.sender_contains and not _contains_any(sender, when.sender_contains):
         return False
+    if when.sender_regex:
+        try:
+            if not any(re.search(pattern, sender, re.IGNORECASE) for pattern in when.sender_regex):
+                return False
+        except re.error:
+            return False
     if when.sender_domain and _sender_domain(sender) not in {d.lower() for d in when.sender_domain}:
         return False
     if when.subject_contains and not _contains_any(subject, when.subject_contains):
+        return False
+    if when.body_contains and not _contains_any(body, when.body_contains):
         return False
     if when.labels and not set(when.labels).issubset(labels):
         return False
@@ -139,7 +170,29 @@ def unresolved_vars(text: str) -> list[str]:
     return re.findall(r"\{\{(\w+)\}\}", text)
 
 
-def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
+def contact_directory_for_matching(config: CategoriesConfig, agent_instance_id: str | None = None) -> tuple[list, list]:
+    """(directory_contacts, legacy_contacts) in classify_category's precedence order.
+
+    directory_contacts are src.contacts unified-directory entries that carry a
+    category (audience/fields/tags contacts without one are irrelevant to
+    routing). legacy_contacts are the categories.yaml contacts NOT already
+    present in the directory by email — existing categories.yaml files keep
+    matching unchanged; new writes go to the directory. Directory contacts
+    always have an email (schema-required), so only legacy contacts can ever
+    satisfy the domain-only match branch below.
+    """
+    from src.contacts import list_contacts
+
+    directory_contacts = [c for c in list_contacts(agent_instance_id=agent_instance_id) if c.category]
+    directory_emails = {c.email for c in directory_contacts}
+    legacy_contacts = [
+        c for c in config.contacts
+        if not (c.email and _email_address(c.email) in directory_emails)
+    ]
+    return directory_contacts, legacy_contacts
+
+
+def classify_category(email_input: dict, config: CategoriesConfig, agent_instance_id: str | None = None) -> dict:
     if not config.enabled:
         return {"category": None, "priority": "normal", "template": None, "policy": None, "contact": None}
 
@@ -148,29 +201,56 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
     active_categories = [category for category in config.categories if category.enabled]
     category_by_name = {category.name: category for category in active_categories}
 
-    for contact in config.contacts:
-        matched = False
-        if contact.email and _email_address(contact.email) == sender_address:
-            matched = True
-        elif contact.domain and contact.domain.lower() == sender_domain and not contact.email:
-            matched = True
-        if matched and contact.category in category_by_name:
-            category = category_by_name[contact.category]
-            return {
-                "category": category.name,
-                "category_display_name": category.display_name,
-                "priority": contact.priority or category.priority,
-                "template": category.template,
-                "policy": category.policy,
-                "owner": category.owner,
-                "approver": category.approver,
-                "route_to": category.route_to,
-                "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
-                "contact": contact,
-            }
+    directory_contacts, legacy_contacts = contact_directory_for_matching(config, agent_instance_id)
 
+    def _result(contact, category) -> dict:
+        return {
+            "category": category.name,
+            "category_display_name": category.display_name,
+            "priority": (contact.priority if contact.priority else None) or category.priority,
+            "template": category.template,
+            "policy": category.policy,
+            "owner": category.owner,
+            "approver": category.approver,
+            "route_to": category.route_to,
+            "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
+            "contact": contact,
+        }
+
+    # The contact whose category applies to this sender, if any. Looked up first
+    # but applied last: it says who wrote, not what they wrote about.
+    matched_contact = None
+    for contact in (*directory_contacts, *legacy_contacts):
+        if contact.email and _email_address(contact.email) == sender_address and contact.category in category_by_name:
+            matched_contact = contact
+            break
+    if matched_contact is None:
+        # Domain match when email is unset, directory before legacy (directory
+        # contacts never reach here — see contact_directory_for_matching).
+        for contact in (*directory_contacts, *legacy_contacts):
+            if (
+                not contact.email
+                and contact.domain
+                and contact.domain.lower() == sender_domain
+                and contact.category in category_by_name
+            ):
+                matched_contact = contact
+                break
+
+    # What the message is about beats who sent it. The sender's category used to
+    # win outright, so a single directory entry filed every message from that
+    # address under one category — a complaint, an internship application and an
+    # invoice reminder all landed in the same workflow, and the subject rules the
+    # owner had written were never consulted. A contact category is the fallback
+    # for mail no rule claims, and still supplies the priority override.
     for category in active_categories:
         if matches_when(category.when, email_input):
+            if matched_contact is not None:
+                return {
+                    **_result(matched_contact, category),
+                    "category": category.name,
+                    "category_display_name": category.display_name,
+                }
             return {
                 "category": category.name,
                 "category_display_name": category.display_name,
@@ -183,6 +263,10 @@ def classify_category(email_input: dict, config: CategoriesConfig) -> dict:
                 "instructions": category.instructions.model_dump(exclude_none=True) if category.instructions else None,
                 "contact": None,
             }
+
+    if matched_contact is not None:
+        return _result(matched_contact, category_by_name[matched_contact.category])
+
     return {"category": None, "priority": "normal", "template": None, "policy": None, "contact": None}
 
 
@@ -191,11 +275,15 @@ def _re_subject(subject: str) -> str:
 
 
 def render_template_text(text: str, email_input: dict, contact: "Contact | None" = None) -> str:
+    sender_name, _sender_address = parseaddr(email_input.get("author", ""))
+    sender_name = " ".join(sender_name.split())
     values = {
         "subject": email_input.get("subject", ""),
         "author": email_input.get("author", ""),
         "to": email_input.get("to", ""),
         "email_thread": email_input.get("email_thread", ""),
+        "name": sender_name,
+        "prenom": sender_name.split()[0] if sender_name else "",
     }
     if contact and contact.name and contact.name.split():
         values["name"] = contact.name
@@ -203,7 +291,17 @@ def render_template_text(text: str, email_input: dict, contact: "Contact | None"
     rendered = text
     for key, value in values.items():
         rendered = rendered.replace("{{" + key + "}}", str(value))
-    return rendered
+    # Unknown or empty variables must never reach a draft surface. Remove the
+    # placeholder, then clean punctuation it would have owned.
+    rendered = re.sub(r"\{\{\s*\w+\s*\}\}", "", rendered)
+    rendered = re.sub(r"[ \t]+([,.;])", r"\1", rendered)
+    rendered = re.sub(r"([,.;:!?]){2,}", r"\1", rendered)
+    rendered = re.sub(r"[ \t]{2,}", " ", rendered)
+    rendered = re.sub(r"(?m)^[ \t]*[,.;:!?]+[ \t]*$", "", rendered)
+    rendered = re.sub(r"(?m)^Bonjour[ \t]*$", "Bonjour,", rendered)
+    rendered = re.sub(r"(?m)^Bonjour[ \t]*[,;:][ \t]*$", "Bonjour,", rendered)
+    rendered = re.sub(r"(?m)^(.+?)[ \t]+[,;][ \t]*$", r"\1,", rendered)
+    return rendered.strip()
 
 
 def auto_draft_tool_call(

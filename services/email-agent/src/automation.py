@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from email.utils import parseaddr
+from zoneinfo import ZoneInfo
+from email.utils import parseaddr, parsedate_to_datetime
 import json
 from pathlib import Path
 import re
@@ -28,9 +29,14 @@ class RuleWhen(BaseModel):
     """
 
     sender_contains: list[str] = Field(default_factory=list)
+    sender_regex: list[str] = Field(default_factory=list)
     sender_domain: list[str] = Field(default_factory=list)
     subject_contains: list[str] = Field(default_factory=list)
+    body_contains: list[str] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
+    # Time-of-arrival predicate, read from the message's Date header against
+    # `RulesConfig.working_hours`. None means the rule does not care.
+    outside_working_hours: bool | None = None
 
 
 class RuleThen(BaseModel):
@@ -78,6 +84,30 @@ class FollowUpConfig(BaseModel):
     nudge: str = "Just following up on this."
 
 
+class WorkingHoursConfig(BaseModel):
+    """The window a rule means by "during working hours".
+
+    `days` is ISO weekday numbers (Monday = 1). Mail arriving outside the window —
+    including on a non-working day — is "outside working hours".
+    """
+
+    start_hour: int = Field(default=9, ge=0, le=23)
+    end_hour: int = Field(default=18, ge=1, le=24)
+    days: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+    # The business's own timezone. This used to be read off the host clock, so the
+    # same message was "outside working hours" or not depending on where the
+    # container ran — a mailbox on a UTC server answered differently from the same
+    # mailbox on a Paris laptop, for two hours of every working day.
+    timezone: str = Field(default="Europe/Paris")
+
+    @field_validator("days")
+    @classmethod
+    def valid_weekdays(cls, value: list[int]) -> list[int]:
+        if any(day < 1 or day > 7 for day in value):
+            raise ValueError("days must be ISO weekday numbers between 1 and 7")
+        return value
+
+
 class LearningConfig(BaseModel):
     enabled: bool = False
     suggestions_path: str = "logs/rule_suggestions.jsonl"
@@ -89,6 +119,7 @@ class RulesConfig(BaseModel):
     digest: DigestConfig = Field(default_factory=DigestConfig)
     snooze: SnoozeConfig = Field(default_factory=SnoozeConfig)
     follow_ups: FollowUpConfig = Field(default_factory=FollowUpConfig)
+    working_hours: WorkingHoursConfig = Field(default_factory=WorkingHoursConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
 
 
@@ -217,23 +248,74 @@ def workflow_sla_snapshot(
     }
 
 
-def _matches_rule(rule: AutomationRule, email_input: dict) -> bool:
+def _matches_rule(
+    rule: AutomationRule,
+    email_input: dict,
+    working_hours: WorkingHoursConfig | None = None,
+) -> bool:
     when = rule.when
     sender = email_input.get("author", "")
     subject = email_input.get("subject", "")
+    body = email_input.get("email_thread", "")
     labels = set(email_input.get("labels", []))
 
     if when.sender_contains and not _contains_any(sender, when.sender_contains):
         return False
+    if when.sender_regex:
+        try:
+            if not any(re.search(pattern, sender, re.IGNORECASE) for pattern in when.sender_regex):
+                return False
+        except re.error:
+            return False
     if when.sender_domain:
         domain = _sender_domain(sender)
         if domain not in {d.lower() for d in when.sender_domain}:
             return False
     if when.subject_contains and not _contains_any(subject, when.subject_contains):
         return False
+    if when.body_contains and not _contains_any(body, when.body_contains):
+        return False
     if when.labels and not set(when.labels).issubset(labels):
         return False
+    if when.outside_working_hours is not None:
+        outside = _received_outside_working_hours(
+            email_input.get("date"), working_hours or WorkingHoursConfig()
+        )
+        # An unparseable or missing Date header is not evidence either way, so the
+        # rule simply does not fire rather than guessing.
+        if outside is None or outside != when.outside_working_hours:
+            return False
     return True
+
+
+def _received_outside_working_hours(
+    raw_date, working_hours: WorkingHoursConfig
+) -> bool | None:
+    """True when the message arrived outside the configured window, None if unknown."""
+    if not raw_date:
+        return None
+    try:
+        received = parsedate_to_datetime(str(raw_date))
+    except (TypeError, ValueError):
+        return None
+    if received is None:
+        return None
+    if received.tzinfo is not None:
+        received = received.astimezone(_business_tz(working_hours.timezone))
+    if received.isoweekday() not in working_hours.days:
+        return True
+    return not (working_hours.start_hour <= received.hour < working_hours.end_hour)
+
+
+def _business_tz(name: str) -> timezone | ZoneInfo:
+    """The configured business timezone, falling back to UTC on a bad name.
+
+    A typo in configuration must not make the host clock authoritative again.
+    """
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
 
 
 def _tool_call(name: str, args: dict, call_id: str) -> dict:
@@ -259,7 +341,7 @@ def build_rule_plan(
     terminal_status: str | None = None
 
     for idx, rule in enumerate(rules_config.rules):
-        if not rule.enabled or not _matches_rule(rule, email_input):
+        if not rule.enabled or not _matches_rule(rule, email_input, rules_config.working_hours):
             continue
         matched.append(rule.name)
         prefix = f"rule_{idx}"
@@ -528,3 +610,131 @@ def suggest_rule_from_correction(
     except OSError:
         return False
     return True
+
+
+# Rules a small company almost always wants, offered at onboarding rather than
+# forced on. Each is inert until the owner accepts it, and accepting one never
+# enables the others.
+STARTER_RULES: list[dict] = [
+    {
+        "id": "gmail_categories",
+        "title": "Archiver Promotions, Réseaux sociaux et Forums",
+        "explanation": (
+            "Gmail range déjà ce courrier de masse. La règle l'archive pour qu'il "
+            "n'encombre pas la boîte de réception."
+        ),
+        "rule": {
+            "name": "archiver les catégories Gmail de masse",
+            "enabled": True,
+            "when": {"labels": ["CATEGORY_PROMOTIONS"]},
+            "then": {"archive": True, "mark_read": True},
+        },
+    },
+    {
+        "id": "newsletters",
+        "title": "Étiqueter et archiver les newsletters et adresses no-reply",
+        "explanation": (
+            "Le courrier envoyé depuis une adresse sans réponse n'attend jamais de "
+            "réponse : il est étiqueté « Newsletters » puis archivé."
+        ),
+        "rule": {
+            "name": "étiqueter et archiver les newsletters",
+            "enabled": True,
+            "when": {"sender_contains": ["noreply@", "no-reply@", "newsletter@", "mailing@"]},
+            "then": {"labels": ["Newsletters"], "archive": True, "mark_read": True},
+        },
+    },
+    {
+        "id": "after_hours",
+        "title": "Reporter le courrier reçu hors des heures de travail",
+        "explanation": (
+            "Un message arrivé le soir ou le week-end est mis en veille et "
+            "ressort le prochain jour ouvré, selon les heures configurées."
+        ),
+        "rule": {
+            "name": "reporter le courrier hors heures ouvrées",
+            "enabled": True,
+            "when": {"outside_working_hours": True},
+            "then": {"snooze_days": 1},
+        },
+        "requires_section": "snooze",
+    },
+    {
+        "id": "client_domain",
+        "title": "Étiqueter le courrier d'un domaine client",
+        "explanation": (
+            "Renseignez le domaine de vos clients : leurs messages sont étiquetés "
+            "« client » avant même le tri par l'agent."
+        ),
+        "rule": {
+            "name": "étiqueter le courrier client",
+            "enabled": False,  # inert until the owner fills in a domain
+            "when": {"sender_domain": []},
+            "then": {"labels": ["client"]},
+        },
+        "needs_input": "sender_domain",
+    },
+    {
+        "id": "follow_ups",
+        "title": "Relancer un envoi resté sans réponse",
+        "explanation": (
+            "Les messages envoyés et restés sans réponse au-delà du délai "
+            "configuré reviennent sous forme de rappel."
+        ),
+        "rule": None,
+        "requires_section": "follow_ups",
+    },
+]
+
+
+def starter_rule_catalogue(config: RulesConfig) -> list[dict]:
+    """The starter rules, each flagged with whether it is already in place."""
+    existing = {rule.name for rule in config.rules}
+    sections = {"snooze": config.snooze.enabled, "follow_ups": config.follow_ups.enabled}
+    catalogue = []
+    for entry in STARTER_RULES:
+        rule = entry.get("rule")
+        section = entry.get("requires_section")
+        if rule is None:
+            applied = bool(sections.get(section))
+        else:
+            applied = rule["name"] in existing
+        catalogue.append({
+            "id": entry["id"],
+            "title": entry["title"],
+            "explanation": entry["explanation"],
+            "rule": rule,
+            "requires_section": section,
+            "needs_input": entry.get("needs_input"),
+            "applied": applied,
+        })
+    return catalogue
+
+
+def apply_starter_rules(config: RulesConfig, ids: list[str]) -> tuple[RulesConfig, list[str]]:
+    """Add the selected starter rules, skipping any already present."""
+    wanted = [entry for entry in STARTER_RULES if entry["id"] in set(ids)]
+    unknown = sorted(set(ids) - {entry["id"] for entry in STARTER_RULES})
+    if unknown:
+        raise ValueError(f"unknown starter rule(s): {', '.join(unknown)}")
+    existing = {rule.name for rule in config.rules}
+    added: list[str] = []
+    for entry in wanted:
+        section = entry.get("requires_section")
+        if section == "snooze":
+            config.snooze.enabled = True
+        elif section == "follow_ups":
+            config.follow_ups.enabled = True
+        rule = entry.get("rule")
+        if rule is None:
+            added.append(entry["id"])
+            continue
+        if rule["name"] in existing:
+            continue
+        config.rules.append(AutomationRule(**rule))
+        existing.add(rule["name"])
+        added.append(entry["id"])
+    # Rules only run at all when the subsystem is on.
+    if added:
+        config.enabled = True
+    return config, added

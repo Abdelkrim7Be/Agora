@@ -10,6 +10,7 @@ from src.tenant import (
     current_agent_instance_id,
     normalize_agent_instance_id,
     normalize_user_id,
+    user_context,
 )
 
 DEFAULT_SYNC_PATH = SERVICE_ROOT / "logs" / "gmail_sync.json"
@@ -21,7 +22,16 @@ def _path() -> Path:
 
 
 def _is_newer(candidate: str, existing: str | None) -> bool:
-    """Gmail historyIds increase monotonically; never move a baseline backwards."""
+    """Never move a sync baseline backwards.
+
+    The stored value is an opaque cursor, not necessarily a number: Gmail's
+    historyId increases monotonically, while Graph's deltaLink is a URL with no
+    ordering at all. The numeric compare is therefore best-effort, and anything
+    unparseable falls back to "different means newer" — the same answer
+    `OutlookProvider.cursor_is_newer` gives. Callers that need the
+    provider-correct comparison should ask the provider; this stays here for the
+    Gmail Pub/Sub webhook, which is Gmail-only by construction.
+    """
     if existing is None:
         return True
     try:
@@ -123,16 +133,31 @@ def _pg_set(user_id: str, agent_instance_id: str, history_id: str) -> None:
             )
 
 
+def _sync_identity() -> str:
+    """The identity the sync baseline is stored under.
+
+    A Gmail history baseline describes the mailbox, not whoever happened to
+    trigger the sync: an owner and a delegated approver polling the same
+    instance must share one window, or each keeps a private baseline and the
+    same messages get discovered twice. Keying it on the acting user did exactly
+    that. It stays a constant so every caller — poller, webhook, API — resolves
+    to the same row, and row-level security is satisfied by entering the same
+    identity on the connection (see _pg_get/_pg_set).
+    """
+    return normalize_user_id(settings.default_user_id)
+
+
 def get_last_history_id(
     user_id: str | None = None,
     agent_instance_id: str | None = None,
 ) -> str | None:
-    resolved = normalize_user_id(settings.default_user_id)
+    resolved = _sync_identity()
     resolved_instance = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
     if selected_run_registry_backend() == "postgres":
-        return _pg_get(resolved, resolved_instance)
+        with user_context(resolved):
+            return _pg_get(resolved, resolved_instance)
     return _json_get(resolved, resolved_instance)
 
 
@@ -143,11 +168,12 @@ def set_last_history_id(
 ) -> None:
     if not history_id:
         return
-    resolved = normalize_user_id(settings.default_user_id)
+    resolved = _sync_identity()
     resolved_instance = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
     if selected_run_registry_backend() == "postgres":
-        _pg_set(resolved, resolved_instance, history_id)
+        with user_context(resolved):
+            _pg_set(resolved, resolved_instance, history_id)
         return
     _json_set(resolved, resolved_instance, history_id)

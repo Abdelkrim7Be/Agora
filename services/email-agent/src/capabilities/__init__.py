@@ -16,6 +16,29 @@ current_gmail_thread_id: ContextVar[str | None] = ContextVar(
     "current_gmail_thread_id", default=None
 )
 
+# Trusted recipients. These are the reason a prompt injection cannot redirect
+# mail: the model is never asked where something goes.
+#
+#   current_reply_to     the address that sent the message being handled, taken
+#                        from its headers — the only place a reply can go.
+#   current_route_targets addresses the *workspace* configured (workflow route,
+#                        roles directory). Never derived from message content.
+#
+# Both are set by tool_node from graph state, so a tool that needs a recipient
+# reads it here rather than accepting one from the LLM.
+current_reply_to: ContextVar[str | None] = ContextVar("current_reply_to", default=None)
+current_route_targets: ContextVar[tuple[str, ...]] = ContextVar(
+    "current_route_targets", default=()
+)
+
+
+class UntrustedRecipientError(RuntimeError):
+    """Raised when a tool has no trusted recipient to send to.
+
+    tool_node turns this into a recoverable tool message, so the run reports the
+    misconfiguration instead of silently falling back to a model-chosen address.
+    """
+
 CAPABILITY_MODULES: Dict[str, str] = {
     "email": "src.capabilities.email_tools",
     "calendar": "src.capabilities.calendar_tools",

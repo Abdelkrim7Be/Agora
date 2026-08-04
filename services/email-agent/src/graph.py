@@ -7,7 +7,8 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from functools import wraps
+from email.utils import parseaddr
+from functools import reduce, wraps
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -26,6 +27,8 @@ from src.capabilities import (
     approval_required,
     current_email_id,
     current_gmail_thread_id,
+    current_reply_to,
+    current_route_targets,
     hitl_approved,
     load_capabilities,
     tools_by_name,
@@ -37,7 +40,7 @@ from src.contacts import get_contact
 from src.gmail_client import format_attachments
 from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
-from src.roles import resolve_role
+from src.roles import list_roles, resolve_role
 from src.security_client import audit_output, authorize_action
 from src.signature import apply_signature_to_args, strip_signature
 from src.prompts import (
@@ -189,8 +192,38 @@ def _resolve_route_targets(value: str | None) -> list[str]:
     return resolved.emails if resolved and resolved.emails else []
 
 
-def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | None:
-    if "forward_email" not in tools_by_name_map:
+def _trusted_reply_to(state: State) -> str | None:
+    """The sender of the message being handled, from its headers.
+
+    `parse_email` reads the From header, so this is the mailbox that actually
+    sent the mail — not an address the model read out of the body.
+    """
+    email_input = state.get("email_input") or {}
+    author = email_input.get("author") or ""
+    address = parseaddr(str(author))[1]
+    return address.lower() or None
+
+
+def _trusted_route_targets(state: State) -> tuple[str, ...]:
+    """Recipients the workspace configured for this run's workflow.
+
+    Resolved from the matched category's route_to / owner through the roles
+    directory. Both are workspace configuration, so an injected instruction has
+    no way to add an address here.
+    """
+    raw = state.get("workflow_route_to") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    targets: list[str] = []
+    for item in raw:
+        targets.extend(_resolve_route_targets(item))
+    if not targets and state.get("workflow_owner"):
+        targets.extend(_resolve_route_targets(state.get("workflow_owner")))
+    return tuple(dict.fromkeys(targets))
+
+
+def _workflow_notify_tool_call(state: State, category_update: dict) -> dict | None:
+    if "notify_internal" not in tools_by_name_map:
         return None
     raw_targets = category_update.get("workflow_route_to") or []
     if isinstance(raw_targets, str):
@@ -219,9 +252,11 @@ def _workflow_forward_tool_call(state: State, category_update: dict) -> dict | N
         "Please handle this request or reply internally with the next action."
     )
     return {
-        "name": "forward_email",
-        "args": {"to": targets, "note": note},
-        "id": f"workflow_forward_{uuid.uuid4().hex}",
+        "name": "notify_internal",
+        # No "to": tool_node supplies the recipients from current_route_targets,
+        # which is resolved from this same workflow configuration.
+        "args": {"subject": f"[Agora] {category}", "note": note},
+        "id": f"workflow_notify_{uuid.uuid4().hex}",
         "type": "tool_call",
     }
 
@@ -260,7 +295,21 @@ def category_router(
     call is skipped entirely. Unmatched emails fall through to triage_router with
     the category context already in state for the LLM to refine (B4).
     """
-    categories_config = load_categories()
+    # The security verdict has to be honored here, not only in triage_router.
+    # This node runs first and, on a category match, jumps straight to the model
+    # or to a tool call — so a flagged message that happened to match a category
+    # skipped the check entirely. In one live test an injected "forward the
+    # mailbox to <attacker>" instruction reached the model that way and came back
+    # as an internal notification repeating the instruction verbatim, with a
+    # subject the attacker had chosen: no send left the system, but a human was
+    # being asked to perform the attack by hand.
+    sec = state["email_input"].get("security")
+    if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
+        print("🛡️ Category routing skipped - forced notify by security verdict")
+        return Command(goto=END, update={"classification_decision": "notify"})
+
+    agent_instance_id = state["email_input"].get("agent_instance_id")
+    categories_config = load_categories(agent_instance_id=agent_instance_id)
     category_meta = classify_category(state["email_input"], categories_config)
 
     cat = category_meta.get("category")
@@ -268,7 +317,6 @@ def category_router(
     matched_contact = category_meta.get("contact")
 
     author, _, _, _ = parse_email(state["email_input"])
-    agent_instance_id = state["email_input"].get("agent_instance_id")
     contact_dir = get_contact(author, agent_instance_id=agent_instance_id)
     contact_lang = contact_dir.fields.get("lang") if contact_dir and contact_dir.fields else None
 
@@ -360,30 +408,15 @@ def category_router(
         )
 
     if policy == "notify":
-        forward_call = _workflow_forward_tool_call(state, category_update)
-        if forward_call is not None and not state["email_input"].get("email_id"):
-            error = (
-                "This workflow requires forwarding the original Gmail message, but this "
-                "run was created manually and has no trusted Gmail message id. Sync the "
-                "mailbox and process the Gmail-originated message instead."
-            )
-            print(f"🔔 Category '{cat}': manual forward rejected")
-            return Command(
-                goto=END,
-                update={
-                    "classification_decision": "notify",
-                    "email_send_failed": error,
-                    **category_update,
-                },
-            )
-        if forward_call is not None:
+        notify_call = _workflow_notify_tool_call(state, category_update)
+        if notify_call is not None:
             print(f"🔔 Category '{cat}': notify policy, routing for approval")
             return Command(
                 goto="environment",
                 update={
                     "classification_decision": "notify",
                     **category_update,
-                    "messages": [AIMessage(content="", tool_calls=[forward_call])],
+                    "messages": [AIMessage(content="", tool_calls=[notify_call])],
                 },
             )
         print(f"🔔 Category '{cat}': notify policy, terminating")
@@ -405,6 +438,136 @@ def category_router(
 
     # Unknown or unhandled policy → fall through
     return Command(goto="triage_router", update=category_update)
+
+
+def _category_policy_command(
+    state: State,
+    categories_config,
+    cat: str,
+    category_update: dict,
+    matched_contact=None,
+) -> Command | None:
+    """Execute a category policy from deterministic or LLM fallback routing."""
+    policy = category_update.get("category_policy")
+
+    if policy == "auto_draft":
+        template_tool_call = auto_draft_tool_call(
+            state["email_input"], categories_config, cat, contact=matched_contact
+        )
+        if template_tool_call is None:
+            return None
+        content = template_tool_call["args"].get("content", "")
+        remaining_vars = unresolved_vars(content)
+        author, to, subject, email_thread = parse_email(state["email_input"])
+        atts = state["email_input"].get("attachments") or []
+        email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
+        category_obj = next((c for c in categories_config.categories if c.name == cat), None)
+        # 'adapt' asks the model to rework the template against this specific
+        # message. Without it a fully-resolved template goes out verbatim, which
+        # is how an invoice reminder quoting its number, amount and due date got
+        # a reply asking for the number, amount and due date.
+        adapt_to_message = category_obj is not None and category_obj.template_mode == "adapt"
+        if remaining_vars or adapt_to_message:
+            reason = (
+                f"unresolved vars {remaining_vars}" if remaining_vars else "template_mode=adapt"
+            )
+            print(f"📧 Category '{cat}': {reason}, routing to LLM for finalization")
+            return Command(
+                goto="llm_call",
+                update={
+                    "classification_decision": "respond",
+                    **category_update,
+                    "messages": [{
+                        "role": "user",
+                        "content": (
+                            f"This email matches the '{cat}' category. Draft a response using this "
+                            f"template as a starting point:\n\n"
+                            f"To: {template_tool_call['args']['to']}\n"
+                            f"Subject: {template_tool_call['args']['subject']}\n"
+                            f"Content: {content}\n\n"
+                            + (
+                                f"Fill in the unresolved placeholders "
+                                f"({', '.join('{{' + v + '}}' for v in remaining_vars)}) "
+                                f"from the email context below, then call write_email. "
+                                if remaining_vars
+                                else (
+                                    "Adapt it to what this message actually says: keep the "
+                                    "template's structure and tone, drop anything it asks for "
+                                    "that the sender already provided, and answer the specific "
+                                    "point raised. Then call write_email. "
+                                )
+                            ) +
+                            f"Keep the template's closing (\"{content.rstrip().splitlines()[-1] if content.strip() else ''}\") "
+                            f"as the last line of the body - do not add a name, title, or company "
+                            f"after it; the signature is appended automatically.\n\n{email_markdown}"
+                        ),
+                    }],
+                },
+            )
+        print(f"📧 Category '{cat}': auto-draft from template")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "respond",
+                **category_update,
+                "messages": [
+                    {"role": "user", "content": f"Draft from category template for email: {email_markdown}"},
+                    AIMessage(content="", tool_calls=[template_tool_call]),
+                ],
+            },
+        )
+
+    if policy == "organize":
+        if "apply_label" not in tools_by_name_map or "archive_email" not in tools_by_name_map:
+            print(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
+            return None
+        cat_obj = next((c for c in categories_config.categories if c.name == cat), None)
+        labels = (cat_obj.labels if cat_obj and cat_obj.labels else [cat])
+        org_tool_calls = [
+            {"name": "apply_label", "args": {"label": label}, "id": f"org_label_{i}", "type": "tool_call"}
+            for i, label in enumerate(labels)
+        ] + [{"name": "archive_email", "args": {}, "id": "org_archive", "type": "tool_call"}]
+        print(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
+        return Command(
+            goto="environment",
+            update={
+                "classification_decision": "ignore",
+                **category_update,
+                "auto_organized": True,
+                "messages": [AIMessage(content="", tool_calls=org_tool_calls)],
+            },
+        )
+
+    if policy == "notify":
+        notify_call = _workflow_notify_tool_call(state, category_update)
+        if notify_call is not None:
+            print(f"🔔 Category '{cat}': notify policy, routing for approval")
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "notify",
+                    **category_update,
+                    "messages": [AIMessage(content="", tool_calls=[notify_call])],
+                },
+            )
+        print(f"🔔 Category '{cat}': notify policy, terminating")
+        return Command(goto=END, update={"classification_decision": "notify", **category_update})
+
+    if policy == "ignore":
+        print(f"🚫 Category '{cat}': ignore policy")
+        if _can_auto_organize():
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": "ignore",
+                    **category_update,
+                    "auto_organized": True,
+                    "messages": [_auto_organize_message()],
+                },
+            )
+        return Command(goto=END, update={"classification_decision": "ignore", **category_update})
+
+    return None
 
 
 class _CoercedDraft(PydanticBaseModel):
@@ -429,6 +592,23 @@ def _normalize_recipient_args(args: dict) -> dict:
             return {**args, "to": cleaned}
     return args
 
+
+
+
+def _email_addr(value: str | None) -> str:
+    return (parseaddr(value or "")[1] or "").strip().lower()
+
+
+def _guard_reply_recipient(name: str, args: dict, email_input: dict) -> dict:
+    if name not in {"write_email", "create_draft"} or not isinstance(args, dict):
+        return args
+    proposed = _email_addr(args.get("to"))
+    original_sender = _email_addr(email_input.get("author"))
+    mailbox_addresses = {_email_addr(email_input.get("to"))}
+    mailbox_addresses.discard("")
+    if original_sender and (not proposed or proposed in mailbox_addresses):
+        return {**args, "to": original_sender}
+    return args
 
 def _last_write_email_args(messages) -> dict:
     for message in reversed(messages):
@@ -741,6 +921,28 @@ def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
 SEND_TOOL_NAMES = {"write_email", "forward_email", "reply_all"}
 
 
+def _restore_redactions(args: dict, state: State) -> dict:
+    """Put redacted identifiers back into whatever the model produced.
+
+    `redaction_map` is only populated when the drafting model is hosted and the
+    security service actually redacted something; otherwise this is a no-op.
+    """
+    mapping = ((state.get("email_input") or {}).get("security") or {}).get("redaction_map") or {}
+    if not mapping:
+        return args
+
+    def _restore(value):
+        if isinstance(value, str):
+            for placeholder in sorted(mapping, key=len, reverse=True):
+                value = value.replace(placeholder, mapping[placeholder])
+            return value
+        if isinstance(value, list):
+            return [_restore(item) for item in value]
+        return value
+
+    return {key: _restore(value) for key, value in args.items()}
+
+
 def _send_content(args: dict) -> str:
     return args.get("content") or args.get("body") or args.get("note") or ""
 
@@ -794,6 +996,9 @@ def _auto_organize_message() -> AIMessage:
 _AUTHORIZATION_CACHE_MAX = 512
 _authorization_cache: dict[tuple[str, str, str], dict] = {}
 _ARG_ADDR_RE = _re.compile(r"[\w.+-]+@[\w.-]+")
+# Where each send tool gets its recipients from, now that none of them accept one.
+_REPLY_TOOL_NAMES = {"write_email", "create_draft"}
+_ROUTED_TOOL_NAMES = {"forward_email", "notify_internal"}
 _ARG_TRUST_ORDER = {"TRUSTED": 0, "INTERNAL": 1, "UNTRUSTED": 2, "HOSTILE": 3}
 
 
@@ -801,30 +1006,138 @@ def _max_arg_trust(a: str, b: str) -> str:
     return a if _ARG_TRUST_ORDER[a] >= _ARG_TRUST_ORDER[b] else b
 
 
+def _operator_origin_trust(value: str) -> str | None:
+    """Trust for a value the operator configured rather than the message supplied.
+
+    Only these can lower an argument below the message's own trust: addresses on
+    an internal domain, and addresses reachable through the roles directory. Both
+    are set in the workspace, so an injected instruction cannot introduce one.
+    """
+    address = value.strip().lower()
+    if "@" not in address:
+        return None
+    domain = address.split("@")[-1]
+    if domain in set(settings.internal_domains):
+        return "INTERNAL"
+    try:
+        directory = {
+            email.strip().lower()
+            for role in list_roles()
+            for email in (role.emails or [])
+            if email and email.strip()
+        }
+    except Exception:
+        # A directory read must never decide the outcome by failing open.
+        return None
+    return "INTERNAL" if address in directory else None
+
+
 def _derive_arg_trust(args: dict, security: dict | None) -> dict:
-    """Map args to the worst trust of any sanitized field containing their value."""
+    """Label each tool argument with the trust the policy engine should enforce.
+
+    Derivation is fail-closed. The model produced these arguments while reading
+    untrusted mail, so every argument starts at the *message's* trust level and
+    substring matches against the sanitized fields can only make it worse. The
+    only way down is `_operator_origin_trust`: a recipient the workspace itself
+    configured.
+
+    This used to start every argument at TRUSTED and rely on finding the value
+    verbatim inside a sanitized field. An injection that spelled an address out
+    ("attacker at evil dot com") or had the model paraphrase it produced no
+    match, so the argument was labelled TRUSTED and the flow check passed —
+    exactly the case the check exists to catch. List-valued recipients were not
+    inspected at all.
+    """
     fields = (security or {}).get("fields") or {}
-    if not fields:
-        return {}
-    out = {}
-    for arg_name, arg_value in args.items():
-        if not isinstance(arg_value, str) or not arg_value.strip():
-            out[arg_name] = "TRUSTED"
-            continue
-        needles = _ARG_ADDR_RE.findall(arg_value) or [arg_value.strip()]
-        worst = "TRUSTED"
+    floor = (security or {}).get("source_trust") or ("UNTRUSTED" if fields else "TRUSTED")
+
+    def label(value: str) -> str:
+        operator = _operator_origin_trust(value)
+        worst = operator if operator is not None else floor
+        needles = _ARG_ADDR_RE.findall(value) or [value.strip()]
         for needle in needles:
             needle_lower = needle.lower()
             for field in fields.values():
                 field_value = str((field or {}).get("value") or "").lower()
-                if needle_lower in field_value:
+                if needle_lower and needle_lower in field_value:
                     worst = _max_arg_trust(worst, (field or {}).get("trust", "UNTRUSTED"))
-        out[arg_name] = worst
+        return worst
+
+    out = {}
+    for arg_name, arg_value in args.items():
+        if isinstance(arg_value, list):
+            values = [str(v) for v in arg_value if str(v).strip()]
+            out[arg_name] = reduce(_max_arg_trust, (label(v) for v in values), "TRUSTED") if values else "TRUSTED"
+        elif isinstance(arg_value, str) and arg_value.strip():
+            out[arg_name] = label(arg_value)
+        else:
+            # Non-text arguments carry no attacker-controlled address.
+            out[arg_name] = "TRUSTED"
     return out
 
 
 def _authorization_cache_key(run_id: str, name: str, tool_call: dict) -> tuple[str, str, str]:
     return (run_id, name, tool_call.get("id", ""))
+
+
+def _category_for_run(state: State):
+    """Look up the Category object driving this run, if any (for require_approval /
+    external_send_allowed — per-workflow policy layered on top of the tool-level
+    default in security/policy.yaml)."""
+    name = state.get("category")
+    if not name:
+        return None
+    cfg = load_categories(agent_instance_id=state["email_input"].get("agent_instance_id"))
+    return next((c for c in cfg.categories if c.name == name), None)
+
+
+def _effective_recipients(name: str, args: dict, state: State) -> list[str]:
+    """Every address this tool call will actually reach.
+
+    Send tools no longer take a recipient argument, so the addresses live in the
+    trusted context tool_node supplies: the message's own sender for replies,
+    the workflow's configured targets for routing. Reading them from `args` here
+    would find nothing and silently pass every recipient check.
+    """
+    recipients: list[str] = []
+    if name in _REPLY_TOOL_NAMES:
+        reply = _trusted_reply_to(state)
+        if reply:
+            recipients.append(reply)
+    if name in _ROUTED_TOOL_NAMES:
+        recipients.extend(_trusted_route_targets(state))
+    # Deliberately not scanning the argument text. A workflow note quotes the
+    # original sender, and treating a quoted address as a recipient made an
+    # internal-only notification look like an external send.
+    # reply_all fans out to the thread, which the provider resolves at send time.
+    return list(dict.fromkeys(r.lower() for r in recipients if r))
+
+
+def _recipient_domains(args: dict) -> list[str]:
+    to = args.get("to")
+    text = " ".join(str(v) for v in to) if isinstance(to, list) else str(to or "")
+    return [addr.split("@")[1].lower() for addr in _ARG_ADDR_RE.findall(text)]
+
+
+def _external_recipients_blocked(category, args: dict, name: str = "", state: State | None = None) -> bool:
+    """True when `category` restricts sends to internal domains and this call
+    would reach a recipient outside AGENT_INTERNAL_DOMAINS. Never loosens
+    tool-level policy — only ever adds a stricter, workflow-scoped check."""
+    if category is None or category.external_send_allowed:
+        return False
+    if state is not None:
+        addresses = _effective_recipients(name, args, state)
+        domains = [a.split("@")[1] for a in addresses if "@" in a]
+    else:
+        domains = _recipient_domains(args)
+    if not domains:
+        return False
+    internal = set(settings.internal_domains)
+    if not internal:
+        # external_send_allowed=false with no internal domains configured has
+        # nothing safe to compare against — fail closed rather than no-op.
+        return True
+    return any(domain not in internal for domain in domains)
 
 
 def _call_authorize_action(
@@ -833,24 +1146,31 @@ def _call_authorize_action(
     run_id: str,
     action_id: str,
     arg_trust: dict | None,
+    recipients: list[str] | None = None,
 ) -> dict:
+    """Call authorize_action, passing only the keywords it accepts.
+
+    Tests substitute their own stubs for this function, so the signature is
+    probed rather than assumed.
+    """
     try:
         signature = inspect.signature(authorize_action)
         params = signature.parameters.values()
-        supports_arg_trust = "arg_trust" in signature.parameters or any(
+        accepts_any_kwarg = any(
             param.kind == inspect.Parameter.VAR_KEYWORD for param in params
         )
+        supports_arg_trust = accepts_any_kwarg or "arg_trust" in signature.parameters
+        supports_recipients = accepts_any_kwarg or "recipients" in signature.parameters
     except (TypeError, ValueError):
         supports_arg_trust = True
+        supports_recipients = True
+
+    extra: dict = {}
     if supports_arg_trust:
-        return authorize_action(
-            name,
-            args,
-            run_id,
-            action_id,
-            arg_trust=arg_trust,
-        )
-    return authorize_action(name, args, run_id, action_id)
+        extra["arg_trust"] = arg_trust
+    if supports_recipients:
+        extra["recipients"] = list(recipients or [])
+    return authorize_action(name, args, run_id, action_id, **extra)
 
 
 def _authorize_tool_action(
@@ -860,6 +1180,7 @@ def _authorize_tool_action(
     tool_call: dict,
     refresh: bool = False,
     arg_trust: dict | None = None,
+    recipients: list[str] | None = None,
 ) -> dict:
     key = _authorization_cache_key(run_id, name, tool_call)
     if refresh or key not in _authorization_cache:
@@ -869,6 +1190,7 @@ def _authorize_tool_action(
             run_id,
             tool_call.get("id", ""),
             arg_trust,
+            recipients,
         )
         decision = authz.get("decision", "deny")
         reason = authz.get("reason", "no reason provided")
@@ -906,6 +1228,7 @@ def tool_node(state: State, store: BaseStore, config=None):
     redraft_baseline = None
     redraft_cleared = False
     run_id = _run_id_from_config(config)
+    category_obj = _category_for_run(state)
 
     # Load automation rules at most once per call, lazily — only when a human
     # correction actually happens (rule learning is a no-op when disabled).
@@ -935,20 +1258,57 @@ def tool_node(state: State, store: BaseStore, config=None):
         if name in {"write_email", "reply_all", "create_draft"} and isinstance(raw_args.get("content"), str):
             raw_args = {**raw_args, "content": ensure_email_paragraphs(raw_args["content"])}
         args = _normalize_recipient_args(apply_signature_to_args(name, raw_args))
+        args = _guard_reply_recipient(name, args, state["email_input"])
+        # Single restore point. When the drafting model ran on redacted content,
+        # every placeholder it echoed back becomes the real value here — before
+        # authorization, before the approval preview, before execution. Doing it
+        # anywhere later risks a placeholder reaching a recipient.
+        args = _restore_redactions(args, state)
+
         authorization_decision = "hitl" if name in approval_set else "allow"
         arg_trust = _derive_arg_trust(args, state["email_input"].get("security"))
+        effective_recipients = _effective_recipients(name, args, state)
 
         if settings.security_enabled:
-            authz = _authorize_tool_action(name, args, run_id, tool_call, arg_trust=arg_trust)
+            authz = _authorize_tool_action(
+                name,
+                args,
+                run_id,
+                tool_call,
+                arg_trust=arg_trust,
+                recipients=effective_recipients,
+            )
             authorization_decision = authz["decision"]
             if authorization_decision == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
 
+        if _external_recipients_blocked(category_obj, args, name, state):
+            result.append(_blocked_tool_message(
+                name,
+                f"category '{category_obj.name}' does not allow sending outside internal domains",
+                tool_call["id"],
+            ))
+            continue
+
+        if authorization_decision != "deny" and (
+            state.get("category_policy") == "auto_draft"
+            or (category_obj is not None and (category_obj.require_approval or category_obj.policy == "auto_draft"))
+        ):
+            authorization_decision = "hitl"
+
         if authorization_decision == "hitl":
-            description = format_action_description(name, args)
+            # The recipient is no longer a tool argument, but the person
+            # approving must still see exactly where this will go. It is shown
+            # under a separate key so the UI renders it read-only: editing the
+            # destination is precisely what this design removes.
+            recipients = effective_recipients
+            preview_args = dict(args)
+            if recipients:
+                preview_args["_recipients"] = recipients
+            description = format_action_description(name, preview_args)
             request = {
-                "action_request": {"action": name, "args": args},
+                "action_request": {"action": name, "args": args, "recipients": recipients},
                 "config": {
                     "allow_accept": True,
                     "allow_edit": True,
@@ -1065,10 +1425,19 @@ def tool_node(state: State, store: BaseStore, config=None):
                 tool_call,
                 refresh=True,
                 arg_trust=_derive_arg_trust(args, state["email_input"].get("security")),
+                recipients=_effective_recipients(name, args, state),
             )
             if authz["decision"] == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
                 continue
+
+        if args != tool_call["args"] and _external_recipients_blocked(category_obj, args, name, state):
+            result.append(_blocked_tool_message(
+                name,
+                f"category '{category_obj.name}' does not allow sending outside internal domains",
+                tool_call["id"],
+            ))
+            continue
 
         tool = tools_by_name_map.get(name)
         if tool is None:
@@ -1089,6 +1458,11 @@ def tool_node(state: State, store: BaseStore, config=None):
         thread_id_token = current_gmail_thread_id.set(
             state["email_input"].get("gmail_thread_id")
         )
+        # Recipients are graph context, never tool arguments. The model can say
+        # anything it likes about where mail should go; these are the only two
+        # places it can actually go.
+        reply_to_token = current_reply_to.set(_trusted_reply_to(state))
+        route_targets_token = current_route_targets.set(_trusted_route_targets(state))
         try:
             if name in approval_set:
                 tok = hitl_approved.set(True)
@@ -1112,6 +1486,8 @@ def tool_node(state: State, store: BaseStore, config=None):
                 return {"messages": result, "email_send_failed": message}
             continue
         finally:
+            current_route_targets.reset(route_targets_token)
+            current_reply_to.reset(reply_to_token)
             current_gmail_thread_id.reset(thread_id_token)
             current_email_id.reset(email_id_token)
         result.append(
@@ -1230,6 +1606,7 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
         agent_config.agent.writing_style_default,
     )
     run_id = _run_id_from_config(config)
+
     # Strip any already-appended signature before the model ever sees the
     # body: otherwise it tends to "helpfully" add its own closing line on
     # top of the real signature block, producing a duplicate sign-off. The
@@ -1423,6 +1800,13 @@ def triage_router(
                 "workflow_approver": c.approver,
                 "workflow_route_to": c.route_to,
             }
+
+    if category_update.get("category") and category_update.get("category_policy"):
+        policy_command = _category_policy_command(
+            state, categories_config, category_update["category"], category_update
+        )
+        if policy_command is not None:
+            return policy_command
 
     if classification == "respond":
         print("📧 Classification: RESPOND - This email requires a response")

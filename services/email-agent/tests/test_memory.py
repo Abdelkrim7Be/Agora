@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from src.memory import UserPreferences, get_memory, namespace, update_memory
+from src.memory import ORIGIN_DEFAULT, ORIGIN_LEARNED, UserPreferences, get_memory, namespace, update_memory
 from src.tenant import agent_instance_context, user_context
 from tests.conftest import _FakeMemoryLLM
 
@@ -26,7 +26,7 @@ def test_get_memory_writes_default_to_store_on_first_call():
     get_memory(store, ns, "seed value")
     item = store.get(ns, "user_preferences")
     assert item is not None
-    assert item.value == {"preferences": "seed value"}
+    assert item.value == {"preferences": "seed value", "origin": ORIGIN_DEFAULT}
 
 
 def test_get_memory_returns_stored_value_after_put():
@@ -55,7 +55,7 @@ def test_update_memory_writes_new_preferences():
     store.put(ns, "user_preferences", "original preferences")
     llm = _FakeMemoryLLM("updated preferences")
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
-    assert store.get(ns, "user_preferences").value == {"preferences": "updated preferences"}
+    assert store.get(ns, "user_preferences").value == {"preferences": "updated preferences", "origin": ORIGIN_LEARNED}
 
 
 def test_update_memory_works_with_empty_store():
@@ -63,7 +63,7 @@ def test_update_memory_works_with_empty_store():
     ns = namespace("triage_preferences")
     llm = _FakeMemoryLLM("fresh preferences")
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
-    assert store.get(ns, "user_preferences").value == {"preferences": "fresh preferences"}
+    assert store.get(ns, "user_preferences").value == {"preferences": "fresh preferences", "origin": ORIGIN_LEARNED}
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ def test_reject_updates_triage_preferences(fake_llms):
 
     item = memory_store.get(namespace("triage_preferences"), "user_preferences")
     assert item is not None
-    assert item.value == {"preferences": "do not respond to API questions"}
+    assert item.value == {"preferences": "do not respond to API questions", "origin": ORIGIN_LEARNED}
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def test_edit_updates_response_preferences(fake_llms):
 
     item = memory_store.get(namespace("response_preferences"), "user_preferences")
     assert item is not None
-    assert item.value == {"preferences": "be more concise in replies"}
+    assert item.value == {"preferences": "be more concise in replies", "origin": ORIGIN_LEARNED}
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +389,7 @@ def test_update_memory_persists_cleaned_text_when_sanitize_passes(monkeypatch):
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
 
     assert store.put_calls == [
-        (ns, "user_preferences", {"preferences": "sanitized: prefers short replies"})
+        (ns, "user_preferences", {"preferences": "sanitized: prefers short replies", "origin": ORIGIN_LEARNED})
     ]
 
 
@@ -409,4 +409,4 @@ def test_update_memory_skips_sanitize_gate_when_security_disabled(monkeypatch):
 
     update_memory(store, ns, [{"role": "user", "content": "feedback"}], llm)
 
-    assert store.put_calls == [(ns, "user_preferences", {"preferences": "prefers short replies"})]
+    assert store.put_calls == [(ns, "user_preferences", {"preferences": "prefers short replies", "origin": ORIGIN_LEARNED})]

@@ -46,7 +46,12 @@ def test_write_email_returns_hitl():
 
 # --- Recipient deny_domains ---
 
-def _policy_with_recipients(allow_domains=None, deny_domains=None) -> PolicyConfig:
+def _policy_with_recipients(
+    allow_domains=None,
+    deny_domains=None,
+    allow_addresses=None,
+    deny_addresses=None,
+) -> PolicyConfig:
     return PolicyConfig(
         default="deny",
         tools={
@@ -55,6 +60,8 @@ def _policy_with_recipients(allow_domains=None, deny_domains=None) -> PolicyConf
                 recipients=RecipientPolicy(
                     allow_domains=allow_domains or [],
                     deny_domains=deny_domains or [],
+                    allow_addresses=allow_addresses or [],
+                    deny_addresses=deny_addresses or [],
                 ),
             )
         },
@@ -143,6 +150,73 @@ def test_allow_domain_is_case_insensitive():
     )
     resp = authorize(req, policy=policy)
     assert resp.decision == "hitl"
+
+
+def test_allow_addresses_permits_only_listed_mailboxes():
+    # The whole point of the address list: same domain, different mailbox, denied.
+    policy = _policy_with_recipients(allow_addresses=["ok@gmail.com"])
+    allowed = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"to": "OK@gmail.com", "subject": "x", "content": "x"},
+            context={"run_id": "r1"},
+        ),
+        policy=policy,
+    )
+    assert allowed.decision == "hitl"
+
+    blocked = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"to": "someone.else@gmail.com", "subject": "x", "content": "x"},
+            context={"run_id": "r1"},
+        ),
+        policy=policy,
+    )
+    assert blocked.decision == "deny"
+    assert "not on the allow list" in blocked.reason
+
+
+def test_allow_addresses_blocks_when_one_of_several_recipients_is_unlisted():
+    policy = _policy_with_recipients(allow_addresses=["a@gmail.com", "b@gmail.com"])
+    resp = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"to": ["a@gmail.com", "stranger@gmail.com"], "subject": "x", "content": "x"},
+            context={"run_id": "r1"},
+        ),
+        policy=policy,
+    )
+    assert resp.decision == "deny"
+    assert "stranger@gmail.com" in resp.reason
+
+
+def test_deny_addresses_blocks_a_single_mailbox_on_an_allowed_domain():
+    policy = _policy_with_recipients(
+        allow_domains=["company.com"], deny_addresses=["ceo@company.com"]
+    )
+    resp = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"to": "ceo@company.com", "subject": "x", "content": "x"},
+            context={"run_id": "r1"},
+        ),
+        policy=policy,
+    )
+    assert resp.decision == "deny"
+    assert "deny list" in resp.reason
+
+
+def test_list_recipients_are_checked_like_comma_separated_recipients():
+    policy = _policy_with_recipients(deny_domains=["evil.com"])
+    req = AuthorizeRequest(
+        action="write_email",
+        args={"to": ["good@company.com", "bad@evil.com"], "subject": "x", "content": "Hello"},
+        context={},
+    )
+    resp = authorize(req, policy=policy)
+    assert resp.decision == "deny"
+    assert "evil.com" in resp.reason
 
 
 def test_comma_separated_recipients_any_denied_blocks():
@@ -509,3 +583,38 @@ def test_metrics_endpoint_available():
     r = client.get("/metrics")
     assert r.status_code == 200
     assert "agora_security_health" in r.text
+
+
+def test_declared_recipients_are_checked_when_no_to_argument():
+    """Send tools no longer pass a `to` argument.
+
+    The caller resolves the destination from trusted context and declares it, so
+    recipient policy must read that instead of silently seeing an empty field.
+    """
+    from src.models import AuthorizeRequest
+    from src.authorize import authorize
+    from src.policy import load_policy
+
+    policy = load_policy("policy.yaml")
+    policy.tools["write_email"].recipients.deny_addresses = ["attacker@evil.example"]
+
+    denied = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"subject": "hi", "content": "body"},
+            recipients=["attacker@evil.example"],
+        ),
+        policy,
+    )
+    assert denied.decision == "deny"
+    assert "attacker@evil.example" in denied.reason
+
+    allowed = authorize(
+        AuthorizeRequest(
+            action="write_email",
+            args={"subject": "hi", "content": "body"},
+            recipients=["client@example.com"],
+        ),
+        policy,
+    )
+    assert allowed.decision != "deny"

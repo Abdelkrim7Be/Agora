@@ -2,7 +2,7 @@ endpoint: "http://host.docker.internal:11434/v1"
 temperature: 0.0
 # Bounded replies so a draft takes seconds, not minutes.
 max_tokens: 700
-timeout: 120
+timeout: 300
 # qwen3:4b-8k for every role: single resident model on the 4GB GPU (no VRAM
 # swap between calls), and a clear quality jump over qwen2.5:3b for French
 # drafting and instruction-following on retouches.

@@ -25,6 +25,10 @@ public class AppUser {
     @Column(unique = true, nullable = false)
     private String username;
 
+    /** Where an invitation is delivered. Nullable: users created before invitations
+     * existed have none, and the seeder still creates users without one. */
+    private String email;
+
     @Column(nullable = false)
     private String passwordHash;
 
@@ -67,6 +71,9 @@ public class AppUser {
 
     public Long getId() { return id; }
     public String getUsername() { return username; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
     public String getPasswordHash() { return passwordHash; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }

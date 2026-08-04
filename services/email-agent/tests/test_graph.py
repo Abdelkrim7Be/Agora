@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from conftest import ai_tool_call
+from conftest import ai_tool_call, patch_provider
 
 from src.graph import _recover_tool_call_from_failed_generation, email_assistant
 from src.config import AutoOrganizeConfig
@@ -46,7 +46,7 @@ def test_respond_email_routes_to_agent(fake_llms, respond_email):
     assert result["classification_decision"] == "respond"
 
 
-def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
+def test_notify_workflow_routes_to_notify_approval(monkeypatch, respond_email):
     import src.graph as g
     from src.categories import CategoriesConfig
 
@@ -65,7 +65,7 @@ def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     email = {**respond_email, "email_id": "msg-route"}
 
     result = email_assistant.invoke({"email_input": email}, _cfg())
@@ -74,8 +74,11 @@ def test_notify_workflow_routes_to_forward_approval(monkeypatch, respond_email):
     assert result["workflow_owner"] == "Operations"
     assert result["workflow_route_to"] == ["redacted@example.com"]
     request = result["__interrupt__"][0].value[0]
-    assert request["action_request"]["action"] == "forward_email"
-    assert request["action_request"]["args"]["to"] == ["redacted@example.com"]
+    assert request["action_request"]["action"] == "notify_internal"
+    # The recipient is no longer an argument the model can set; tool_node
+    # resolves it and exposes it read-only so the approver still sees it.
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["redacted@example.com"]
     assert "Réclamation" in request["action_request"]["args"]["note"]
 
 
@@ -99,7 +102,7 @@ def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     monkeypatch.setattr(
         g,
         "resolve_role",
@@ -115,12 +118,16 @@ def test_notify_workflow_resolves_role_directory(monkeypatch, respond_email):
     result = email_assistant.invoke({"email_input": email}, _cfg())
 
     request = result["__interrupt__"][0].value[0]
-    assert request["action_request"]["args"]["to"] == ["finance@example.com", "backup@example.com"]
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["finance@example.com", "backup@example.com"]
     assert result["workflow_route_to"] == ["finance"]
 
 
-def test_notify_workflow_fan_out_approval_forwards_to_all_recipients(monkeypatch, respond_email):
-    """A 2-recipient route_to produces ONE approval; approving it forwards to both."""
+def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, fake_llms, respond_email):
+    """A 2-recipient route_to produces ONE approval; approving it notifies both."""
+    # The run continues past the notify approval into the agent loop, so the
+    # drafting model must be stubbed too or the test reaches the network.
+    fake_llms(classification="notify", tool_sequence=[ai_tool_call("Done", {"done": True})])
     import src.graph as g
     from src.categories import CategoriesConfig
     from langgraph.types import Command
@@ -139,30 +146,36 @@ def test_notify_workflow_fan_out_approval_forwards_to_all_recipients(monkeypatch
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     email = {**respond_email, "email_id": "msg-fanout"}
     run_cfg = _cfg()
 
     paused = email_assistant.invoke({"email_input": email}, run_cfg)
     request = paused["__interrupt__"][0].value[0]
-    assert request["action_request"]["action"] == "forward_email"
-    assert request["action_request"]["args"]["to"] == ["ops@example.com", "quality@example.com"]
+    assert request["action_request"]["action"] == "notify_internal"
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["ops@example.com", "quality@example.com"]
 
     sent_to = []
-    monkeypatch.setattr(
-        "src.gmail_client.forward_message",
-        lambda message_id, to, note: sent_to.append(to) or {"id": f"sent-{to}"},
-    )
     from src.capabilities import email_tools
+
+    patch_provider(
+        monkeypatch,
+        email_tools,
+        notify_internal_message=lambda to, subject, note: sent_to.append(to) or {"id": "sent-notify"},
+    )
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
 
     done = email_assistant.invoke(Command(resume={"type": "approve", "args": None}), run_cfg)
 
     assert "__interrupt__" not in done
-    assert sent_to == ["ops@example.com", "quality@example.com"]
+    # One notification, addressed to both recipients — not one send per recipient.
+    assert sent_to == [["ops@example.com", "quality@example.com"]]
 
 
-def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeypatch, respond_email):
+def test_notify_manual_workflow_routes_without_trusted_email_id(monkeypatch, respond_email):
+    """notify_internal never re-fetches the original Gmail message, so unlike the old
+    forward-based routing it works fine for manual (non-Gmail-sourced) runs too."""
     import src.graph as g
     from src.categories import CategoriesConfig
 
@@ -180,12 +193,16 @@ def test_notify_manual_workflow_rejects_forward_without_trusted_email_id(monkeyp
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
 
     result = email_assistant.invoke({"email_input": respond_email}, _cfg())
 
-    assert "trusted Gmail message id" in result["email_send_failed"]
-    assert "__interrupt__" not in result
+    assert result["classification_decision"] == "notify"
+    assert not result.get("email_send_failed")
+    request = result["__interrupt__"][0].value[0]
+    assert request["action_request"]["action"] == "notify_internal"
+    assert "to" not in request["action_request"]["args"]
+    assert request["action_request"]["recipients"] == ["ops@example.com"]
 
 
 def test_ignore_email_ends_after_triage(fake_llms, ignore_email):
@@ -215,26 +232,23 @@ def test_ignore_email_auto_organizes_when_enabled(monkeypatch, fake_llms, ignore
     from src.categories import CategoriesConfig
 
     g, inbox_tools = _enable_auto_organize(monkeypatch)
-    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g.settings, "security_enabled", False)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
     calls: list[tuple] = []
-    monkeypatch.setattr(
-        inbox_tools,
-        "ensure_label",
-        lambda label: calls.append(("ensure_label", label)) or "Label_auto",
-    )
 
     def _modify(message_id, **kwargs):
         calls.append(("modify_labels", message_id, kwargs))
         return {"id": message_id}
 
-    monkeypatch.setattr(inbox_tools, "modify_labels", _modify)
-    monkeypatch.setattr(
+    patch_provider(
+        monkeypatch,
         inbox_tools,
-        "archive_message",
-        lambda message_id: calls.append(("archive_message", message_id)) or {"id": message_id},
+        ensure_label=lambda label: calls.append(("ensure_label", label)) or "Label_auto",
+        modify_labels=_modify,
+        archive_message=lambda message_id: calls.append(("archive_message", message_id))
+        or {"id": message_id},
     )
 
     email = {**ignore_email, "email_id": "msg-auto"}
@@ -257,14 +271,18 @@ def test_auto_organize_uses_authorization_when_security_enabled(
     from src.categories import CategoriesConfig
 
     g, inbox_tools = _enable_auto_organize(monkeypatch, label="Auto/Skip")
-    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
     g._authorization_cache.clear()
     monkeypatch.setattr(g.settings, "security_enabled", True)
     fake_llms(classification="ignore", tool_sequence=[ai_tool_call("Done", {"done": True})])
 
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_auto")
-    monkeypatch.setattr(inbox_tools, "modify_labels", lambda *a, **k: {"id": a[0]})
-    monkeypatch.setattr(inbox_tools, "archive_message", lambda message_id: {"id": message_id})
+    patch_provider(
+        monkeypatch,
+        inbox_tools,
+        ensure_label=lambda label: "Label_auto",
+        modify_labels=lambda *a, **k: {"id": a[0]},
+        archive_message=lambda message_id: {"id": message_id},
+    )
 
     authz_calls: list[dict] = []
 
@@ -309,11 +327,12 @@ def test_automation_label_only_plan_runs_without_notify(monkeypatch):
     monkeypatch.setattr(g.settings, "security_enabled", False)
     monkeypatch.setitem(g.tools_by_name_map, "apply_label", inbox_tools.apply_label)
     applied: list[tuple] = []
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_x")
-    monkeypatch.setattr(
+    patch_provider(
+        monkeypatch,
         inbox_tools,
-        "modify_labels",
-        lambda message_id, **k: applied.append((message_id, k)) or {"id": message_id},
+        ensure_label=lambda label: "Label_x",
+        modify_labels=lambda message_id, **k: applied.append((message_id, k))
+        or {"id": message_id},
     )
 
     email = {
@@ -341,8 +360,12 @@ def test_automation_notify_rule_tags_classification(monkeypatch):
 
     monkeypatch.setattr(g.settings, "security_enabled", False)
     monkeypatch.setitem(g.tools_by_name_map, "apply_label", inbox_tools.apply_label)
-    monkeypatch.setattr(inbox_tools, "ensure_label", lambda label: "Label_x")
-    monkeypatch.setattr(inbox_tools, "modify_labels", lambda message_id, **k: {"id": message_id})
+    patch_provider(
+        monkeypatch,
+        inbox_tools,
+        ensure_label=lambda label: "Label_x",
+        modify_labels=lambda message_id, **k: {"id": message_id},
+    )
 
     email = {
         "author": "a@example.com", "to": "me@example.com", "subject": "Hi",
@@ -380,7 +403,7 @@ def test_llm_call_includes_writing_style_in_prompt(monkeypatch, fake_llms, respo
 
     fake_llms(classification="respond")
     from src.categories import CategoriesConfig
-    monkeypatch.setattr(g, "load_categories", lambda: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
     monkeypatch.setattr(g, "llm_with_tools", _CaptureToolLLM())
     store = InMemoryStore()
     store.put(namespace("writing_style"), "user_preferences", wrap_preferences("Use a warm concise voice."))
@@ -412,7 +435,7 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     fake_llms(
         classification="respond",
         tool_sequence=[ai_tool_call("Done", {"done": True})],
@@ -455,7 +478,7 @@ def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, 
             }
         ],
     )
-    monkeypatch.setattr(g, "load_categories", lambda: cfg)
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: cfg)
     fake_llms(classification="notify")
 
     result = email_assistant.invoke({"email_input": respond_email}, _cfg())

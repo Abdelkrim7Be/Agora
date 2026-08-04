@@ -131,7 +131,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void owner_can_create_agent_instance() throws Exception {
+    void admin_can_create_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -147,18 +147,33 @@ class AgentRegistryTest {
                 "description", "CEO mailbox workspace"
         ));
 
+        // Admin keeps platform-wide creation, but owner is also allowed to create
+        // self-service email-agent instances under the per-user quota.
         mockMvc.perform(post("/agent-instances")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value("ceo-email-agent"))
-                .andExpect(jsonPath("$.mailbox_identity").value("ceo@example.com"))
                 .andExpect(jsonPath("$.created_by").value("owner"));
+
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "admin-ceo-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Admin CEO Email Agent",
+                                "mailbox_identity", "admin-ceo@example.com"
+                        ))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value("admin-ceo-email-agent"))
+                .andExpect(jsonPath("$.mailbox_identity").value("admin-ceo@example.com"))
+                .andExpect(jsonPath("$.created_by").value("admin"));
     }
 
     @Test
-    void owner_can_rename_agent_instance() throws Exception {
+    void admin_can_rename_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -166,7 +181,7 @@ class AgentRegistryTest {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
 
-        String token = login("owner", "ownerpass");
+        String token = login("admin", "adminpass");
         mockMvc.perform(post("/agent-instances")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -190,7 +205,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void owner_can_delete_agent_instance() throws Exception {
+    void admin_can_delete_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -198,7 +213,7 @@ class AgentRegistryTest {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
 
-        String token = login("owner", "ownerpass");
+        String token = login("admin", "adminpass");
         mockMvc.perform(post("/agent-instances")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -219,7 +234,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void deactivated_agent_instance_stays_visible_to_owner_for_reactivation() throws Exception {
+    void deactivated_agent_instance_stays_visible_to_admin_for_reactivation() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
@@ -227,7 +242,7 @@ class AgentRegistryTest {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
 
-        String token = login("owner", "ownerpass");
+        String token = login("admin", "adminpass");
         String body = objectMapper.writeValueAsString(Map.of(
                 "id", "delete-me-email-agent",
                 "agent_type", "email-agent",
@@ -257,7 +272,7 @@ class AgentRegistryTest {
     }
 
     @Test
-    void viewer_cannot_create_agent_instance() throws Exception {
+    void viewer_can_create_email_agent_instance() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of(
                 "agent_type", "email-agent",
                 "display_name", "HR Email Agent"
@@ -267,7 +282,55 @@ class AgentRegistryTest {
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.agent_type").value("email-agent"))
+                .andExpect(jsonPath("$.created_by").value("viewer"))
+                .andExpect(jsonPath("$.effective_role").value("owner"));
+    }
+
+    @Test
+    void viewer_self_service_email_agent_instances_are_limited_to_five() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"drafts\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
+
+        String adminToken = login("admin", "adminpass");
+        mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "quota_viewer",
+                                "password", "quota-pass",
+                                "role", "viewer"
+                        ))))
+                .andExpect(status().isCreated());
+
+        String token = login("quota_viewer", "quota-pass");
+        for (int i = 1; i <= 5; i += 1) {
+            mockMvc.perform(post("/agent-instances")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of(
+                                    "id", "viewer-email-agent-" + i,
+                                    "agent_type", "email-agent",
+                                    "display_name", "Viewer Email Agent " + i
+                            ))))
+                    .andExpect(status().isCreated());
+        }
+
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "viewer-email-agent-6",
+                                "agent_type", "email-agent",
+                                "display_name", "Viewer Email Agent 6"
+                        ))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("email-agent instance limit reached: 5"));
     }
 
     @Test

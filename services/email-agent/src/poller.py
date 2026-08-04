@@ -83,32 +83,14 @@ from src.automation import (
     workflow_sla_snapshot,
 )
 from src.config import load_config, settings
-from src.memory import namespace, wrap_preferences
+from src.runtime_settings import load_runtime_settings
+from src.memory import ORIGIN_LEARNED, namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
-from src.security_client import sanitize_email
-from src.gmail_client import (
-    current_history_id,
-    download_attachment,
-    extract_pdf_text,
-    fetch_history_message_refs,
-    fetch_messages_batch,
-    fetch_sender_correspondence,
-    fetch_sent,
-    fetch_thread,
-    fetch_unread,
-    format_sender_correspondence,
-    get_message,
-    gmail_resource,
-    gmail_to_email_input,
-    is_stale_history_error,
-    list_labels,
-    list_messages_by_label,
-    mark_as_read,
-    modify_labels,
-    search_messages,
-    watch_mailbox,
-)
+from src.security_client import classify_content, sanitize_email
+from src.gmail_client import extract_pdf_text
+from src.mail import get_provider
 from src.categories import classify_category, load_categories
+from src.junk_config import load_junk
 from src.junk_gate import is_junk
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
@@ -123,6 +105,7 @@ from src.retention import run_retention
 from src.trace import setup_trace_store
 from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail_sync
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
+from src.campaigns import due_campaign_ids, load_campaign_runs, save_campaign_runs, send_campaign_run
 from src.run_registry import (
     ACTIVE_RUN_STATUSES,
     find_run_by_email,
@@ -137,6 +120,7 @@ from src.tenant import (
     agent_instance_context,
     current_agent_instance_id,
     normalize_agent_instance_id,
+    user_context,
 )
 
 
@@ -178,7 +162,7 @@ def _backoff_seconds(attempt: int) -> float:
 async def process_message_with_retry(
     graph,
     msg_id: str,
-    resource,
+    provider,
     rules_config: RulesConfig,
     message: dict | None = None,
 ) -> tuple:
@@ -186,7 +170,7 @@ async def process_message_with_retry(
     attempt = 0
     while True:
         try:
-            return await process_message(graph, msg_id, resource, rules_config, message=message)
+            return await process_message(graph, msg_id, provider, rules_config, message=message)
         except Exception as exc:
             if not _is_transient_error(exc):
                 print(f"poller: {msg_id} failed without retry: {exc}")
@@ -200,9 +184,9 @@ async def process_message_with_retry(
                 print(f"poller: {msg_id} exhausted retries: {exc}")
                 record_failure(str(exc))
                 try:
-                    message = get_message(msg_id, resource=resource)
-                    thread = fetch_thread(message["threadId"], resource=resource)
-                    payload = gmail_to_email_input(message, thread_messages=thread)
+                    message = provider.get_message(msg_id)
+                    thread = provider.fetch_thread(message["threadId"])
+                    payload = provider.to_email_input(message, thread_messages=thread)
                 except Exception:
                     payload = {"email_id": msg_id}
                 record_dead_letter({"message_id": msg_id, "reason": "retry_exhausted", "error": str(exc), "payload": payload})
@@ -259,7 +243,33 @@ def sweep_pending_approval_slas(now: datetime | None = None) -> list[tuple[str, 
     return escalated
 
 
-def ensure_watch(resource=None) -> dict | None:
+def sweep_due_campaigns(now: datetime | None = None) -> list[tuple[str, str, str]]:
+    """Send scheduled campaigns that were already approved by the owner."""
+    instance_id = current_agent_instance_id()
+    records = load_campaign_runs(agent_instance_id=instance_id)
+    outcomes: list[tuple[str, str, str]] = []
+    changed = False
+    for campaign_id in due_campaign_ids(now=now, agent_instance_id=instance_id):
+        record = records.get(campaign_id)
+        if not record or record.get("agent_instance_id") != instance_id:
+            continue
+        try:
+            send_campaign_run(campaign_id, record)
+            status = record.get("status") or "sent"
+        except Exception as exc:
+            record["status"] = "failed"
+            record["result"] = {"sent": [], "denied": [], "failed": [{"email": None, "error": str(exc)}]}
+            status = "failed"
+        record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        records[campaign_id] = record
+        changed = True
+        outcomes.append((campaign_id, status, "campaign"))
+    if changed:
+        save_campaign_runs(records, agent_instance_id=instance_id)
+    return outcomes
+
+
+def ensure_watch(provider=None) -> dict | None:
     """Register/renew the Gmail push watch and seed the sync baseline.
 
     Seeding the baseline at watch time is what makes the first push processable:
@@ -268,8 +278,8 @@ def ensure_watch(resource=None) -> dict | None:
     """
     if not settings.gmail_webhook_enabled:
         return None
-    resource = resource or gmail_resource()
-    result = watch_mailbox(resource=resource)
+    provider = provider or get_provider()
+    result = provider.watch_mailbox()
     history_id = str(result.get("historyId") or "")
     if history_id:
         set_last_history_id(history_id)
@@ -340,45 +350,42 @@ def ensure_watches(
     return results
 
 
-def resurface_due_snoozed(resource, rules_config: RulesConfig) -> list[tuple[str, str]]:
+def resurface_due_snoozed(provider, rules_config: RulesConfig) -> list[tuple[str, str]]:
     """Move due snoozed messages back to INBOX/UNREAD."""
     surfaced: list[tuple[str, str]] = []
-    for label in due_snooze_labels(list_labels(resource=resource), rules_config):
+    for label in due_snooze_labels(provider.list_labels(), rules_config):
         label_id = label["id"]
         label_name = label.get("name", label_id)
-        refs = list_messages_by_label(
+        refs = provider.list_messages_by_label(
             label_id,
             rules_config.snooze.max_resurface_per_run,
-            resource=resource,
         )
         for ref in refs:
             msg_id = ref["id"]
-            modify_labels(
+            provider.modify_labels(
                 msg_id,
                 add_label_ids=["INBOX", "UNREAD"],
                 remove_label_ids=[label_id],
-                resource=resource,
             )
             surfaced.append((msg_id, label_name))
     return surfaced
 
 
-async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tuple]:
+async def poll_follow_ups(graph, provider, rules_config: RulesConfig) -> list[tuple]:
     """Find old awaiting-reply threads and propose a nudge through HITL."""
     if not rules_config.follow_ups.enabled:
         return []
 
     outcomes: list[tuple] = []
-    refs = search_messages(
+    refs = provider.search_messages(
         follow_up_query(rules_config),
         rules_config.follow_ups.max_results,
-        resource=resource,
     )
     for ref in refs:
         msg_id = ref["id"]
-        message = get_message(msg_id, resource=resource)
-        thread = fetch_thread(message["threadId"], resource=resource)
-        email_input = gmail_to_email_input(message, thread_messages=thread)
+        message = provider.get_message(msg_id)
+        thread = provider.fetch_thread(message["threadId"])
+        email_input = provider.to_email_input(message, thread_messages=thread)
         plan = build_follow_up_plan(email_input, rules_config)
         if not plan:
             continue
@@ -402,10 +409,88 @@ async def poll_follow_ups(graph, resource, rules_config: RulesConfig) -> list[tu
     return outcomes
 
 
+async def retry_security_holds(
+    graph,
+    provider,
+    rules_config: RulesConfig,
+    exclude_message_ids: set[str] | None = None,
+) -> list[tuple]:
+    """Re-attempt every security_hold run directly by message id.
+
+    Gmail's incremental history.list diff only surfaces messages that changed
+    since the last saved baseline — a message that was already unread when it
+    got parked at security_hold in an earlier cycle never reappears in that
+    diff on its own, so without this it would sit held forever even though
+    _process_message_locked is now willing to retry it. Bypasses discovery
+    entirely and goes straight to the known message ids from the registry.
+    """
+    held = list_runs(
+        status="security_hold",
+        user_id=None,
+        agent_instance_id=current_agent_instance_id(),
+        limit=500,
+    )
+    exclude_message_ids = exclude_message_ids or set()
+    outcomes: list[tuple] = []
+    now = datetime.now(timezone.utc)
+    for msg_id, record in _newest_hold_per_message(held).items():
+        if msg_id in exclude_message_ids:
+            continue
+        if not _security_hold_retry_due(record, now):
+            continue
+        outcomes.append(await process_message_with_retry(graph, msg_id, provider, rules_config))
+    return outcomes
+
+
+def _newest_hold_per_message(held: list[dict]) -> dict[str, dict]:
+    """One retry candidate per held message, not per held run row.
+
+    A message that keeps tripping the classifier accumulates a run row per
+    attempt, so iterating the rows re-processes the same few messages hundreds
+    of times a cycle and starves the rest of the inbox. Retry the message.
+    """
+    newest: dict[str, dict] = {}
+    for record in held:
+        msg_id = record.get("email_id")
+        if not msg_id:
+            continue
+        current = newest.get(msg_id)
+        if current is None or _hold_sort_key(record) > _hold_sort_key(current):
+            newest[msg_id] = record
+    return newest
+
+
+def _hold_sort_key(record: dict) -> str:
+    return str(record.get("updated_at") or record.get("created_at") or "")
+
+
+# A message the classifier will always hold (an injection attempt, say) would
+# otherwise be re-attempted on every single cycle, burning an LLM call each time
+# and — because holds are retried before new mail — starving the rest of the
+# inbox. Back off between attempts instead of hammering it.
+SECURITY_HOLD_RETRY_BACKOFF_MIN = 15
+
+
+def _security_hold_retry_due(record: dict, now: datetime | None = None) -> bool:
+    """True when a held run has waited long enough to be worth re-attempting."""
+    now = now or datetime.now(timezone.utc)
+    last = record.get("updated_at") or record.get("created_at")
+    if not last:
+        return True
+    try:
+        seen = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    waited = (now - seen.astimezone(timezone.utc)).total_seconds()
+    return waited >= SECURITY_HOLD_RETRY_BACKOFF_MIN * 60
+
+
 async def process_message(
     graph,
     msg_id: str,
-    resource,
+    provider,
     rules_config: RulesConfig,
     message: dict | None = None,
 ) -> tuple:
@@ -417,90 +502,135 @@ async def process_message(
     with try_claim_message(current_agent_instance_id(), msg_id) as claimed:
         if not claimed:
             return (msg_id, "skipped", "")
-        return await _process_message_locked(graph, msg_id, resource, rules_config, message)
+        return await _process_message_locked(graph, msg_id, provider, rules_config, message)
 
 
 async def _process_message_locked(
     graph,
     msg_id: str,
-    resource,
+    provider,
     rules_config: RulesConfig,
     message: dict | None = None,
 ) -> tuple:
     # An email left UNREAD because it already has a run must not be reprocessed:
-    # a pending/held run would spawn a duplicate every cycle; a resolved one (e.g.
-    # an approved reply the API sent but couldn't mark read) just needs housekeeping.
+    # a pending run would spawn a duplicate every cycle; a resolved one (e.g. an
+    # approved reply the API sent but couldn't mark read) just needs housekeeping.
     # Checked BEFORE fetching the message: with a short poll interval, re-fetching
     # every known unread email each cycle burns the Gmail per-user quota (429s on
     # sends share the same budget).
+    #
+    # security_hold is the one exception: the registry doesn't distinguish a
+    # genuine detected threat from a transient classifier outage (both set
+    # classifier_unavailable/injection_detected but only the verdict, not which,
+    # survives into the stored run), so treating it as permanently settled meant
+    # a single contended Ollama moment parked a message forever — retried here
+    # every cycle instead; the message stays unread either way, so a real threat
+    # is never any less visible than it already was.
     existing = find_run_by_email(
         msg_id,
         # Runs belong to the mailbox instance, not to the actor who triggered sync.
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
     )
+    # A security_hold is retried below rather than skipped. Its existing run id
+    # is carried into that retry so the attempt updates the run instead of
+    # filing a new one: retrying every cycle otherwise left a fresh row per
+    # cycle for the same message, and one held message became dozens of runs.
+    retry_run_id = ""
     if existing:
-        if existing["status"] in ACTIVE_RUN_STATUSES:
+        if existing["status"] == "pending_approval":
             return (msg_id, existing["status"], existing["run_id"])
-        mark_as_read(msg_id, resource=resource)
-        return (msg_id, "skipped", existing["run_id"])
+        if existing["status"] != "security_hold":
+            provider.mark_as_read(msg_id)
+            return (msg_id, "skipped", existing["run_id"])
+        retry_run_id = existing["run_id"]
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
     if message is None:
-        message = get_message(msg_id, resource=resource)
+        message = provider.get_message(msg_id)
     labels = message.get("labelIds")
     if labels is not None and ("INBOX" not in labels or "UNREAD" not in labels):
         return (msg_id, "skipped", "")
 
     # Deterministic junk gate: bulk/no-reply mail never reaches the LLM or the
-    # validation box — unless a configured workflow claims it (workflow wins).
-    # Runs before fetch_thread so gated mail costs no extra Gmail call.
+    # validation box. Runs before fetch_thread so gated mail costs no extra
+    # Gmail call.
+    #
+    # Junk is judged on the message, not on who sent it. A category claim used to
+    # skip this check entirely, which meant one directory contact carrying a
+    # category turned every alert digest and newsletter from that address into a
+    # drafted reply — the sender matched, so nothing ever looked at the bulk
+    # headers. Detection now runs first and a category may only rescue automated
+    # mail when it says so explicitly (accepts_automated), which is what a real
+    # automated workflow like machine-issued invoices needs. Everything else
+    # loses to the junk verdict, and the junk allowlist remains the way to
+    # exempt a sender wholesale.
     gate_input = {
-        **gmail_to_email_input(message),
+        **provider.to_email_input(message),
         "agent_instance_id": current_agent_instance_id(),
     }
     categories_config = load_categories(agent_instance_id=current_agent_instance_id())
-    category_match = classify_category(gate_input, categories_config)
-    if not category_match.get("category"):
-        junk, junk_reason = is_junk(gate_input)
-        if junk:
-            run_id = str(uuid.uuid4())
-            upsert_run(
-                run_id,
-                "completed",
-                email_input={
-                    **gate_input,
-                    "category": "junk_auto",
-                    "category_display_name": "Ignoré automatiquement",
-                },
-                classification="ignore",
-                pending_action=None,
-                agent_instance_id=current_agent_instance_id(),
+    category_match = classify_category(
+        gate_input, categories_config, agent_instance_id=current_agent_instance_id()
+    )
+    junk, junk_reason = is_junk(
+        gate_input, load_junk(agent_instance_id=current_agent_instance_id())
+    )
+    claimed_category = category_match.get("category")
+    if junk and claimed_category:
+        claiming = next(
+            (c for c in categories_config.categories if c.name == claimed_category),
+            None,
+        )
+        if claiming is not None and claiming.accepts_automated:
+            print(
+                f"poller: {msg_id} looks automated ({junk_reason}) but category "
+                f"'{claimed_category}' accepts automated mail; keeping it"
             )
-            mark_as_read(msg_id, resource=resource)
-            print(f"poller: junk-gated {msg_id} ({junk_reason})")
-            return (msg_id, "completed", run_id)
+            junk = False
+        else:
+            print(
+                f"poller: {msg_id} claimed by category '{claimed_category}' but "
+                f"junk-gated anyway ({junk_reason})"
+            )
+    if junk:
+        run_id = str(uuid.uuid4())
+        upsert_run(
+            run_id,
+            "completed",
+            email_input={
+                **gate_input,
+                "category": "junk_auto",
+                "category_display_name": "Ignoré automatiquement",
+                "junk_reason": junk_reason,
+            },
+            classification="ignore",
+            pending_action=None,
+            agent_instance_id=current_agent_instance_id(),
+        )
+        provider.mark_as_read(msg_id)
+        print(f"poller: junk-gated {msg_id} ({junk_reason})")
+        return (msg_id, "completed", run_id)
 
-    thread = fetch_thread(message["threadId"], resource=resource)
+    thread = provider.fetch_thread(message["threadId"])
     email_input = {
-        **gmail_to_email_input(message, thread_messages=thread),
+        **provider.to_email_input(message, thread_messages=thread),
         "agent_instance_id": current_agent_instance_id(),
     }
 
     # Relationship context: how the owner previously wrote to this sender
     # (outside this thread) so replies match the established register. Runs
     # before sanitization so the block passes the same security boundary.
-    correspondence = fetch_sender_correspondence(
+    correspondence = provider.fetch_sender_correspondence(
         email_input.get("author", ""),
         exclude_thread_id=message.get("threadId", ""),
-        resource=resource,
     )
     if correspondence:
         email_input = {
             **email_input,
             "email_thread": email_input["email_thread"]
             + "\n\n"
-            + format_sender_correspondence(correspondence),
+            + provider.format_sender_correspondence(correspondence),
         }
 
     if settings.extract_attachments:
@@ -508,7 +638,7 @@ async def _process_message_locked(
         for att in email_input.get("attachments", []):
             if att["mime_type"] == "application/pdf" and att.get("attachment_id"):
                 try:
-                    raw = download_attachment(msg_id, att["attachment_id"], resource=resource)
+                    raw = provider.download_attachment(msg_id, att["attachment_id"])
                     text = extract_pdf_text(raw, settings.attachment_max_chars)
                     if text:
                         pdf_blocks.append(f"--- {att['filename']} ---\n{text}")
@@ -531,10 +661,16 @@ async def _process_message_locked(
         security_flagged = bool(
             verdict["injection_detected"] or verdict["classifier_unavailable"]
         )
+        # When the drafting model is hosted, it reads the redacted copy. The
+        # real values are restored in tool_node immediately before an action
+        # runs, so nothing leaves with a placeholder in it.
+        redaction_map = verdict.get("redaction_map") or {}
+        use_redacted = bool(settings.redact_for_model and redaction_map)
         email_input = {
             **email_input,
-            "email_thread": verdict["cleaned_text"],
+            "email_thread": verdict["redacted_text"] if use_redacted else verdict["cleaned_text"],
             "security": {
+                "redaction_map": redaction_map if use_redacted else {},
                 "injection_detected": verdict["injection_detected"],
                 "classification": verdict["classification"],
                 "classifier_unavailable": verdict["classifier_unavailable"],
@@ -547,7 +683,7 @@ async def _process_message_locked(
     if rule_plan:
         email_input = {**email_input, "automation": rule_plan}
 
-    run_id = str(uuid.uuid4())
+    run_id = retry_run_id or str(uuid.uuid4())
     cfg = {"configurable": {"thread_id": run_id}}
 
     result = await graph.ainvoke({"email_input": email_input}, cfg)
@@ -561,6 +697,29 @@ async def _process_message_locked(
         outcome_status = "security_hold"
     else:
         outcome_status = "notify" if result.get("classification_decision") == "notify" else "completed"
+
+    # Second look before a draft becomes approvable.
+    #
+    # /sanitize skips the quarantined classifier when no heuristic keyword fires,
+    # so an injection written without the obvious phrases reaches the model
+    # unclassified. Running the classifier on every message would put a slow
+    # local model in front of the whole mailbox — which is what parked every
+    # message at security_hold before. Running it only on the messages that
+    # produced a reply narrows the cost to the output that can actually reach a
+    # human and be approved, and it happens before the run is recorded, so there
+    # is never a window where a poisoned draft is sitting there approvable.
+    if (
+        outcome_status == "pending_approval"
+        and settings.security_enabled
+        and settings.security_deep_check_drafts
+        and not security_flagged
+    ):
+        verdict = await classify_content(email_input.get("email_thread", ""))
+        if verdict.get("trust") == "HOSTILE":
+            print(f"🛡️ {msg_id}: draft withdrawn, deep classification returned HOSTILE")
+            security_flagged = True
+            outcome_status = "security_hold"
+            result = {**result, "__interrupt__": None}
 
     record_digest_item(rules_config, outcome_status, email_input, run_id)
     run_email_input = _run_email_input(email_input, result)
@@ -577,30 +736,60 @@ async def _process_message_locked(
         # affect the approval that was just created.
         notify_pending_approval(run_id, email_input, result)
     if outcome_status in {"completed", "notify"}:
-        mark_as_read(msg_id, resource=resource)
+        provider.mark_as_read(msg_id)
     return (msg_id, outcome_status, run_id)
 
 
 async def poll_history(
     graph,
     start_history_id: str,
-    resource=None,
+    provider=None,
     rules_config: RulesConfig | None = None,
 ) -> list[tuple]:
     """Process Gmail messages referenced by push-notification history events."""
-    resource = resource or gmail_resource()
+    provider = provider or get_provider()
     rules_config = rules_config or load_rules()
     outcomes: list[tuple] = []
-    for ref in fetch_history_message_refs(start_history_id, resource=resource):
-        outcome = await process_message_with_retry(graph, ref["id"], resource, rules_config)
+    for ref in provider.fetch_changes_since(start_history_id):
+        outcome = await process_message_with_retry(graph, ref["id"], provider, rules_config)
         if outcome[1] != "skipped":
             outcomes.append(outcome)
     maybe_emit_daily_digest(rules_config)
     return outcomes
 
 
+def _unique_refs(refs: list[dict]) -> list[dict]:
+    """Drop repeated message ids, keeping first-seen order."""
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for ref in refs:
+        msg_id = ref.get("id")
+        if not msg_id or msg_id in seen:
+            continue
+        seen.add(msg_id)
+        unique.append(ref)
+    return unique
+
+
+def _messages_awaiting_approval() -> set[str]:
+    """Gmail ids of this instance's runs already parked on a human decision."""
+    try:
+        pending = list_runs(
+            status="pending_approval",
+            user_id=None,
+            agent_instance_id=current_agent_instance_id(),
+            limit=500,
+        )
+    except Exception as exc:
+        # Never let a registry hiccup stop detection; worst case is the old
+        # behavior of re-fetching mail that will be deduped downstream anyway.
+        print(f"poller: could not list pending approvals, not filtering: {exc}")
+        return set()
+    return {record["email_id"] for record in pending if record.get("email_id")}
+
+
 async def _discover_unread_refs(
-    resource,
+    provider,
     max_results: int,
     prefetch: bool = True,
 ) -> tuple[list[dict], dict[str, dict], str, bool]:
@@ -619,19 +808,42 @@ async def _discover_unread_refs(
     baseline = get_last_history_id()
     if baseline:
         try:
-            history_refs = fetch_history_message_refs(baseline, resource=resource)
+            history_refs = provider.fetch_changes_since(baseline)
             truncated = len(history_refs) > max_results
             refs = history_refs[:max_results]
         except Exception as exc:
-            if not is_stale_history_error(exc):
+            if not provider.is_stale_cursor_error(exc):
                 raise
             print(f"poller: history window stale; falling back to full unread scan: {exc}")
     try:
-        next_baseline = current_history_id(resource=resource)
+        next_baseline = provider.current_sync_cursor()
     except Exception:
         next_baseline = ""
     if refs is None:
-        refs = fetch_unread(max_results, resource=resource)
+        refs = provider.fetch_unread(max_results)
+    elif not refs:
+        # An empty history window means "nothing changed since the baseline",
+        # which is not the same as "nothing is waiting". Anything that became
+        # unread while the baseline was being advanced — or was restored to the
+        # inbox out of spam, or had its run cleared by hand — is invisible to the
+        # diff forever after. This mailbox sat on unread mail for hours that way.
+        # A full unread list is one call, and the run registry dedups whatever it
+        # returns, so reconcile whenever the incremental path comes back empty.
+        refs = provider.fetch_unread(max_results)
+
+    # history.list reports one record per change, so the same message shows up
+    # several times in a window where it was e.g. delivered and then labelled.
+    refs = _unique_refs(refs)
+
+    # Mail already waiting on a human keeps its UNREAD flag on purpose, so every
+    # cycle rediscovers it forever. _process_message_locked would return it
+    # untouched anyway, but only after the batch below has fetched its full body:
+    # a mailbox holding twenty pending approvals re-downloaded twenty messages a
+    # minute, indefinitely, against the same Gmail quota that sends draw on.
+    # Drop them here instead, where it costs one registry read for the batch.
+    awaiting_human = _messages_awaiting_approval()
+    if awaiting_human:
+        refs = [ref for ref in refs if ref["id"] not in awaiting_human]
 
     # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
     # round-trip per 50 instead of one per message. Failure falls back to the
@@ -641,7 +853,7 @@ async def _discover_unread_refs(
     if prefetch and len(refs) > 3:
         try:
             prefetched = await asyncio.to_thread(
-                fetch_messages_batch, [ref["id"] for ref in refs], resource
+                provider.fetch_messages_batch, [ref["id"] for ref in refs]
             )
         except Exception as exc:
             print(f"poller: batch message fetch failed, using serial: {exc}")
@@ -650,7 +862,7 @@ async def _discover_unread_refs(
 
 async def poll_once(
     graph,
-    resource=None,
+    provider=None,
     max_results: int | None = None,
     rules_config: RulesConfig | None = None,
 ) -> list[tuple]:
@@ -663,29 +875,33 @@ async def poll_once(
     forced-notify has no delivery surface yet, so don't archive a threat silently —
     keep it visible in the inbox until the human handles it. Returns (msg_id, status, run_id).
     """
-    resource = resource or gmail_resource()
-    max_results = max_results or settings.max_emails_per_run
+    provider = provider or get_provider()
+    max_results = max_results or load_runtime_settings().sync_limit
     rules_config = rules_config or load_rules()
 
     outcomes: list[tuple] = []
     if rules_config.snooze.enabled:
-        for msg_id, label_name in resurface_due_snoozed(resource, rules_config):
+        for msg_id, label_name in resurface_due_snoozed(provider, rules_config):
             outcomes.append((msg_id, "snoozed_resurfaced", label_name))
 
     refs, prefetched, next_baseline, truncated = await _discover_unread_refs(
-        resource, max_results
+        provider, max_results
     )
 
     for ref in refs:
         outcomes.append(await process_message_with_retry(
-            graph, ref["id"], resource, rules_config, message=prefetched.get(ref["id"])
+            graph, ref["id"], provider, rules_config, message=prefetched.get(ref["id"])
         ))
     # A truncated history batch keeps the old baseline so the overflow is picked
     # up next cycle (already-processed overlap is deduped, never re-run).
     if next_baseline and not truncated:
         set_last_history_id(next_baseline)
 
-    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    outcomes.extend(await retry_security_holds(
+        graph, provider, rules_config, {msg_id for msg_id, _status, _run_id in outcomes}
+    ))
+    outcomes.extend(await poll_follow_ups(graph, provider, rules_config))
+    outcomes.extend(await asyncio.to_thread(sweep_due_campaigns))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
     await asyncio.to_thread(sweep_pending_approval_slas)
@@ -695,7 +911,7 @@ async def poll_once(
 
 async def enqueue_once(
     graph,
-    resource=None,
+    provider=None,
     max_results: int | None = None,
     rules_config: RulesConfig | None = None,
 ) -> list[tuple]:
@@ -709,16 +925,16 @@ async def enqueue_once(
     both just flip a message back to UNREAD / propose a nudge run directly, and
     the next detection pass enqueues any resulting unread mail normally.
     """
-    resource = resource or gmail_resource()
-    max_results = max_results or settings.max_emails_per_run
+    provider = provider or get_provider()
+    max_results = max_results or load_runtime_settings().sync_limit
     rules_config = rules_config or load_rules()
     instance_id = current_agent_instance_id()
 
     if rules_config.snooze.enabled:
-        resurface_due_snoozed(resource, rules_config)
+        resurface_due_snoozed(provider, rules_config)
 
     refs, _prefetched, next_baseline, truncated = await _discover_unread_refs(
-        resource, max_results, prefetch=False
+        provider, max_results, prefetch=False
     )
     outcomes: list[tuple] = []
     for ref in refs:
@@ -730,7 +946,8 @@ async def enqueue_once(
     if next_baseline and not truncated:
         set_last_history_id(next_baseline)
 
-    outcomes.extend(await poll_follow_ups(graph, resource, rules_config))
+    outcomes.extend(await poll_follow_ups(graph, provider, rules_config))
+    outcomes.extend(await asyncio.to_thread(sweep_due_campaigns))
     for _msg_id, status, _run_id in outcomes:
         inc_counter("agora_poller_processed_total", status=status)
     enqueued_count = sum(1 for _msg_id, status, _run_id in outcomes if status == "enqueued")
@@ -771,6 +988,32 @@ def active_email_agent_instance_ids() -> list[str]:
     return list(dict.fromkeys(instances)) or [default]
 
 
+def _instance_owner(instance_id: str) -> str | None:
+    """Look up the platform user an instance belongs to (its creator).
+
+    Every run the poller creates needs the tenant context bound to whoever
+    actually owns the mailbox, not a single global default — otherwise every
+    instance's runs get stamped with AGENT_DEFAULT_USER_ID regardless of who
+    created it, and the real owner's Validation/Dashboard views never see
+    them (RLS/tenant-scoped queries filter by the requesting user's id).
+    """
+    if not settings.database_url:
+        return None
+    try:
+        from src.postgres import tenant_connection
+
+        with tenant_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT created_by FROM agent_instance WHERE id = %s", (instance_id,)
+                )
+                row = cur.fetchone()
+    except Exception as exc:
+        print(f"poller: owner lookup failed for {instance_id}: {exc}")
+        return None
+    return row[0] if row and row[0] else None
+
+
 # Above this many active mailboxes, random jitter no longer spreads the load
 # evenly; switch to a strict round-robin rotation + even spacing instead.
 _ROUND_ROBIN_THRESHOLD = 5
@@ -805,7 +1048,7 @@ def _instance_stagger_seconds(count: int) -> float:
 _style_seed_attempted: set[str] = set()
 
 
-async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
+async def maybe_seed_style_profile(instance_id: str, store, provider) -> None:
     if store is None or instance_id in _style_seed_attempted:
         return
     _style_seed_attempted.add(instance_id)
@@ -816,7 +1059,7 @@ async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
         existing = await store.aget(namespace("writing_style"), "user_preferences")
         if existing:
             return
-        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        samples = await asyncio.to_thread(provider.fetch_sent, load_runtime_settings().style_sent_sample)
         if not samples:
             print(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
             _style_seed_attempted.discard(instance_id)
@@ -825,7 +1068,9 @@ async def maybe_seed_style_profile(instance_id: str, store, resource) -> None:
 
         profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
         text = build_style_text(profile)
-        await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(text))
+        await store.aput(
+            namespace("writing_style"), "user_preferences", wrap_preferences(text, ORIGIN_LEARNED)
+        )
         print(f"poller: {instance_id} seeded writing style from {len(samples)} sent email(s)")
     except Exception as exc:
         # Best-effort: drafts fall back to the configured default style.
@@ -849,7 +1094,8 @@ async def poll_active_instances_once(
         if index:
             await asyncio.sleep(_instance_stagger_seconds(len(ordered)))
         instance_id = normalize_agent_instance_id(raw_instance_id)
-        with agent_instance_context(instance_id):
+        with user_context(_instance_owner(instance_id)):
+          with agent_instance_context(instance_id):
             try:
                 if get_status().get("paused"):
                     print(f"poller: {instance_id} is paused")
@@ -861,12 +1107,12 @@ async def poll_active_instances_once(
                     continue
                 try:
                     reload_config()
-                    resource = gmail_resource()
-                    await maybe_seed_style_profile(instance_id, store, resource)
+                    provider = get_provider()
+                    await maybe_seed_style_profile(instance_id, store, provider)
                     if settings.job_queue_enabled:
-                        outcomes = await enqueue_once(graph, resource=resource)
+                        outcomes = await enqueue_once(graph, provider=provider)
                     else:
-                        outcomes = await poll_once(graph, resource=resource)
+                        outcomes = await poll_once(graph, provider=provider)
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))
@@ -910,7 +1156,8 @@ async def sweep_active_instances_once(
     results: dict[str, list[tuple[str, str]]] = {}
     for raw_instance_id in instances:
         instance_id = normalize_agent_instance_id(raw_instance_id)
-        with agent_instance_context(instance_id):
+        with user_context(_instance_owner(instance_id)):
+          with agent_instance_context(instance_id):
             try:
                 if get_status().get("paused") or not has_stored_token(instance_id):
                     results[instance_id] = []

@@ -1,7 +1,7 @@
 endpoint: "http://ollama:11434/v1"
 temperature: 0.0
 max_tokens: 700
-timeout: 120
+timeout: 300
 roles:
   triage: "openai:qwen2.5:3b-8k"
   quarantine: "openai:qwen2.5:3b-8k"

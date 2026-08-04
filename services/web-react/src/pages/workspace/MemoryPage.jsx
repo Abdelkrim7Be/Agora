@@ -18,6 +18,21 @@ const MEMORY_CARDS = [
   { kind: 'writing_style', label: 'Ce que l’agent a appris sur votre style' },
 ];
 
+const ORIGIN_LABELS = {
+  setup: 'appris pendant la configuration',
+  learned: 'appris par l’agent',
+  manual: 'modifié manuellement',
+  default: 'configuration par défaut',
+};
+
+function normalizeSummary(data) {
+  const source = data?.summary || data || {};
+  return MEMORY_CARDS.reduce((acc, card) => {
+    acc[card.kind] = Array.isArray(source[card.kind]) ? source[card.kind] : [];
+    return acc;
+  }, { origins: source.origins || data?.origins || {} });
+}
+
 export default function MemoryPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
@@ -26,6 +41,7 @@ export default function MemoryPage() {
 
   const [triage, setTriage] = useState('');
   const [response, setResponse] = useState('');
+  const [activeKind, setActiveKind] = useState(MEMORY_CARDS[0].kind);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
@@ -100,42 +116,67 @@ export default function MemoryPage() {
     }
   };
 
-  const summary = summaryQuery.data || {};
+  const summary = normalizeSummary(summaryQuery.data);
+  const learnedCount = MEMORY_CARDS.reduce((count, card) => count + (summary[card.kind] || []).length, 0);
+  const loadingMemory = summaryQuery.isFetching || memoryQuery.isFetching;
+  const activeCard = MEMORY_CARDS.find((card) => card.kind === activeKind) || MEMORY_CARDS[0];
+  const activeItems = summary[activeCard.kind] || [];
 
   return (
     <>
       <PageHeading view="memory" />
+      {summaryQuery.data && learnedCount === 0 ? (
+        <div className="notice"><strong>Mémoire vide :</strong> aucun apprentissage personnalisé n’a encore été extrait des validations, corrections ou e-mails envoyés. Les brouillons utilisent encore la configuration par défaut.</div>
+      ) : null}
       <div className="toolbar">
-        <button type="button" onClick={handleReload}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger la mémoire</span>
+        <button type="button" onClick={handleReload} disabled={loadingMemory}>
+          <span className={`material-symbols-outlined${loadingMemory ? ' spin' : ''}`} aria-hidden="true">sync</span><span>{loadingMemory ? 'Lecture…' : 'Actualiser'}</span>
         </button>
-        <button className="primary" type="button" onClick={handleSave}>
+        <button className="primary" type="button" onClick={handleSave} disabled={saveMemory.isPending}>
           <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer la mémoire</span>
         </button>
-        <button className="danger" type="button" onClick={handleClearAll}>
+        <button className="danger" type="button" onClick={handleClearAll} disabled={clearMemory.isPending}>
           <span className="material-symbols-outlined" aria-hidden="true">delete_forever</span><span>Effacer toute la mémoire</span>
         </button>
+        {loadingMemory ? (
+          <div className="progress-track">
+            <span className="progress-track-dot" aria-hidden="true" />
+            <div className="progress-bar-indeterminate" role="progressbar" aria-label="Lecture de la mémoire en cours" />
+            <span className="progress-track-label">Lecture de la mémoire…</span>
+          </div>
+        ) : null}
       </div>
-      <div className="memory-cards-grid">
-        {MEMORY_CARDS.map(({ kind, label }) => {
-          const items = summary[kind] || [];
-          return (
-            <Card className="memory-card" key={kind}>
-              <strong>{label}</strong>
-              <ul className="memory-items">
-                {items.length ? items.map((item) => (
-                  <li className="memory-item" key={item.id}>
-                    {item.display_text || item.text}
-                    {canManage && (
-                      <button type="button" className="memory-item-delete" aria-label="Supprimer cet apprentissage" onClick={() => handleDeleteItem(kind, item.id)}>×</button>
-                    )}
-                  </li>
-                )) : <li className="memory-empty">Rien d’appris pour le moment.</li>}
-              </ul>
-            </Card>
-          );
-        })}
+      <div className="memory-tabs" role="tablist" aria-label="Types de mémoire">
+        {MEMORY_CARDS.map(({ kind, label }) => (
+          <button
+            key={kind}
+            type="button"
+            role="tab"
+            aria-selected={activeKind === kind}
+            className={activeKind === kind ? 'active' : ''}
+            onClick={() => setActiveKind(kind)}
+          >
+            <span>{label.replace('Ce que l’agent a appris sur ', '')}</span>
+            <strong>{(summary[kind] || []).length}</strong>
+          </button>
+        ))}
       </div>
+      <Card className="memory-card memory-card-focused">
+        <div className="memory-card-title">
+          <strong>{activeCard.label}</strong>
+          <span className="mini-chip">{ORIGIN_LABELS[summary.origins?.[activeCard.kind]] || 'provenance inconnue'}</span>
+        </div>
+        <ul className="memory-items">
+          {activeItems.length ? activeItems.map((item) => (
+            <li className="memory-item" key={item.id}>
+              {item.display_text || item.text}
+              {canManage && (
+                <button type="button" className="memory-item-delete" aria-label="Supprimer cet apprentissage" onClick={() => handleDeleteItem(activeCard.kind, item.id)}>×</button>
+              )}
+            </li>
+          )) : <li className="memory-empty">Rien d’appris dans cette section pour le moment.</li>}
+        </ul>
+      </Card>
       {canManage && (
         <details className="card persona-advanced-card">
           <summary>Données techniques</summary>

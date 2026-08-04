@@ -46,6 +46,55 @@ def test_memory_items_split_and_stable_ids():
     assert items[0]["id"] != other_kind[0]["id"]
 
 
+# Preferences are stored hard-wrapped, which is what the naive line split shredded.
+WRAPPED = (
+    "Classify RESPOND only when a real person asks something actionable of this\n"
+    "mailbox. Automated, transactional, or bulk mail is never RESPOND, even when\n"
+    "it contains links or calls to action.\n"
+    "\n"
+    "Emails that are not worth responding to (ignore):\n"
+    "- Marketing newsletters, promotional or bulk emails\n"
+    "- Delivery confirmations, receipts, subscription or renewal\n"
+    "  reminders\n"
+    "Emails worth knowing about but needing no reply (notify):\n"
+    "- Build system notifications\n"
+)
+
+
+def test_wrapped_paragraph_stays_one_item():
+    texts = [item["text"] for item in memory_items("triage_preferences", WRAPPED)]
+    assert texts == [
+        "Classify RESPOND only when a real person asks something actionable of this "
+        "mailbox. Automated, transactional, or bulk mail is never RESPOND, even when "
+        "it contains links or calls to action.",
+        "Emails that are not worth responding to (ignore):",
+        "- Marketing newsletters, promotional or bulk emails",
+        "- Delivery confirmations, receipts, subscription or renewal reminders",
+        "Emails worth knowing about but needing no reply (notify):",
+        "- Build system notifications",
+    ]
+
+
+def test_remove_item_drops_a_whole_wrapped_block():
+    items = memory_items("triage_preferences", WRAPPED)
+    updated = remove_item("triage_preferences", WRAPPED, items[0]["id"])
+    assert "Classify RESPOND" not in updated
+    assert "mailbox. Automated" not in updated
+    assert "it contains links" not in updated
+    # The rest of the profile survives intact.
+    assert "Emails that are not worth responding to (ignore):" in updated
+    assert "- Build system notifications" in updated
+
+
+def test_remove_item_drops_a_bullet_with_its_continuation():
+    items = memory_items("triage_preferences", WRAPPED)
+    target = next(i for i in items if i["text"].startswith("- Delivery confirmations"))
+    updated = remove_item("triage_preferences", WRAPPED, target["id"])
+    assert "Delivery confirmations" not in updated
+    assert "reminders" not in updated
+    assert "- Marketing newsletters, promotional or bulk emails" in updated
+
+
 def test_remove_item_removes_exactly_one_line():
     items = memory_items("triage_preferences", TEXT)
     updated = remove_item("triage_preferences", TEXT, items[1]["id"])

@@ -5,15 +5,21 @@ import base64
 import contextlib
 import html
 import json
+import os
+import re
+import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from email.utils import parseaddr
+from urllib.parse import quote
 
 import yaml
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -24,6 +30,8 @@ from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, recor
 from src.metrics import render_metrics
 from src.categories import (
     CategoriesConfig,
+    Category,
+    Contact as LegacyCategoryContact,
     DEFAULT_CATEGORIES_PATH,
     classify_category,
     dump_categories,
@@ -33,8 +41,10 @@ from src.automation import (
     AutomationRule,
     DEFAULT_RULES_PATH,
     RulesConfig,
+    apply_starter_rules,
     load_escalation_state,
     load_rules,
+    starter_rule_catalogue,
     workflow_sla_snapshot,
 )
 from src.analytics import summarize as summarize_analytics
@@ -43,8 +53,17 @@ from src import graph as graph_module
 from src.capabilities import current_email_id, current_gmail_thread_id, hitl_approved
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
-from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once
-from src.memory import namespace, preferences_text, wrap_preferences
+from src.junk_config import JunkConfig, load_junk, save_junk, suggest_junk_senders
+from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once, process_message_with_retry
+from src.memory import (
+    ORIGIN_DEFAULT,
+    ORIGIN_LEARNED,
+    ORIGIN_MANUAL,
+    namespace,
+    preferences_origin,
+    preferences_text,
+    wrap_preferences,
+)
 from src.roles import (
     RoleConflictError,
     RoleNotFoundError,
@@ -56,6 +75,7 @@ from src.roles import (
 )
 from src.contacts import (
     Contact,
+    ContactCategoryError,
     ContactConflictError,
     ContactNotFoundError,
     Segment,
@@ -78,11 +98,12 @@ from src.contacts import (
 )
 from src.run_registry import ACTIVE_RUN_STATUSES
 from src.run_registry import get_run as get_run_record
-from src.run_registry import list_runs, setup_run_registry, upsert_run
+from src.run_registry import delete_runs, find_run_by_email, list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
 from src.health import aggregate_health
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
+from src.runtime_settings import RuntimeSettings, load_runtime_settings, save_runtime_settings
 from src.gdpr import ErasureRequest, erase_subject, preview_erasure
 from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
@@ -99,6 +120,15 @@ from src.sync_status import (
     _resolve as _sync_resolve,
 )
 from src.run_registry import selected_run_registry_backend as _selected_run_registry_backend
+from src.outlook_oauth import (
+    OUTLOOK_SCOPES,
+    build_authorization_url as build_outlook_authorization_url,
+    build_state as build_outlook_oauth_state,
+    exchange_code_for_token as exchange_outlook_oauth_code,
+    revoke_outlook_token,
+    validate_state as validate_outlook_oauth_state,
+)
+from src.mail.setting import get_mail_provider, set_mail_provider
 from src.gmail_oauth import (
     build_authorization_url as build_gmail_authorization_url,
     build_state as build_gmail_oauth_state,
@@ -106,18 +136,8 @@ from src.gmail_oauth import (
     revoke_gmail_token,
     validate_state as validate_gmail_oauth_state,
 )
-from src.gmail_client import (
-    GMAIL_SCOPES,
-    archive_message,
-    fetch_sent,
-    gmail_resource,
-    is_stale_history_error,
-    list_inbox,
-    mark_as_read,
-    mark_as_unread,
-    send_html_message,
-    trash_message,
-)
+from src.gmail_client import GMAIL_SCOPES
+from src.mail import get_provider
 from src.campaigns import (
     CampaignTemplate,
     CampaignsConfig,
@@ -128,12 +148,16 @@ from src.campaigns import (
     contacts_for_segment,
     find_group,
     find_template,
+    load_campaign_runs,
     load_campaigns,
     members_for_group,
     missing_variable_warnings,
     render_campaign,
     render_campaign_for_segment,
     save_campaigns,
+    save_campaign_runs,
+    send_campaign_run,
+    upsert_campaign_run,
 )
 from src.tenant import (
     agent_instance_context,
@@ -142,9 +166,9 @@ from src.tenant import (
     resolve_user_id,
     user_context,
 )
-from src.security_client import authorize_action, fetch_policy
+from src.security_client import fetch_policy
 from src.storage import open_graph_storage
-from src.style_learning import analyze_style, build_style_text
+from src.style_learning import analyze_style, build_style_text, parse_style_text
 from src.media import (
     delete_contact_photo,
     delete_signature_image,
@@ -157,7 +181,15 @@ from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
 from src.send_mode import effective_dry_run, get_send_mode, set_send_mode
-from src.signature import SignatureConfig, load_signature, save_signature
+from src.signature import SIGNATURE_MODES, SignatureConfig, apply_signature, load_signature, save_signature
+from src.notification_store import (
+    delete_notification,
+    list_notifications,
+    mark_all_read,
+    mark_read,
+    unread_count,
+)
+from src.instance_setup import get_setup, run_pipeline_inline, start_setup
 
 
 async def _watch_renewal_loop() -> None:
@@ -323,6 +355,11 @@ class CampaignPrepareInput(BaseModel):
     segment_id: str | None = None
     group_id: str | None = None
     template_name: str
+    name: str | None = None
+    subject: str | None = None
+    body_markdown: str | None = None
+    scheduled_at: str | None = None
+    save_as_draft: bool = False
 
 
 class ContactInput(BaseModel):
@@ -332,6 +369,11 @@ class ContactInput(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     active: bool = True
+    category: str | None = None
+    domain: str | None = None
+    priority: str | None = None
+    category_source: str = "manual"
+    category_confidence: float | None = None
 
 
 class SegmentInput(BaseModel):
@@ -346,10 +388,13 @@ class ContactsImportInput(BaseModel):
     audience_default: str = "client"
 
 
-# Prepared-but-unapproved campaigns live in-process (single API worker). A
-# broadcast is only ever sent after an explicit owner approval, so losing these
-# on restart just means re-preparing — no email escapes the human gate.
-_pending_campaigns: dict[str, dict] = {}
+class CategorizeContactInput(BaseModel):
+    email: str
+    category: str
+    domain_only: bool = False
+
+
+DEFAULT_CATEGORY_PROPOSAL_STATE_PATH = SERVICE_ROOT / "logs" / "category_proposal_state.json"
 
 
 def _now_iso() -> str:
@@ -369,6 +414,13 @@ class GmailConnectStartResponse(BaseModel):
     expires_in_seconds: int = 600
 
 
+class ConnectTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    mailbox: str = ""
+    error: str = ""
+
+
 class GmailConnectCallbackResponse(BaseModel):
     status: str
     agent_instance_id: str
@@ -379,6 +431,19 @@ class GmailConnectCallbackResponse(BaseModel):
 
 class RulesInput(BaseModel):
     rules_yaml: str
+
+
+class JunkInput(BaseModel):
+    """Junk-gate settings edited from the UI (no YAML surface)."""
+
+    enabled: bool | None = None
+    allowed_senders: list[str] | None = None
+    allowed_domains: list[str] | None = None
+    blocked_senders: list[str] | None = None
+    blocked_domains: list[str] | None = None
+    gmail_categories: bool | None = None
+    bulk_headers: bool | None = None
+    sender_heuristics: bool | None = None
 
 
 class RuleToggleInput(BaseModel):
@@ -440,6 +505,14 @@ class RoleInput(BaseModel):
     dept: str | None = None
 
 
+class RuntimeSettingsInput(BaseModel):
+    sync_limit: int = Field(ge=1, le=100)
+    setup_recent_limit: int = Field(ge=1, le=200)
+    setup_backlog_limit: int = Field(ge=1, le=100)
+    setup_sent_sample: int = Field(ge=1, le=200)
+    style_sent_sample: int = Field(ge=1, le=50)
+
+
 def _contact_from_input(body: ContactInput) -> Contact:
     return Contact(
         email=body.email,
@@ -448,6 +521,11 @@ def _contact_from_input(body: ContactInput) -> Contact:
         fields=body.fields,
         tags=body.tags,
         active=body.active,
+        category=body.category,
+        domain=body.domain,
+        priority=body.priority,
+        category_source=body.category_source,
+        category_confidence=body.category_confidence,
     )
 
 
@@ -493,6 +571,8 @@ def _derive_action_type(pending_action: list | None, classification: str | None)
         return "reply_draft"
     if name == "forward_email":
         return "notify" if classification == "notify" else "forward"
+    if name == "notify_internal":
+        return "notify"
     if name == "reply_all":
         return "reply_all"
     if name == "create_draft":
@@ -958,7 +1038,15 @@ def _decode_pubsub_data(message: dict) -> dict:
     return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
 
 
-_is_stale_history_error = is_stale_history_error
+def _is_stale_history_error(exc: Exception) -> bool:
+    """Whether the stored sync cursor is too old to replay.
+
+    Resolved per call rather than at import: the answer is provider-specific
+    (Gmail purges history after ~a week, Graph answers 410 resyncRequired), and
+    building a provider at import time would read instance config before any
+    tenant context exists.
+    """
+    return get_provider().is_stale_cursor_error(exc)
 
 
 def _require_webhook_secret(request: Request) -> None:
@@ -1098,6 +1186,193 @@ async def update_retention_settings(request: Request, body: RetentionSettings) -
     return save_retention_settings(body).model_dump()
 
 
+
+
+@app.get("/runtime-settings")
+async def runtime_settings(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return load_runtime_settings(current_agent_instance_id()).model_dump()
+
+
+@app.put("/runtime-settings")
+async def update_runtime_settings(request: Request, body: RuntimeSettingsInput) -> dict:
+    _require_instance_role(request, "owner")
+    config = RuntimeSettings(**body.model_dump())
+    return save_runtime_settings(config, current_agent_instance_id()).model_dump()
+
+@app.get("/instance-setup")
+async def get_instance_setup(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return {"agent_instance_id": current_agent_instance_id(), **get_setup()}
+
+
+@app.post("/instance-setup/start")
+async def start_instance_setup(request: Request, background_tasks: BackgroundTasks) -> dict:
+    _require_instance_role(request, "owner")
+    existing = get_setup()
+    if existing["status"] not in ("not_started", "ready", "failed"):
+        raise HTTPException(status_code=409, detail="Setup is already running for this instance")
+    result = await asyncio.to_thread(start_setup, current_user_id(), current_agent_instance_id())
+    if not settings.job_queue_enabled:
+        background_tasks.add_task(
+            run_pipeline_inline, current_user_id(), current_agent_instance_id(), store=app.state.store
+        )
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.post("/instance-setup/retry")
+async def retry_instance_setup(request: Request, background_tasks: BackgroundTasks) -> dict:
+    _require_instance_role(request, "owner")
+    result = await asyncio.to_thread(
+        start_setup, current_user_id(), current_agent_instance_id(), force=True
+    )
+    if not settings.job_queue_enabled:
+        background_tasks.add_task(
+            run_pipeline_inline, current_user_id(), current_agent_instance_id(), store=app.state.store
+        )
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.post("/instance-setup/steps/{step_key}/retry")
+async def retry_instance_setup_step(step_key: str, request: Request, background_tasks: BackgroundTasks) -> dict:
+    _require_instance_role(request, "owner")
+    from src.instance_setup import SETUP_STEPS, retry_step
+
+    if step_key not in SETUP_STEPS:
+        raise HTTPException(status_code=422, detail=f"Unknown setup step: {step_key}")
+    result = await asyncio.to_thread(
+        retry_step, step_key, current_user_id(), current_agent_instance_id()
+    )
+    if not settings.job_queue_enabled:
+        background_tasks.add_task(
+            run_pipeline_inline, current_user_id(), current_agent_instance_id(), store=app.state.store
+        )
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+class SetupCategoryInput(BaseModel):
+    """One category as the owner describes it during onboarding."""
+
+    name: str
+    description: str | None = None
+    policy: str = "auto_draft"
+    priority: str = "normal"
+    keywords: list[str] = Field(default_factory=list)
+
+
+class SetupCategoriesInput(BaseModel):
+    categories: list[SetupCategoryInput]
+
+
+@app.post("/instance-setup/categories")
+async def seed_instance_categories(request: Request, body: SetupCategoriesInput) -> dict:
+    """Record the owner's own categories before the mailbox is read.
+
+    Onboarding used to invent a default set (clients / externe / interne) and
+    only then look at the mail, so the first classification every owner saw was
+    somebody else's taxonomy. Collecting the real one first means the very first
+    pass over the mailbox files messages into categories the owner recognises —
+    "banque", "fournisseurs", whatever the business actually runs on.
+
+    Names are the workflow keys, so they are slugged; the label the owner typed
+    is kept as the display name. A category with no keywords still matches
+    nothing on its own — it becomes a target for manual filing on the triage
+    screen, which is the point of asking before the fetch rather than after.
+    """
+    _require_instance_role(request, "owner")
+    import re as _re
+
+    from src.automation import RuleWhen
+    from src.categories import Category, dump_categories
+
+    seen: set[str] = set()
+    categories: list[Category] = []
+    for entry in body.categories:
+        label = entry.name.strip()
+        if not label:
+            continue
+        slug = _re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        keywords = [k.strip() for k in entry.keywords if k.strip()]
+        categories.append(
+            Category(
+                name=slug,
+                display_name=label,
+                description=entry.description or None,
+                enabled=True,
+                priority=entry.priority,
+                policy=entry.policy,
+                when=RuleWhen(subject_contains=keywords, body_contains=keywords),
+            )
+        )
+
+    if not categories:
+        raise HTTPException(status_code=422, detail="At least one category is required")
+
+    _categories_yaml, cfg = _current_categories()
+    cfg.enabled = True
+    cfg.categories = categories
+    payload = dump_categories(cfg)
+    write_instance_text("categories", payload, DEFAULT_CATEGORIES_PATH)
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "categories_yaml": payload,
+        "parsed": cfg.model_dump(),
+    }
+
+
+@app.post("/instance-setup/skip")
+async def skip_instance_setup(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    from src.instance_setup import force_ready
+
+    result = await asyncio.to_thread(force_ready, current_user_id(), current_agent_instance_id())
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.get("/notifications")
+async def list_notifications_endpoint(
+    request: Request,
+    unread_only: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    _require_instance_role(request, "viewer")
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "notifications": list_notifications(unread_only=unread_only, limit=limit),
+    }
+
+
+@app.get("/notifications/unread-count")
+async def notifications_unread_count(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return {"agent_instance_id": current_agent_instance_id(), "unread_count": unread_count()}
+
+
+@app.post("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: int, request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    row = mark_read(notification_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return row
+
+
+@app.post("/notifications/read-all")
+async def mark_all_notifications_read(request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    return {"agent_instance_id": current_agent_instance_id(), "marked_read": mark_all_read()}
+
+
+@app.delete("/notifications/{notification_id}")
+async def delete_notification_endpoint(notification_id: int, request: Request) -> dict:
+    _require_instance_role(request, "viewer")
+    delete_notification(notification_id)
+    return {"agent_instance_id": current_agent_instance_id(), "deleted": True}
+
+
 @app.post("/retention/dry-run")
 async def retention_dry_run(request: Request) -> dict:
     _require_instance_role(request, "owner")
@@ -1145,57 +1420,176 @@ async def gmail_connect_start(instance_id: str, request: Request) -> GmailConnec
     )
 
 
-def _gmail_callback_page(status: str, message: str, payload: dict | None = None) -> HTMLResponse:
-    body = json.dumps({"type": "agora:gmail-oauth", "status": status, "message": message, "payload": payload or {}})
-    code = 200 if status == "connected" else 400
-    page_html = f"""<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Gmail connection</title></head>
-<body style="font-family:system-ui,sans-serif;background:#0b1326;color:#dae2fd;display:grid;place-items:center;min-height:100vh;margin:0">
-  <p>{html.escape(message)}</p>
-  <script>
-    const result = {body};
-    if (window.opener) {{
-      window.opener.postMessage(result, "*");
-      window.close();
-    }} else {{
-      window.location.replace('/');
-    }}
-  </script>
-</body>
-</html>"""
-    return HTMLResponse(page_html, status_code=code)
+@app.get(
+    "/agent-instances/{instance_id}/connect/outlook/start",
+    response_model=GmailConnectStartResponse,
+)
+async def outlook_connect_start(instance_id: str, request: Request) -> GmailConnectStartResponse:
+    """Begin the Microsoft consent flow — the Outlook twin of the Gmail start."""
+    user_id = _request_user_id(request) or current_user_id()
+    mailbox_identity = request.query_params.get("mailbox_identity") or ""
+    try:
+        state = build_outlook_oauth_state(user_id, instance_id, mailbox_identity=mailbox_identity)
+        authorization_url = build_outlook_authorization_url(state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return GmailConnectStartResponse(
+        authorization_url=authorization_url,
+        agent_instance_id=instance_id,
+        scopes=OUTLOOK_SCOPES,
+    )
 
 
-@app.get("/connect/gmail/callback", response_class=HTMLResponse)
-async def gmail_connect_callback(code: str | None = None, state: str | None = None) -> HTMLResponse:
+@app.get("/connect/outlook/callback")
+async def outlook_connect_callback(
+    background_tasks: BackgroundTasks, code: str | None = None, state: str | None = None
+) -> RedirectResponse:
     if not code or not state:
-        return _gmail_callback_page("error", "Missing Gmail OAuth code or state.")
+        return _oauth_callback_redirect("outlook", None, "error", "Missing Outlook OAuth code or state.")
+    payload: dict | None = None
+    try:
+        payload = validate_outlook_oauth_state(state)
+        exchange_outlook_oauth_code(code, payload, state=state)
+        with user_context(payload["user_id"]):
+            with agent_instance_context(payload["agent_instance_id"]):
+                # Record the provider before anything reads the mailbox: every
+                # later call resolves through get_provider(), which would pick
+                # Gmail by default and look for a token that does not exist.
+                set_mail_provider("outlook", payload["agent_instance_id"])
+                record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
+        if settings.setup_enabled:
+            _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
+    except (ValueError, RuntimeError) as exc:
+        print(f"api: outlook oauth callback rejected: {exc}")
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _oauth_callback_redirect("outlook", instance_id, "error", str(exc))
+    except Exception as exc:
+        print(f"api: outlook oauth callback failed: {exc!r}\n{traceback.format_exc()}")
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _oauth_callback_redirect(
+            "outlook",
+            instance_id,
+            "error",
+            f"Could not finish connecting to Microsoft ({type(exc).__name__}: {exc}). Try again.",
+        )
+    return _oauth_callback_redirect("outlook", payload["agent_instance_id"], "connected")
+
+
+@app.post("/disconnect/outlook", status_code=200)
+async def disconnect_outlook() -> dict:
+    """Delete the stored Outlook token for the current agent instance.
+
+    Microsoft has no per-token revoke endpoint, so this removes our copy; the
+    directory-side grant survives until the user revokes it in their account.
+    """
+    user_id = current_user_id()
+    agent_instance_id = current_agent_instance_id()
+    removed = revoke_outlook_token(user_id, agent_instance_id)
+    uid, iid = _sync_resolve(user_id, agent_instance_id)
+    patch = {"connection_status": "disconnected", "sync_mode": "idle"}
+    if _selected_run_registry_backend() == "postgres":
+        _sync_pg_update(uid, iid, patch)
+    else:
+        _sync_json_update(uid, iid, patch)
+    return {"disconnected": removed, "user_id": user_id, "agent_instance_id": agent_instance_id}
+
+
+@app.post("/connect/test", response_model=ConnectTestResponse)
+async def connect_test() -> ConnectTestResponse:
+    """Round-trip the configured mailbox and report what came back.
+
+    Answers "is this mailbox actually reachable right now" without waiting for
+    the next poll cycle. The result is recorded through the normal sync status
+    path so the failure reason shows up wherever connection state is displayed.
+    """
+    provider = get_provider()
+    result = await asyncio.to_thread(provider.probe)
+    if result.get("ok"):
+        record_sync_success("probe")
+    else:
+        record_sync_failure(result.get("error") or "mailbox unreachable")
+    return ConnectTestResponse(
+        ok=bool(result.get("ok")),
+        provider=provider.name,
+        mailbox=result.get("mailbox") or "",
+        error=result.get("error") or "",
+    )
+
+
+def _oauth_callback_redirect(
+    provider: str, agent_instance_id: str | None, status: str, message: str = ""
+) -> RedirectResponse:
+    """Send OAuth completion back into the app.
+
+    The frontend opens the provider in a named popup and keeps the main setup
+    page visible. This redirect may therefore land inside the popup; the main
+    window learns completion through polling, and the query parameters remain
+    useful if the callback ever lands in the main workspace window.
+
+    The `gmail=` query key is kept for both providers: the frontend already
+    keys off it, and renaming it would break in-flight popups on deploy.
+    """
+    target = f"/oauth/{provider}/callback"
+    query = f"gmail={status}"
+    if agent_instance_id:
+        query += f"&agent_instance_id={quote(agent_instance_id)}"
+    if message:
+        query += f"&message={quote(message)}"
+    return RedirectResponse(f"{settings.app_base_url}{target}?{query}", status_code=303)
+
+
+def _gmail_callback_redirect(agent_instance_id: str | None, status: str, message: str = "") -> RedirectResponse:
+    return _oauth_callback_redirect("gmail", agent_instance_id, status, message)
+
+
+def _start_setup_after_connect(background_tasks: BackgroundTasks, user_id: str, agent_instance_id: str) -> None:
+    """Kick off onboarding right after a successful Gmail connect.
+
+    A setup failure here must never break the OAuth success page — mirrors the
+    existing broad-except discipline already used around this callback."""
+    try:
+        with user_context(user_id):
+            with agent_instance_context(agent_instance_id):
+                start_setup(user_id, agent_instance_id)
+        if not settings.job_queue_enabled:
+            background_tasks.add_task(
+                run_pipeline_inline, user_id, agent_instance_id, store=app.state.store
+            )
+    except Exception as exc:
+        print(f"api: failed to start onboarding for {user_id}/{agent_instance_id}: {exc}")
+
+
+@app.get("/connect/gmail/callback")
+async def gmail_connect_callback(
+    background_tasks: BackgroundTasks, code: str | None = None, state: str | None = None
+) -> RedirectResponse:
+    if not code or not state:
+        return _gmail_callback_redirect(None, "error", "Missing Gmail OAuth code or state.")
+    payload: dict | None = None
     try:
         payload = validate_gmail_oauth_state(state)
         exchange_gmail_oauth_code(code, payload)
-        record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
+        with user_context(payload["user_id"]):
+            with agent_instance_context(payload["agent_instance_id"]):
+                set_mail_provider("gmail", payload["agent_instance_id"])
+                record_sync_success("oauth", payload["user_id"], payload["agent_instance_id"])
+        if settings.setup_enabled:
+            _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
         print(f"api: gmail oauth callback rejected: {exc}")
-        return _gmail_callback_page("error", str(exc))
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _gmail_callback_redirect(instance_id, "error", str(exc))
     except Exception as exc:
         # Token exchange reaches out to Google; a transient network failure (or a
-        # stale/replayed single-use code) must not surface as a raw 500 in the popup.
+        # stale/replayed single-use code) must not surface as a raw 500.
         print(f"api: gmail oauth callback failed: {exc!r}\n{traceback.format_exc()}")
-        return _gmail_callback_page(
+        instance_id = payload["agent_instance_id"] if payload else None
+        return _gmail_callback_redirect(
+            instance_id,
             "error",
-            "Could not finish connecting to Google "
-            f"({type(exc).__name__}: {exc}). Close this window and click Connect Gmail again.",
+            f"Could not finish connecting to Google ({type(exc).__name__}: {exc}). Try again.",
         )
-    return _gmail_callback_page(
-        "connected",
-        "Gmail connected. You can close this window.",
-        {
-            "agent_instance_id": payload["agent_instance_id"],
-            "user_id": payload["user_id"],
-            "mailbox_identity": payload.get("mailbox_identity") or None,
-        },
-    )
+    return _gmail_callback_redirect(payload["agent_instance_id"], "connected")
 
 
 def _serialize_role(role) -> dict:
@@ -1260,6 +1654,7 @@ async def update_categories(body: CategoriesInput) -> dict:
 
 class CategoryUpdateInput(BaseModel):
     display_name: str
+    description: str | None = None
     enabled: bool = True
     priority: str = "normal"
     policy: str = "notify"
@@ -1269,6 +1664,179 @@ class CategoryUpdateInput(BaseModel):
     instructions: dict | None = None
     when: dict | None = None
     template: str | None = None
+    require_approval: bool = False
+    external_send_allowed: bool = True
+
+
+class CategoryProposalActionInput(BaseModel):
+    proposal_id: str
+    name: str | None = None
+    display_name: str | None = None
+
+
+def _slugify_category(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "nouvelle_categorie"
+
+
+def _proposal_subject_token(subject: str, snippet: str = "") -> tuple[str, str] | None:
+    text = f"{subject} {snippet}".lower()
+    patterns = [
+        ("factures", ("facture", "invoice", "reçu", "receipt", "paiement", "payment")),
+        ("candidatures", ("candidature", "cv", "stage", "emploi", "recrutement", "candidate")),
+        ("rendez_vous", ("rendez-vous", "rdv", "meeting", "calendrier", "appointment")),
+        ("support", ("incident", "problème", "bug", "support", "panne", "erreur")),
+        ("contrats", ("contrat", "contract", "signature", "devis", "quote")),
+    ]
+    for name, needles in patterns:
+        if any(needle in text for needle in needles):
+            return name, needles[0]
+    return None
+
+
+def _proposal_key(kind: str, value: str) -> str:
+    return f"{kind}:{value}".lower()
+
+
+def _dismissed_category_proposals() -> set[str]:
+    raw = read_instance_text("category_proposal_state", DEFAULT_CATEGORY_PROPOSAL_STATE_PATH)
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        data = {}
+    return {str(item) for item in data.get("dismissed", [])}
+
+
+def _save_dismissed_category_proposals(dismissed: set[str]) -> None:
+    write_instance_text(
+        "category_proposal_state",
+        json.dumps({"dismissed": sorted(dismissed)}, indent=2, sort_keys=True),
+        DEFAULT_CATEGORY_PROPOSAL_STATE_PATH,
+    )
+
+
+# Clustering by sender domain only says something when the domain belongs to an
+# organisation. A consumer mailbox provider groups unrelated people, and accepting
+# it would create a `sender_domain` rule that swallows most personal mail.
+CONSUMER_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.fr",
+    "live.com", "live.fr", "msn.com", "yahoo.com", "yahoo.fr", "ymail.com",
+    "icloud.com", "me.com", "mac.com", "aol.com", "protonmail.com", "proton.me",
+    "gmx.com", "gmx.fr", "gmx.net", "mail.com", "zoho.com", "yandex.com",
+    "orange.fr", "wanadoo.fr", "free.fr", "sfr.fr", "laposte.net", "bbox.fr",
+})
+
+
+def _category_proposals_from_messages(messages: list[dict], existing_names: set[str], dismissed: set[str]) -> list[dict]:
+    by_domain: dict[str, list[dict]] = {}
+    by_subject: dict[str, dict] = {}
+    for msg in messages:
+        _name, address = parseaddr(msg.get("from") or msg.get("author") or "")
+        domain = address.rsplit("@", 1)[1].lower() if "@" in address else ""
+        if domain and domain not in CONSUMER_MAIL_DOMAINS:
+            by_domain.setdefault(domain, []).append(msg)
+        token = _proposal_subject_token(str(msg.get("subject") or ""), str(msg.get("snippet") or ""))
+        if token:
+            category_name, keyword = token
+            bucket = by_subject.setdefault(category_name, {"keyword": keyword, "messages": []})
+            bucket["messages"].append(msg)
+
+    proposals: list[dict] = []
+    for domain, bucket in by_domain.items():
+        if len(bucket) < 3:
+            continue
+        name = _slugify_category(domain.split(".")[-2] if "." in domain else domain)
+        key = _proposal_key("domain", domain)
+        if name in existing_names or key in dismissed:
+            continue
+        proposals.append({
+            "id": key,
+            "kind": "domain",
+            "suggested_name": name,
+            "display_name": domain,
+            "description": f"{len(bucket)} messages récents depuis {domain}",
+            "message_count": len(bucket),
+            "when": {"sender_domain": [domain]},
+            "sample_subjects": [m.get("subject") or "(sans objet)" for m in bucket[:3]],
+        })
+
+    for name, bucket in by_subject.items():
+        key = _proposal_key("subject", name)
+        messages = bucket["messages"]
+        if len(messages) < 2 or name in existing_names or key in dismissed:
+            continue
+        proposals.append({
+            "id": key,
+            "kind": "subject_pattern",
+            "suggested_name": name,
+            "display_name": name.replace("_", " ").capitalize(),
+            "description": f"{len(messages)} messages récents autour de « {bucket['keyword']} »",
+            "message_count": len(messages),
+            "when": {"subject_contains": [bucket["keyword"]]},
+            "sample_subjects": [m.get("subject") or "(sans objet)" for m in messages[:3]],
+        })
+
+    proposals.sort(key=lambda item: (-item["message_count"], item["suggested_name"]))
+    return proposals[:20]
+
+
+async def _build_category_proposals(limit: int = 500) -> dict:
+    _yaml_text, cfg = _current_categories()
+    existing_names = {category.name for category in cfg.categories}
+    try:
+        messages = await asyncio.to_thread(get_provider().list_inbox, limit)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Gmail metadata scan unavailable: {exc}") from exc
+    dismissed = _dismissed_category_proposals()
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "scanned": len(messages),
+        "proposals": _category_proposals_from_messages(messages, existing_names, dismissed),
+    }
+
+
+@app.get("/categories/proposals")
+async def category_proposals(limit: int = Query(default=500, ge=25, le=500)) -> dict:
+    """Discover category proposals from recent Gmail metadata only."""
+    return await _build_category_proposals(limit)
+
+
+@app.post("/categories/proposals/accept")
+async def accept_category_proposal(body: CategoryProposalActionInput, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    proposals = (await _build_category_proposals()).get("proposals", [])
+    proposal = next((item for item in proposals if item["id"] == body.proposal_id), None)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Category proposal not found")
+    _yaml_text, cfg = _current_categories()
+    name = _slugify_category(body.name or proposal["suggested_name"])
+    if any(category.name == name for category in cfg.categories):
+        raise HTTPException(status_code=409, detail="Category already exists")
+    from src.automation import RuleWhen
+
+    cfg.categories.append(Category(
+        name=name,
+        display_name=(body.display_name or proposal["display_name"]).strip(),
+        description=proposal["description"],
+        enabled=False,
+        priority="normal",
+        policy="notify",
+        when=RuleWhen(**proposal["when"]),
+    ))
+    write_instance_text("categories", dump_categories(cfg), DEFAULT_CATEGORIES_PATH)
+    dismissed = _dismissed_category_proposals()
+    dismissed.add(body.proposal_id)
+    _save_dismissed_category_proposals(dismissed)
+    return {"accepted": proposal, "parsed": cfg.model_dump()}
+
+
+@app.post("/categories/proposals/dismiss")
+async def dismiss_category_proposal(body: CategoryProposalActionInput, request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    dismissed = _dismissed_category_proposals()
+    dismissed.add(body.proposal_id)
+    _save_dismissed_category_proposals(dismissed)
+    return {"dismissed": body.proposal_id}
 
 
 @app.put("/categories/{name}")
@@ -1279,21 +1847,23 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
     for cat in cfg.categories:
         if cat.name == name:
             cat.display_name = body.display_name
+            cat.description = body.description
             cat.enabled = body.enabled
             cat.priority = body.priority
             cat.policy = body.policy
             cat.owner = body.owner
             cat.approver = body.approver
             cat.route_to = body.route_to
+            cat.require_approval = body.require_approval
+            cat.external_send_allowed = body.external_send_allowed
             if body.instructions:
                 cat.instructions = CategoryInstructions(**body.instructions)
             else:
                 cat.instructions = None
-            if body.when:
+            if body.when is not None:
                 from src.automation import RuleWhen
                 cat.when = RuleWhen(**body.when)
-            if body.template:
-                cat.template = body.template
+            cat.template = body.template
             break
     else:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -1467,6 +2037,8 @@ async def create_contact_entry(request: Request, body: ContactInput) -> dict:
         contact = create_contact(_contact_from_input(body))
     except ContactConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ContactCategoryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "agent_instance_id": current_agent_instance_id(),
         "contact": _serialize_contact(contact),
@@ -1481,6 +2053,8 @@ async def update_contact_entry(email: str, request: Request, body: ContactInput)
         contact = update_contact(email, _contact_from_input(body))
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ContactCategoryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -1554,6 +2128,47 @@ async def import_contacts_entries(request: Request, body: ContactsImportInput) -
         "rejected_count": result["rejected_count"],
         "storage": "contacts-directory",
     }
+
+
+@app.post("/contacts/migrate-legacy")
+async def migrate_legacy_contacts_endpoint(request: Request) -> dict:
+    _require_instance_role(request, "owner")
+    from src.contacts import migrate_legacy_category_contacts
+
+    result = await asyncio.to_thread(migrate_legacy_category_contacts)
+    return {"agent_instance_id": current_agent_instance_id(), **result}
+
+
+@app.post("/contacts/categorize")
+async def categorize_contact_endpoint(request: Request, body: CategorizeContactInput) -> dict:
+    """One-action 'categoriser l'expéditeur' / 'categoriser le domaine' from the inbox row.
+
+    Sender-scoped requests upsert the unified contact directory (email always
+    present there). Domain-only requests can't live in the directory (its email
+    field is required) so they upsert a legacy categories.yaml domain contact
+    instead — still picked up by classify_category's precedence-4 domain match.
+    """
+    _require_instance_role(request, "owner")
+    from email.utils import parseaddr
+
+    _, address = parseaddr(body.email)
+    address = (address or body.email).strip().lower()
+    if "@" not in address:
+        raise HTTPException(status_code=400, detail="email must contain an address to categorize")
+
+    if body.domain_only:
+        domain = address.rsplit("@", 1)[-1]
+        cfg = await asyncio.to_thread(load_categories, None, current_agent_instance_id())
+        cfg.contacts = [c for c in cfg.contacts if not (c.domain and c.domain.lower() == domain and not c.email)]
+        cfg.contacts.append(LegacyCategoryContact(domain=domain, category=body.category))
+        write_instance_text("categories", dump_categories(cfg), DEFAULT_CATEGORIES_PATH)
+        return {"agent_instance_id": current_agent_instance_id(), "domain": domain, "category": body.category}
+
+    try:
+        contact = upsert_contact(Contact(email=address, audience="prospect", category=body.category, category_source="manual"))
+    except ContactCategoryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"agent_instance_id": current_agent_instance_id(), "contact": _serialize_contact(contact)}
 
 
 @app.get("/segments")
@@ -1732,6 +2347,11 @@ def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) 
     template = find_template(cfg, body.template_name)
     if template is None:
         raise HTTPException(status_code=404, detail="template not found")
+    if body.subject or body.body_markdown:
+        template = template.model_copy(update={
+            "subject": body.subject or template.subject,
+            "body_markdown": body.body_markdown or template.body_markdown,
+        })
 
     contacts = contacts_for_segment(segment_id, agent_instance_id=current_agent_instance_id())
     if not contacts:
@@ -1745,6 +2365,9 @@ def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) 
         "segment_id": segment_id,
         "segment_name": segment_name,
         "template_name": template.name,
+        "campaign_name": body.name or template.name,
+        "subject": body.subject or template.subject,
+        "scheduled_at": body.scheduled_at,
         "template_category": template.category,
         "template_audience": list(template.audience),
         "segment_audiences": guard.segment_audiences,
@@ -1762,10 +2385,13 @@ def _campaign_preview_payload(cfg: CampaignsConfig, body: CampaignPrepareInput) 
 
 
 def _campaign_summary(campaign_id: str, record: dict) -> dict:
-    rendered = record["rendered"]
+    rendered = record.get("rendered") or []
     return {
         "campaign_id": campaign_id,
         "status": record["status"],
+        "campaign_name": record.get("campaign_name") or record["template_name"],
+        "subject": record.get("subject"),
+        "scheduled_at": record.get("scheduled_at"),
         "group_id": record.get("group_id"),
         "group_name": record.get("group_name"),
         "segment_id": record.get("segment_id"),
@@ -1776,9 +2402,17 @@ def _campaign_summary(campaign_id: str, record: dict) -> dict:
         "segment_audiences": record.get("segment_audiences") or [],
         "recipient_count": len(rendered),
         "created_at": record["created_at"],
+        "updated_at": record.get("updated_at"),
+        "sent_at": record.get("sent_at"),
         "preview": rendered[0] if rendered else None,
         "recipients": [
-            {"email": r["email"], "name": r.get("name"), "subject": r["subject"], "unresolved": r.get("unresolved") or []}
+            {
+                "email": r["email"],
+                "name": r.get("name"),
+                "subject": r["subject"],
+                "unresolved": r.get("unresolved") or [],
+                "status": _recipient_status(r["email"], record.get("result")),
+            }
             for r in rendered
         ],
         "missing_variables": record.get("missing_variables") or [],
@@ -1788,13 +2422,36 @@ def _campaign_summary(campaign_id: str, record: dict) -> dict:
     }
 
 
+def _recipient_status(email: str, result: dict | None) -> str:
+    if not result:
+        return "pending"
+    for item in result.get("sent") or []:
+        if item.get("email") == email:
+            return "sent"
+    for item in result.get("denied") or []:
+        if item.get("email") == email:
+            return "denied"
+    for item in result.get("failed") or []:
+        if item.get("email") == email:
+            return "failed"
+    return "pending"
+
+
+def _campaign_records_for_current_instance() -> dict[str, dict]:
+    instance = current_agent_instance_id()
+    return {
+        cid: rec
+        for cid, rec in load_campaign_runs(agent_instance_id=instance).items()
+        if rec.get("agent_instance_id") == instance
+    }
+
+
 @app.get("/campaigns")
 async def list_campaigns() -> dict:
     instance = current_agent_instance_id()
     items = [
         _campaign_summary(cid, rec)
-        for cid, rec in _pending_campaigns.items()
-        if rec.get("agent_instance_id") == instance
+        for cid, rec in _campaign_records_for_current_instance().items()
     ]
     items.sort(key=lambda x: x["created_at"], reverse=True)
     return {"agent_instance_id": instance, "campaigns": items}
@@ -1814,9 +2471,9 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
     _require_instance_role(request, "owner")
     cfg = load_campaigns()
     preview = _campaign_preview_payload(cfg, body)
-    if not preview["audience_match"]:
+    if not body.save_as_draft and not preview["audience_match"]:
         raise HTTPException(status_code=422, detail=preview["guard_message"])
-    if preview["missing_variables"]:
+    if not body.save_as_draft and preview["missing_variables"]:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -1829,13 +2486,17 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
         )
 
     campaign_id = str(uuid.uuid4())
+    status = "draft" if body.save_as_draft else "pending_approval"
     record = {
-        "status": "pending_approval",
+        "status": status,
+        "campaign_name": preview.get("campaign_name") or preview["template_name"],
         "group_id": body.group_id,
         "group_name": None,
         "segment_id": preview["segment_id"],
         "segment_name": preview["segment_name"],
         "template_name": preview["template_name"],
+        "subject": preview.get("subject"),
+        "scheduled_at": preview.get("scheduled_at"),
         "template_category": preview["template_category"],
         "template_audience": preview["template_audience"],
         "segment_audiences": preview["segment_audiences"],
@@ -1844,74 +2505,104 @@ async def prepare_campaign(request: Request, body: CampaignPrepareInput) -> dict
         "guard_message": preview["guard_message"],
         "rendered": preview["rendered"],
         "created_at": _now_iso(),
+        "updated_at": _now_iso(),
         "user_id": current_user_id(),
         "agent_instance_id": current_agent_instance_id(),
     }
-    _pending_campaigns[campaign_id] = record
+    upsert_campaign_run(campaign_id, record, agent_instance_id=current_agent_instance_id())
     return _campaign_summary(campaign_id, record)
 
 
 @app.post("/campaigns/{campaign_id}/reject")
 async def reject_campaign(request: Request, campaign_id: str) -> dict:
     _require_instance_role(request, "owner")
-    record = _pending_campaigns.get(campaign_id)
+    records = load_campaign_runs(agent_instance_id=current_agent_instance_id())
+    record = records.get(campaign_id)
     if record is None or record.get("agent_instance_id") != current_agent_instance_id():
         raise HTTPException(status_code=404, detail="campaign not found")
-    record["status"] = "rejected"
-    _pending_campaigns.pop(campaign_id, None)
-    return {"campaign_id": campaign_id, "status": "rejected"}
+    record["status"] = "cancelled"
+    record["updated_at"] = _now_iso()
+    records[campaign_id] = record
+    save_campaign_runs(records, agent_instance_id=current_agent_instance_id())
+    return _campaign_summary(campaign_id, record)
 
 
 @app.post("/campaigns/{campaign_id}/approve")
 async def approve_campaign(request: Request, campaign_id: str) -> dict:
     _require_instance_role(request, "owner")
-    record = _pending_campaigns.get(campaign_id)
+    records = load_campaign_runs(agent_instance_id=current_agent_instance_id())
+    record = records.get(campaign_id)
     if record is None or record.get("agent_instance_id") != current_agent_instance_id():
         raise HTTPException(status_code=404, detail="campaign not found")
     if record["status"] != "pending_approval":
-        raise HTTPException(status_code=409, detail=f"campaign already {record['status']}")
+        if record["status"] == "draft":
+            record["status"] = "pending_approval"
+        else:
+            raise HTTPException(status_code=409, detail=f"campaign already {record['status']}")
     if not record.get("audience_match", True):
         raise HTTPException(status_code=422, detail=record.get("guard_message") or "Audience incompatible")
     if record.get("missing_variables"):
         raise HTTPException(status_code=422, detail="Variables manquantes détectées avant l'envoi")
 
-    campaign_dry_run = effective_dry_run()
-    resource = None if campaign_dry_run else gmail_resource()
-    sent, denied, failed = [], [], []
-    for index, email in enumerate(record["rendered"]):
-        if settings.security_enabled:
-            verdict = authorize_action(
-                "send_campaign",
-                {"to": email["email"], "content": email["text"]},
-                run_id=campaign_id,
-                action_id=f"{campaign_id}:{index}",
-            )
-            if verdict.get("decision") == "deny":
-                denied.append({"email": email["email"], "reason": verdict.get("reason")})
-                continue
-        try:
-            result = send_html_message(
-                to=email["email"],
-                subject=email["subject"],
-                html=email["html"],
-                text=email["text"],
-                resource=resource,
-            )
-            sent.append({"email": email["email"], "dry_run": bool(result.get("dry_run"))})
-        except Exception as exc:
-            failed.append({"email": email["email"], "error": str(exc)})
+    if record.get("scheduled_at"):
+        record["status"] = "scheduled"
+        record["updated_at"] = _now_iso()
+        records[campaign_id] = record
+        save_campaign_runs(records, agent_instance_id=current_agent_instance_id())
+        return _campaign_summary(campaign_id, record)
 
-    record["status"] = "sent"
-    record["result"] = {"sent": sent, "denied": denied, "failed": failed, "dry_run": campaign_dry_run}
+    send_campaign_run(campaign_id, record)
+    record["updated_at"] = _now_iso()
+    records[campaign_id] = record
+    save_campaign_runs(records, agent_instance_id=current_agent_instance_id())
     summary = _campaign_summary(campaign_id, record)
-    _pending_campaigns.pop(campaign_id, None)
     return summary
+
+
+def sweep_due_campaigns(now: datetime | None = None, agent_instance_id: str | None = None) -> list[dict]:
+    from src.campaigns import due_campaign_ids
+
+    instance = agent_instance_id or current_agent_instance_id()
+    records = load_campaign_runs(agent_instance_id=instance)
+    changed = False
+    summaries: list[dict] = []
+    for campaign_id in due_campaign_ids(now=now, agent_instance_id=instance):
+        record = records.get(campaign_id)
+        if not record or record.get("agent_instance_id") != instance:
+            continue
+        try:
+            send_campaign_run(campaign_id, record)
+        except Exception as exc:
+            record["status"] = "failed"
+            record["result"] = {"sent": [], "denied": [], "failed": [{"email": None, "error": str(exc)}]}
+        record["updated_at"] = _now_iso()
+        records[campaign_id] = record
+        changed = True
+        summaries.append(_campaign_summary(campaign_id, record))
+    if changed:
+        save_campaign_runs(records, agent_instance_id=instance)
+    return summaries
+
+
+def _run_timestamp_at_or_after(record: dict, since_dt: datetime) -> bool:
+    value = record.get("created_at") or record.get("updated_at")
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) >= since_dt
 
 
 @app.get("/drafts")
 async def drafts(
     category: str | None = Query(default=None),
     priority: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    since: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict:
     runs = list_runs(
@@ -1924,12 +2615,76 @@ async def drafts(
         runs = [run for run in runs if run.get("category") == category]
     if priority:
         runs = [run for run in runs if run.get("priority") == priority]
+    if q and q.strip():
+        needle = q.strip().lower()
+        runs = [
+            run for run in runs
+            if needle in str(run.get("author") or "").lower()
+            or needle in str(run.get("subject") or "").lower()
+        ]
+    if since and since.strip():
+        try:
+            since_dt = datetime.fromisoformat(since.strip().replace("Z", "+00:00"))
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            since_dt = since_dt.astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="since must be an ISO date or datetime")
+        runs = [run for run in runs if _run_timestamp_at_or_after(run, since_dt)]
     order = {"urgent": 0, "normal": 1, "low": 2}
     runs.sort(key=lambda run: (order.get(run.get("priority") or "normal", 1), run.get("updated_at", "")))
     return {
         "agent_instance_id": current_agent_instance_id(),
         "drafts": runs[:limit],
         "limit": limit,
+    }
+
+
+@app.get("/junk/suggestions")
+async def junk_suggestions(request: Request, limit: int = Query(default=200, ge=25, le=500)) -> dict:
+    """Block candidates taken from this mailbox's own traffic, not placeholders."""
+    _require_instance_role(request, "viewer")
+    config = load_junk(agent_instance_id=current_agent_instance_id())
+    try:
+        messages = await asyncio.to_thread(get_provider().list_inbox, limit)
+    except Exception as exc:
+        print(f"api: junk suggestions unavailable: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "scanned": len(messages),
+        "suggestions": suggest_junk_senders(messages, config),
+    }
+
+
+@app.get("/junk")
+async def get_junk(request: Request) -> dict:
+    """Junk-gate settings for this instance, plus the reasons the gate can report."""
+    _require_instance_role(request, "viewer")
+    config = load_junk(agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "junk": config.model_dump(),
+    }
+
+
+@app.put("/junk")
+async def update_junk(request: Request, body: JunkInput) -> dict:
+    """Patch junk-gate settings; omitted fields keep their current value."""
+    _require_instance_role(request, "owner")
+    current = load_junk(agent_instance_id=current_agent_instance_id())
+    patch = body.model_dump(exclude_none=True)
+    for key in ("allowed_senders", "allowed_domains", "blocked_senders", "blocked_domains"):
+        if key in patch:
+            patch[key] = [item.strip().lower() for item in patch[key] if item and item.strip()]
+    updated = JunkConfig(**{**current.model_dump(), **patch})
+    save_junk(updated, agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "junk": updated.model_dump(),
     }
 
 
@@ -2059,6 +2814,32 @@ def _persist_rules(config: RulesConfig) -> dict:
         "rules", yaml.safe_dump(config.model_dump(), sort_keys=False), DEFAULT_RULES_PATH
     )
     return {"parsed": load_rules().model_dump()}
+
+
+class StarterRulesInput(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+
+
+@app.get("/rules/starter")
+async def get_starter_rules() -> dict:
+    """Sensible starter rules for a small company, offered rather than forced."""
+    return {"starter_rules": starter_rule_catalogue(load_rules())}
+
+
+@app.post("/rules/starter/apply")
+async def apply_starter_rules_endpoint(request: Request, body: StarterRulesInput) -> dict:
+    _require_instance_role(request, "owner")
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="Select at least one starter rule")
+    config = load_rules()
+    try:
+        config, added = apply_starter_rules(config, body.ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = _persist_rules(config)
+    result["added"] = added
+    result["starter_rules"] = starter_rule_catalogue(load_rules())
+    return result
 
 
 _TOGGLEABLE_SECTIONS = {"automation", "digest", "snooze", "follow_ups", "learning"}
@@ -2280,9 +3061,9 @@ async def suggest_persona_endpoint(request: Request) -> dict:
     cfg = load_config()
     user_id = current_user_id()
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        sent_samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
-        received = await asyncio.to_thread(list_inbox, 25, resource)
+        provider = get_provider()
+        sent_samples = await asyncio.to_thread(provider.fetch_sent, cfg.style_learning.max_samples)
+        received = await asyncio.to_thread(provider.list_inbox, 25)
     except Exception as exc:
         print(f"api: persona suggestion Gmail read unavailable for user {user_id}: {exc}")
         raise HTTPException(
@@ -2334,13 +3115,44 @@ async def update_send_mode(request: Request, body: SendModeInput) -> dict:
 @app.get("/signature")
 async def get_signature() -> dict:
     signature = load_signature()
-    return {"agent_instance_id": current_agent_instance_id(), **signature.model_dump()}
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **signature.model_dump(),
+        "available_modes": list(SIGNATURE_MODES),
+    }
 
 
 @app.put("/signature")
 async def update_signature(body: SignatureConfig) -> dict:
+    if body.mode not in SIGNATURE_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of: {', '.join(SIGNATURE_MODES)}")
     save_signature(body)
-    return {"agent_instance_id": current_agent_instance_id(), **body.model_dump()}
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        **body.model_dump(),
+        "available_modes": list(SIGNATURE_MODES),
+    }
+
+
+class SignatureApplyInput(BaseModel):
+    content: str
+    mode: str
+
+
+@app.post("/signature/apply")
+async def apply_signature_endpoint(body: SignatureApplyInput) -> dict:
+    """Compose the final body for one draft under an explicit mode override.
+
+    Used by the approval UI's ask_each_time per-draft toggle: the chosen mode
+    is applied here, and the already-signed content is then sent back through
+    the normal 'edit' approval path — apply_signature's idempotency guarantee
+    means the graph's own signature step (which runs with no override once
+    signature.mode is ask_each_time) leaves this content untouched.
+    """
+    if body.mode not in SIGNATURE_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of: {', '.join(SIGNATURE_MODES)}")
+    signature = load_signature()
+    return {"content": apply_signature(body.content, signature, mode=body.mode)}
 
 
 @app.post("/signature/image")
@@ -2387,29 +3199,38 @@ async def get_preferences(request: Request) -> dict:
     }
 
 
-async def _memory_kind_text(request: Request, kind: str) -> str:
+async def _memory_kind_entry(request: Request, kind: str) -> tuple[str, str]:
+    """The stored preference text for a kind plus where it came from."""
     cfg = load_config()
     store = request.app.state.store
     item = await store.aget(namespace(kind), "user_preferences")
     if item:
-        return preferences_text(item.value)
+        return preferences_text(item.value), preferences_origin(item.value) or ORIGIN_LEARNED
     defaults = {
         "triage_preferences": cfg.agent.triage_instructions,
         "response_preferences": cfg.agent.response_preferences,
         "writing_style": cfg.agent.writing_style_default,
     }
-    return defaults.get(kind, "")
+    return defaults.get(kind, ""), ORIGIN_DEFAULT
+
+
+async def _memory_kind_text(request: Request, kind: str) -> str:
+    text, _ = await _memory_kind_entry(request, kind)
+    return text
 
 
 @app.get("/memory/summary")
 async def memory_summary(request: Request) -> dict:
     """Readable memory: one deletable French line per learned item, per kind."""
     summary: dict = {"agent_instance_id": current_agent_instance_id()}
+    origins: dict = {}
     for kind in MEMORY_KINDS:
-        text = await _memory_kind_text(request, kind)
+        text, origin = await _memory_kind_entry(request, kind)
+        origins[kind] = origin
         summary[kind] = await asyncio.to_thread(
             summarize_kind, kind, text, graph_module.llm
         )
+    summary["origins"] = origins
     return summary
 
 
@@ -2423,7 +3244,7 @@ async def delete_memory_item(request: Request, kind: str, id: str) -> dict:
     if updated is None:
         raise HTTPException(status_code=404, detail="memory item not found")
     store = request.app.state.store
-    await store.aput(namespace(kind), "user_preferences", wrap_preferences(updated))
+    await store.aput(namespace(kind), "user_preferences", wrap_preferences(updated, ORIGIN_MANUAL))
     return {
         "agent_instance_id": current_agent_instance_id(),
         "kind": kind,
@@ -2436,11 +3257,20 @@ async def delete_memory_item(request: Request, kind: str, id: str) -> dict:
 async def update_preferences(request: Request, body: MemoryInput) -> dict:
     # AsyncSqliteStore: must use the async API on the event loop (sync calls raise).
     store = request.app.state.store
-    await store.aput(namespace("triage_preferences"), "user_preferences", wrap_preferences(body.triage_preferences))
-    await store.aput(namespace("response_preferences"), "user_preferences", wrap_preferences(body.response_preferences))
+    await store.aput(
+        namespace("triage_preferences"),
+        "user_preferences",
+        wrap_preferences(body.triage_preferences, ORIGIN_MANUAL),
+    )
+    await store.aput(
+        namespace("response_preferences"),
+        "user_preferences",
+        wrap_preferences(body.response_preferences, ORIGIN_MANUAL),
+    )
     return {
         "triage_preferences": body.triage_preferences,
         "response_preferences": body.response_preferences,
+        "origin": ORIGIN_MANUAL,
     }
 
 
@@ -2456,15 +3286,23 @@ async def get_style(request: Request) -> dict:
         "max_samples": cfg.style_learning.max_samples,
         "writing_style": writing_style,
         "source": "learned" if item else "default",
+        # The store only holds the rendered text; the UI's structured panel needs
+        # it parsed back, and the origin to say who wrote it.
+        "profile": parse_style_text(writing_style).model_dump(),
+        "origin": (preferences_origin(item.value) or ORIGIN_LEARNED) if item else ORIGIN_DEFAULT,
     }
 
 
 @app.put("/style")
 async def update_style(request: Request, body: StyleInput) -> dict:
     store = request.app.state.store
-    await store.aput(namespace("writing_style"), "user_preferences", wrap_preferences(body.writing_style))
+    await store.aput(
+        namespace("writing_style"), "user_preferences", wrap_preferences(body.writing_style, ORIGIN_MANUAL)
+    )
     return {
         "agent_instance_id": current_agent_instance_id(),
+        "profile": parse_style_text(body.writing_style).model_dump(),
+        "origin": ORIGIN_MANUAL,
         "writing_style": body.writing_style,
         "source": "manual",
     }
@@ -2477,8 +3315,7 @@ async def learn_style(request: Request) -> dict:
         raise HTTPException(status_code=409, detail="Style learning is disabled for this agent instance")
     user_id = current_user_id()
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        samples = await asyncio.to_thread(fetch_sent, cfg.style_learning.max_samples, resource)
+        samples = await asyncio.to_thread(get_provider().fetch_sent, cfg.style_learning.max_samples)
     except Exception as exc:
         print(f"api: style learning Gmail read unavailable for user {user_id}: {exc}")
         raise HTTPException(
@@ -2502,12 +3339,13 @@ async def learn_style(request: Request) -> dict:
     await request.app.state.store.aput(
         namespace("writing_style"),
         "user_preferences",
-        wrap_preferences(writing_style),
+        wrap_preferences(writing_style, ORIGIN_LEARNED),
     )
     return {
         "agent_instance_id": current_agent_instance_id(),
         "sample_count": len(samples),
         "profile": profile.model_dump(),
+        "origin": ORIGIN_LEARNED,
         "writing_style": writing_style,
     }
 
@@ -2555,6 +3393,10 @@ async def analytics(request: Request, period: str = Query(default="week")) -> di
 async def runs(
     request: Request,
     status: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    since: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
@@ -2570,7 +3412,27 @@ async def runs(
     )
     if user_dept:
         all_runs = [r for r in all_runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
-    
+    if category:
+        all_runs = [r for r in all_runs if str(r.get("category") or "") == category]
+    if priority:
+        all_runs = [r for r in all_runs if str(r.get("priority") or "normal") == priority]
+    if q and q.strip():
+        needle = q.strip().lower()
+        all_runs = [
+            r for r in all_runs
+            if needle in str(r.get("author") or "").lower()
+            or needle in str(r.get("subject") or "").lower()
+        ]
+    if since and since.strip():
+        try:
+            since_dt = datetime.fromisoformat(since.strip().replace("Z", "+00:00"))
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            since_dt = since_dt.astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="since must be an ISO date or datetime")
+        all_runs = [r for r in all_runs if _run_timestamp_at_or_after(r, since_dt)]
+
     categories_cfg = load_categories(agent_instance_id=current_agent_instance_id())
     escalation_state = load_escalation_state()
     page = [
@@ -2656,7 +3518,7 @@ async def events_stream(request: Request) -> StreamingResponse:
 
 
 @app.post("/sync")
-async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=100)) -> dict:
+async def sync_unread(request: Request, limit: int | None = Query(default=None, ge=1, le=100)) -> dict:
     """Process unread Gmail messages now so validation reflects fresh mail."""
     user_id = current_user_id()
     # Manual sync must respect the Gmail rate-limit cooldown: calling Gmail
@@ -2686,18 +3548,20 @@ async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=
                 f"reprendra automatiquement dans environ {int(pause_remaining // 60) + 1} min."
             ),
         )
-    try:
-        resource = await asyncio.to_thread(gmail_resource)
-    except Exception as exc:
-        print(f"api: gmail sync unavailable for user {user_id}: {exc}")
-        record_sync_failure(str(exc))
+    provider = get_provider()
+    reachable = await asyncio.to_thread(provider.probe)
+    if not reachable.get("ok"):
+        error = reachable.get("error") or "mailbox unreachable"
+        print(f"api: gmail sync unavailable for user {user_id}: {error}")
+        record_sync_failure(error)
         raise HTTPException(
             status_code=503,
             detail="Gmail sync is unavailable. Check OAuth credentials and container network access.",
-        ) from exc
+        )
 
     try:
-        outcomes = await poll_once(request.app.state.graph, resource=resource, max_results=limit)
+        effective_limit = limit or load_runtime_settings(current_agent_instance_id()).sync_limit
+        outcomes = await poll_once(request.app.state.graph, provider=provider, max_results=effective_limit)
     except Exception as exc:
         print(f"api: gmail sync failed for user {user_id}: {exc}")
         record_sync_failure(str(exc))
@@ -2710,8 +3574,13 @@ async def sync_unread(request: Request, limit: int = Query(default=20, ge=1, le=
 
 @app.get("/sync/status")
 async def sync_status() -> dict:
-    """Return the Gmail sync observability state for the current agent instance."""
-    return get_sync_status()
+    """Return the mailbox sync observability state for the current agent instance.
+
+    Carries `provider` so callers — the web app and the gateway's mailbox
+    overview — can render and act on the right connect flow without the gateway
+    having to keep its own copy of that setting.
+    """
+    return {**get_sync_status(), "provider": get_mail_provider(current_agent_instance_id())}
 
 
 @app.post("/sync/pause", status_code=200)
@@ -2768,6 +3637,50 @@ async def delete_memory(request: Request) -> dict:
     return {"cleared": True, "namespaces": ["triage_preferences", "response_preferences", "writing_style"]}
 
 
+# Cached Gmail inbox listings, keyed by (user, instance, limit).
+#
+# Listing the inbox is a network round trip to Google — a list call plus a
+# metadata batch — and it was being paid on every visit to the Messages view.
+# The mailbox itself changes slowly compared to how often the view is opened, so
+# the listing is held briefly and served immediately; verdicts are re-attached
+# from the local registry on every request, and any action that mutates the
+# mailbox drops the entry so the next read is authoritative.
+_INBOX_CACHE: dict[tuple, tuple[float, list[dict]]] = {}
+_INBOX_CACHE_TTL_SECONDS = float(os.getenv("AGENT_INBOX_CACHE_TTL_SECONDS", "60"))
+_INBOX_CACHE_LOCK = threading.Lock()
+
+
+def _inbox_cache_get(key: tuple) -> list[dict] | None:
+    if _INBOX_CACHE_TTL_SECONDS <= 0:
+        return None
+    with _INBOX_CACHE_LOCK:
+        entry = _INBOX_CACHE.get(key)
+        if entry is None:
+            return None
+        stored_at, messages = entry
+        if (time.time() - stored_at) > _INBOX_CACHE_TTL_SECONDS:
+            _INBOX_CACHE.pop(key, None)
+            return None
+        return messages
+
+
+def _inbox_cache_put(key: tuple, messages: list[dict]) -> None:
+    if _INBOX_CACHE_TTL_SECONDS <= 0:
+        return
+    with _INBOX_CACHE_LOCK:
+        _INBOX_CACHE[key] = (time.time(), [dict(message) for message in messages])
+
+
+def _inbox_cache_clear(user_id: str | None = None, agent_instance_id: str | None = None) -> None:
+    """Drop cached listings after the mailbox is mutated."""
+    with _INBOX_CACHE_LOCK:
+        if user_id is None and agent_instance_id is None:
+            _INBOX_CACHE.clear()
+            return
+        for key in [k for k in _INBOX_CACHE if k[0] == user_id and k[1] == agent_instance_id]:
+            _INBOX_CACHE.pop(key, None)
+
+
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
     """Build inbox rows from agent-known runs when Gmail is temporarily unreachable."""
     messages: list[dict] = []
@@ -2798,31 +3711,89 @@ def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
 
 
 @app.get("/inbox")
-async def inbox(request: Request, limit: int = Query(default=25, ge=1, le=100)) -> dict:
+async def inbox(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    refresh: bool = Query(default=False),
+    mailbox: str = Query(default="inbox", pattern="^(inbox|sent)$"),
+) -> dict:
     """List the tenant's recent inbox messages with the agent's verdict attached.
 
     The Gmail calls are blocking (googleapiclient), so they run in a worker thread to
     keep the event loop free. Each message is matched to an agent run by Gmail message
     id so the UI can show the classification and link straight to the run.
+
+    The Gmail half of that is a network round trip to Google — a list call plus a
+    metadata batch, measured at roughly four seconds for fifty messages — and it
+    was being paid on every single visit to the view, so opening Messages always
+    meant watching a spinner. The listing is cached per instance for a short
+    window and served immediately; `refresh=true` forces a re-read. Run verdicts
+    are re-attached on every request regardless, since those come from the local
+    registry in milliseconds and are what actually changes minute to minute.
     """
     user_id = current_user_id()
     user_dept = _request_user_dept(request)
-    try:
-        resource = await asyncio.to_thread(gmail_resource)
-        messages = await asyncio.to_thread(list_inbox, limit, resource)
-    except Exception as exc:
-        print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
-        runs = await asyncio.to_thread(list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500)
-        if user_dept:
-            runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+    cache_key = (user_id, current_agent_instance_id(), mailbox, limit)
+    cached = None if refresh else _inbox_cache_get(cache_key)
+    if cached is not None:
+        messages = [dict(message) for message in cached]
+    else:
+        try:
+            provider = get_provider()
+            if mailbox == "sent":
+                sent = await asyncio.to_thread(provider.fetch_sent, limit)
+                messages = [
+                    {
+                        "id": item.get("id"),
+                        "thread_id": item.get("thread_id"),
+                        "from": item.get("to", ""),
+                        "to": item.get("to", ""),
+                        "subject": item.get("subject", ""),
+                        "snippet": item.get("body", "")[:240],
+                        "date": item.get("date", ""),
+                        "unread": False,
+                        "mailbox": "sent",
+                    }
+                    for item in sent
+                    if item.get("id")
+                ]
+            else:
+                messages = await asyncio.to_thread(provider.list_inbox, limit)
+                for message in messages:
+                    message["mailbox"] = "inbox"
+            _inbox_cache_put(cache_key, messages)
+        except Exception as exc:
+            return await _inbox_unavailable(exc, user_id, user_dept, limit, mailbox)
+    return await _inbox_with_verdicts(messages, user_dept)
+
+
+async def _inbox_unavailable(exc: Exception, user_id: str, user_dept: str | None, limit: int, mailbox: str = "inbox") -> dict:
+    """Gmail is unreachable: fall back to the last runs this instance recorded."""
+    print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
+    if mailbox == "sent":
         return {
-            "messages": _fallback_inbox_messages(runs, limit),
-            "warning": (
-                "Gmail inbox is unavailable. Check OAuth credentials and container network access. "
-                "Showing last known agent messages."
-            ),
+            "messages": [],
+            "warning": "Sent mail is unavailable. Check OAuth credentials and container network access.",
         }
-    runs = await asyncio.to_thread(list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500)
+    runs = await asyncio.to_thread(
+        list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
+    )
+    if user_dept:
+        runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+    return {
+        "messages": _fallback_inbox_messages(runs, limit),
+        "warning": (
+            "Gmail inbox is unavailable. Check OAuth credentials and container network access. "
+            "Showing last known agent messages."
+        ),
+    }
+
+
+async def _inbox_with_verdicts(messages: list[dict], user_dept: str | None) -> dict:
+    """Attach each message's agent run, so a cached listing still shows fresh verdicts."""
+    runs = await asyncio.to_thread(
+        list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
+    )
     if user_dept:
         runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
     by_email: dict[str, dict] = {}
@@ -2839,37 +3810,77 @@ async def inbox(request: Request, limit: int = Query(default=25, ge=1, le=100)) 
     return {"messages": messages}
 
 
-async def _inbox_action(fn, msg_id: str, action: str) -> dict:
+async def _inbox_action(method_name: str, msg_id: str, action: str) -> dict:
     try:
-        resource = await asyncio.to_thread(gmail_resource)
-        await asyncio.to_thread(fn, msg_id, resource)
+        provider = get_provider()
+        await asyncio.to_thread(getattr(provider, method_name), msg_id)
     except Exception as exc:
         print(f"api: gmail inbox action {action} unavailable for {msg_id}: {exc}")
         raise HTTPException(
             status_code=503,
             detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
         ) from exc
+    # Archiving, trashing or flipping read state changes what the listing should
+    # show, so the cached copy is dropped rather than left to expire.
+    _inbox_cache_clear(current_user_id(), current_agent_instance_id())
     return {"ok": True, "msg_id": msg_id, "action": action}
 
 
 @app.post("/inbox/{msg_id}/archive")
 async def inbox_archive(msg_id: str) -> dict:
-    return await _inbox_action(archive_message, msg_id, "archive")
+    return await _inbox_action("archive_message", msg_id, "archive")
 
 
 @app.post("/inbox/{msg_id}/trash")
 async def inbox_trash(msg_id: str) -> dict:
-    return await _inbox_action(trash_message, msg_id, "trash")
+    return await _inbox_action("trash_message", msg_id, "trash")
 
 
 @app.post("/inbox/{msg_id}/read")
 async def inbox_read(msg_id: str) -> dict:
-    return await _inbox_action(mark_as_read, msg_id, "read")
+    return await _inbox_action("mark_as_read", msg_id, "read")
 
 
 @app.post("/inbox/{msg_id}/unread")
 async def inbox_unread(msg_id: str) -> dict:
-    return await _inbox_action(mark_as_unread, msg_id, "unread")
+    return await _inbox_action("mark_as_unread", msg_id, "unread")
+
+
+@app.post("/inbox/{msg_id}/force-agent")
+async def inbox_force_agent(request: Request, msg_id: str) -> dict:
+    """Mark a message unread, clear its previous run, and process it immediately."""
+    provider = get_provider()
+    try:
+        await asyncio.to_thread(provider.mark_as_unread, msg_id)
+    except Exception as exc:
+        print(f"api: gmail force-agent unavailable for {msg_id}: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
+        ) from exc
+
+    existing = await asyncio.to_thread(
+        find_run_by_email,
+        msg_id,
+        user_id=None,
+        agent_instance_id=current_agent_instance_id(),
+    )
+    cleared = 0
+    if existing:
+        cleared = await asyncio.to_thread(
+            delete_runs,
+            [existing["run_id"]],
+            agent_instance_id=current_agent_instance_id(),
+        )
+    graph = getattr(request.app.state, "graph", graph_module.graph)
+    outcome = await process_message_with_retry(graph, msg_id, provider, load_rules())
+    _inbox_cache_clear(current_user_id(), current_agent_instance_id())
+    return {
+        "ok": True,
+        "msg_id": msg_id,
+        "cleared_runs": cleared,
+        "outcome": {"message_id": outcome[0], "status": outcome[1], "run_id": outcome[2]},
+    }
 
 
 class AssignInput(BaseModel):
@@ -3017,30 +4028,22 @@ async def _approve_run(graph, run_id: str, args) -> RunResponse:
         raise
     response = _format(result, run_id)
     _record_response(response)
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    if response.status == "completed" and record is not None:
+        _record_decision_metadata(response, record, "approved")
     return response
 
 
 async def _reject_run(graph, run_id: str) -> RunResponse:
-    """Resume a paused run with a reject decision. Authorization is the caller's job."""
-    config = await _require_run(graph, run_id)
+    """Resolve a paused run with an ignore/reject decision. Authorization is the caller's job."""
     _require_pending(run_id)
-    try:
-        result = await _invoke_graph(
-            graph,
-            Command(resume={"type": "reject"}), config, reload_runtime_config=False
-        )
-    except Exception as exc:
-        response = _complete_pending_rejection(run_id)
-        if response is not None:
-            print(f"api: reject graph resume failed for run {run_id}; completed pending rejection fallback: {exc}")
-            return response
-        response = _pending_response_after_decision_error(run_id, exc, "reject")
-        if response is not None:
-            return response
-        raise
-    response = _format(result, run_id)
-    _record_response(response)
-    return response
+    response = _complete_pending_rejection(run_id)
+    if response is not None:
+        return response
+    # If a legacy/non-pending run is missing from the registry, fall back to the
+    # old graph validation so callers still get a precise 404.
+    await _require_run(graph, run_id)
+    raise HTTPException(status_code=409, detail="Run is not pending approval")
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)

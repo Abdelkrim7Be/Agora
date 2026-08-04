@@ -53,3 +53,124 @@ templates:
   variables:
   - name
   - company
+- name: voeux_nouvel_an
+  audience:
+  - client
+  - partner
+  - employee
+  category: voeux
+  subject: 'Meilleurs vœux pour la nouvelle année'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Toute l'équipe vous adresse ses meilleurs vœux pour cette nouvelle année.
+    Nous vous souhaitons une année pleine de réussite, de santé et de projets utiles.
+
+    Merci pour votre confiance et pour les échanges construits ensemble.
+
+    Bien cordialement,
+    L'équipe Agora
+  variables:
+  - name
+- name: jour_ferie_france
+  audience:
+  - client
+  - partner
+  - employee
+  category: information_calendrier
+  subject: 'Information : organisation pendant le jour férié'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Nous vous informons de notre organisation pendant le prochain jour férié en France.
+    Les demandes urgentes restent suivies, et les autres messages seront traités dès la reprise.
+
+    Merci pour votre compréhension.
+
+    Bien cordialement,
+    L'équipe Agora
+  variables:
+  - name
+- name: evenement_saisonnier
+  audience:
+  - client
+  - partner
+  category: saisonnier
+  subject: 'Actualité saisonnière pour {{company}}'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Nous vous partageons cette actualité saisonnière susceptible d'intéresser {{company}}.
+    Elle peut avoir un impact sur l'organisation, les délais ou les priorités des prochaines semaines.
+
+    Nous restons disponibles pour en discuter.
+
+    Bien cordialement,
+    L'équipe Agora
+  variables:
+  - name
+  - company
+- name: alerte_exceptionnelle
+  audience:
+  - client
+  - partner
+  - employee
+  category: alerte
+  subject: 'Alerte exceptionnelle : information importante'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Nous vous contactons au sujet d'une situation exceptionnelle nécessitant votre attention.
+    Les informations utiles sont les suivantes :
+
+    - Situation : à préciser
+    - Impact attendu : à préciser
+    - Action recommandée : à préciser
+
+    Nous vous tiendrons informés de toute évolution.
+
+    Bien cordialement,
+    L'équipe Agora
+  variables:
+  - name
+- name: situation_sanitaire
+  audience:
+  - client
+  - partner
+  - employee
+  category: sanitaire
+  subject: 'Information sanitaire : mesures et organisation'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Nous vous informons des mesures prises dans le cadre de la situation sanitaire en cours.
+    Notre priorité est de maintenir un service fiable tout en protégeant les personnes concernées.
+
+    Les modalités pratiques seront adaptées si la situation évolue.
+
+    Bien cordialement,
+    L'équipe Agora
+  variables:
+  - name
+- name: communication_employes
+  audience:
+  - employee
+  category: communication_interne
+  subject: 'Communication interne : point important'
+  body_markdown: |
+    ## Bonjour {{name}},
+
+    Nous vous partageons un point important concernant l'organisation interne.
+
+    Points à retenir :
+
+    - Sujet : à préciser
+    - Échéance : à préciser
+    - Responsable : à préciser
+
+    Merci de confirmer la bonne réception.
+
+    Bien cordialement,
+    La direction
+  variables:
+  - name

@@ -66,7 +66,10 @@ def test_gmail_connect_start_builds_signed_offline_consent_url(monkeypatch):
     assert params["access_type"] == ["offline"]
     assert params["prompt"] == ["consent"]
     assert body["agent_instance_id"] == "ceo-email-agent"
-    assert "https://mail.google.com/" in body["scopes"]
+    # gmail.modify, not the maximal mail.google.com scope: the agent never
+    # permanently deletes mail, so it must not ask for permission to.
+    assert "https://www.googleapis.com/auth/gmail.modify" in body["scopes"]
+    assert "https://mail.google.com/" not in body["scopes"]
     assert _FakeFlow.last.redirect_uri == "https://gateway.example/api/agent/connect/gmail/callback"
     assert _FakeFlow.last.kwargs["autogenerate_code_verifier"] is False
 
@@ -89,11 +92,17 @@ def test_gmail_connect_callback_rejects_bad_state(monkeypatch):
     monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
 
     with TestClient(app) as client:
-        response = client.get("/connect/gmail/callback?code=abc&state=bad-state")
+        response = client.get(
+            "/connect/gmail/callback?code=abc&state=bad-state", follow_redirects=False
+        )
 
-    assert response.status_code == 400
-    assert "Invalid OAuth state" in response.text
-    assert "agora:gmail-oauth" in response.text
+    # The callback now hands the browser back to the app instead of rendering its
+    # own page, so the outcome travels in the redirect target, not the body.
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "/oauth/gmail/callback" in location
+    assert "gmail=error" in location
+    assert "Invalid%20OAuth%20state" in location
 
 
 def test_gmail_connect_callback_exchanges_valid_state(monkeypatch):
@@ -110,12 +119,14 @@ def test_gmail_connect_callback_exchanges_valid_state(monkeypatch):
     monkeypatch.setattr(api, "exchange_gmail_oauth_code", fake_exchange)
 
     with TestClient(app) as client:
-        response = client.get(f"/connect/gmail/callback?code=abc123&state={state}")
+        response = client.get(
+            f"/connect/gmail/callback?code=abc123&state={state}", follow_redirects=False
+        )
 
-    assert response.status_code == 200
-    assert "agora:gmail-oauth" in response.text
-    assert "Gmail connected" in response.text
-    assert "ceo-email-agent" in response.text
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "gmail=connected" in location
+    assert "ceo-email-agent" in location
     assert captured["code"] == "abc123"
     assert captured["payload"]["agent_instance_id"] == "ceo-email-agent"
 
@@ -293,7 +304,11 @@ def test_gmail_connect_callback_surfaces_exchange_error_message(monkeypatch):
     monkeypatch.setattr(api, "exchange_gmail_oauth_code", failing_exchange)
 
     with TestClient(app) as client:
-        response = client.get(f"/connect/gmail/callback?code=abc123&state={state}")
+        response = client.get(
+            f"/connect/gmail/callback?code=abc123&state={state}", follow_redirects=False
+        )
 
-    assert response.status_code == 400
-    assert "Redirect URI mismatch" in response.text
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "gmail=error" in location
+    assert "Redirect%20URI%20mismatch" in location

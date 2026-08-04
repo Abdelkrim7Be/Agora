@@ -69,6 +69,27 @@ public class LoginRateLimiter {
                 : Decision.permit();
     }
 
+    /**
+     * Throttle an unauthenticated action by its recent global failure rate.
+     *
+     * Used by the public invitation endpoints. There is no account to key on —
+     * the caller presents only a token, and an unknown token names no user — so
+     * the meaningful control is a global one: it is what stops someone
+     * enumerating tokens, while a single invitee fat-fingering their link a few
+     * times never trips it.
+     */
+    public Decision checkGlobal(String action) {
+        if (!config.isEnabled()) {
+            return Decision.permit();
+        }
+        Instant cutoff = clock.instant().minusSeconds(config.getWindowSeconds());
+        long failures = auditRepository
+                .countByActionAndOutcomeAndTimestampAfter(action, FAILURE_OUTCOME, cutoff);
+        return failures >= config.getGlobalMaxFailures()
+                ? Decision.deny(config.getWindowSeconds())
+                : Decision.permit();
+    }
+
     static String normalizeUsername(String username) {
         return username == null ? "" : username.strip().toLowerCase(Locale.ROOT);
     }

@@ -18,6 +18,8 @@ ENVELOPE_VERSION = 2
 DEFAULT_KEY_ID = "default"
 LEGACY_KEY_ID = "legacy"
 TOKEN_BACKENDS = {"file", "vault"}
+# Gmail predates the provider layer, so it keeps the unsuffixed storage key.
+DEFAULT_TOKEN_PROVIDER = "gmail"
 
 
 def _service_path(path: str) -> Path:
@@ -30,21 +32,36 @@ def _token_store_dir() -> Path:
     return configured.with_suffix("") if configured.suffix else configured
 
 
-def token_file_for_user(
-    user_id: str | None = None,
-    agent_instance_id: str | None = None,
-) -> Path:
-    """Return the legacy logical token path for one agent instance."""
+def token_scope(agent_instance_id: str | None = None, provider: str = DEFAULT_TOKEN_PROVIDER) -> str:
+    """The opaque key a stored token lives under.
+
+    Gmail keeps the bare instance id so every path — file name, lock file, Vault
+    secret — stays byte-identical to what it was before a second provider
+    existed, and no already-stored token has to move. Anything else is suffixed.
+    """
     resolved_instance = normalize_agent_instance_id(
         agent_instance_id or current_agent_instance_id()
     )
+    cleaned = (provider or DEFAULT_TOKEN_PROVIDER).strip().lower()
+    if cleaned in ("", DEFAULT_TOKEN_PROVIDER):
+        return resolved_instance
+    return f"{resolved_instance}__{cleaned}"
+
+
+def token_file_for_user(
+    user_id: str | None = None,
+    agent_instance_id: str | None = None,
+    provider: str = DEFAULT_TOKEN_PROVIDER,
+) -> Path:
+    """Return the legacy logical token path for one agent instance."""
+    scope = token_scope(agent_instance_id, provider)
     default_instance = normalize_agent_instance_id(settings.default_agent_instance_id)
-    if resolved_instance == default_instance:
+    if scope == default_instance:
         return _service_path(settings.gmail_token_path)
 
     token_dir = _token_store_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
-    return token_dir / f"instance__{resolved_instance}.json"
+    return token_dir / f"instance__{scope}.json"
 
 
 def _derive_fernet(secret: str):
@@ -298,30 +315,30 @@ def _temporary_token_path(target: Path) -> Path:
     return path
 
 
-def has_stored_token(agent_instance_id: str | None = None) -> bool:
-    resolved_instance = normalize_agent_instance_id(
-        agent_instance_id or current_agent_instance_id()
-    )
-    target = token_file_for_user(agent_instance_id=resolved_instance)
+def has_stored_token(
+    agent_instance_id: str | None = None,
+    provider: str = DEFAULT_TOKEN_PROVIDER,
+) -> bool:
+    scope = token_scope(agent_instance_id, provider)
+    target = token_file_for_user(agent_instance_id=agent_instance_id, provider=provider)
     if target.is_file() or _encrypted_path(target).is_file():
         return True
-    return _vault_blob(resolved_instance) is not None if _backend() == "vault" else False
+    return _vault_blob(scope) is not None if _backend() == "vault" else False
 
 
 def delete_token(
     user_id: str | None = None,
     agent_instance_id: str | None = None,
+    provider: str = DEFAULT_TOKEN_PROVIDER,
 ) -> bool:
-    resolved_instance = normalize_agent_instance_id(
-        agent_instance_id or current_agent_instance_id()
-    )
-    target = token_file_for_user(user_id, resolved_instance)
+    scope = token_scope(agent_instance_id, provider)
+    target = token_file_for_user(user_id, agent_instance_id, provider=provider)
     removed = target.is_file() or _encrypted_path(target).is_file()
 
     if _backend() == "vault":
-        vault_exists = _vault_blob(resolved_instance) is not None
+        vault_exists = _vault_blob(scope) is not None
         if vault_exists:
-            _delete_vault_blob(resolved_instance)
+            _delete_vault_blob(scope)
         removed = removed or vault_exists
 
     for path in (target, _encrypted_path(target), _lock_path(target)):
@@ -334,12 +351,11 @@ def delete_token(
 def prepared_token_file(
     user_id: str | None = None,
     agent_instance_id: str | None = None,
+    provider: str = DEFAULT_TOKEN_PROVIDER,
 ) -> Iterator[str]:
     """Yield a temporary plaintext token and persist only an encrypted envelope."""
-    resolved_instance = normalize_agent_instance_id(
-        agent_instance_id or current_agent_instance_id()
-    )
-    target = token_file_for_user(user_id, resolved_instance)
+    resolved_instance = token_scope(agent_instance_id, provider)
+    target = token_file_for_user(user_id, agent_instance_id, provider=provider)
     active_key_id, keys = _require_encryption_key()
     backend = _backend()
 

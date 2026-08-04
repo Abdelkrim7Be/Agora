@@ -11,6 +11,7 @@ from src.api import app, _require_run, _run_detail
 from src.categories import CategoriesConfig, Category, CategoryInstructions
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
 from src.tenant import current_agent_instance_id, current_user_id
+from tests.conftest import patch_provider
 
 
 def test_rule_and_section_toggle(monkeypatch, tmp_path):
@@ -294,6 +295,11 @@ segments: []
                 "audience": "client",
                 "fields": {"company": "Agora"},
                 "tags": ["vip"],
+                "category": None,
+                "domain": None,
+                "priority": None,
+                "category_source": "manual",
+                "category_confidence": None,
                 "active": True,
             }
         ],
@@ -573,11 +579,8 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
     )
 
     monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=True))
-    monkeypatch.setattr(api, "gmail_resource", lambda user_id=None: "gmail-resource")
-
-    def fake_fetch_sent(max_messages, resource=None):
+    def fake_fetch_sent(max_messages):
         captured["max_messages"] = max_messages
-        captured["resource"] = resource
         return [{"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}]
 
     def fake_analyze_style(samples, llm):
@@ -585,7 +588,7 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
         captured["llm"] = llm
         return profile
 
-    monkeypatch.setattr(api, "fetch_sent", fake_fetch_sent)
+    patch_provider(monkeypatch, api, fetch_sent=fake_fetch_sent)
     monkeypatch.setattr(api, "analyze_style", fake_analyze_style)
 
     with TestClient(app) as client:
@@ -606,7 +609,6 @@ def test_style_learn_fetches_sent_mail_and_stores_profile(monkeypatch):
     assert "Tone: warm and direct" in body["writing_style"]
     assert stored["writing_style"] == body["writing_style"]
     assert captured["max_messages"] == 2
-    assert captured["resource"] == "gmail-resource"
 
 
 
@@ -615,10 +617,13 @@ def test_style_learn_returns_retryable_rate_limit_error(monkeypatch):
     import src.api as api
 
     monkeypatch.setattr(api, "load_config", lambda: _style_enabled_config(enabled=True))
-    monkeypatch.setattr(api, "gmail_resource", lambda user_id=None: "gmail-resource")
-    monkeypatch.setattr(api, "fetch_sent", lambda max_messages, resource=None: [
-        {"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}
-    ])
+    patch_provider(
+        monkeypatch,
+        api,
+        fetch_sent=lambda max_messages: [
+            {"to": "a@example.com", "subject": "hello", "body": "A useful sent email body for style."}
+        ],
+    )
 
     def fake_analyze_style(samples, llm):
         raise RuntimeError("Error code: 429 - rate_limit_exceeded")
@@ -770,19 +775,19 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
     captured = {}
     graph = object()
 
-    def fake_gmail_resource(user_id=None):
-        captured["gmail_user_id"] = user_id
-        return "gmail"
-
-    async def fake_poll_once(graph_arg, resource=None, max_results=None):
+    async def fake_poll_once(graph_arg, provider=None, max_results=None):
         captured["graph"] = graph_arg
-        captured["resource"] = resource
+        captured["provider"] = provider
         captured["max_results"] = max_results
         captured["current_user"] = current_user_id()
         captured["current_agent_instance"] = current_agent_instance_id()
         return [("msg-1", "pending_approval", "run-1")]
 
-    monkeypatch.setattr(api, "gmail_resource", fake_gmail_resource)
+    provider = patch_provider(
+        monkeypatch,
+        api,
+        probe=lambda: {"ok": True, "mailbox": "ceo@example.com", "error": ""},
+    )
     monkeypatch.setattr(api, "poll_once", fake_poll_once)
 
     with TestClient(app) as client:
@@ -795,9 +800,8 @@ def test_sync_endpoint_polls_unread_for_current_user(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"outcomes": [["msg-1", "pending_approval", "run-1"]]}
     assert captured == {
-        "gmail_user_id": None,
         "graph": graph,
-        "resource": "gmail",
+        "provider": provider,
         "max_results": 7,
         "current_user": "owner",
         "current_agent_instance": "ceo-email-agent",
@@ -853,6 +857,7 @@ def test_memory_put_then_get_roundtrips(monkeypatch):
         assert put.json() == {
             "triage_preferences": "triage",
             "response_preferences": "response",
+            "origin": "manual",
         }
 
         got = client.get("/memory")
@@ -1029,13 +1034,18 @@ def test_get_run_prefers_instance_registry_pending_status(monkeypatch):
 
 
 def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
+    """A manual /run caller cannot grant themselves the trusted-Gmail-context
+    capabilities (forward_email/reply_all/inbox tools all key off email_id) by
+    supplying their own email_id/gmail_thread_id — /run strips both before the
+    graph ever sees them, regardless of what the resolved workflow policy does
+    with the run afterwards."""
     from src.categories import CategoriesConfig
     import src.graph as graph
 
     monkeypatch.setattr(
         graph,
         "load_categories",
-        lambda: CategoriesConfig(
+        lambda *a, **kw: CategoriesConfig(
             enabled=True,
             categories=[
                 {
@@ -1051,7 +1061,7 @@ def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
     )
 
     with TestClient(app) as client:
-        response = client.post(
+        post_response = client.post(
             "/run",
             json={
                 "author": "Alice <alice@example.com>",
@@ -1062,10 +1072,15 @@ def test_manual_run_cannot_supply_trusted_gmail_identifier(monkeypatch):
                 "gmail_thread_id": "caller-forged-thread-id",
             },
         )
+        run_id = post_response.json()["run_id"]
+        detail = client.get(
+            f"/run/{run_id}/detail",
+            headers={"X-Agora-User": "viewer", "X-Agora-Agent-Instance": "default-email-agent"},
+        )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "failed"
-    assert "trusted Gmail message id" in response.json()["error"]
+    assert post_response.status_code == 200
+    assert detail.json()["email"]["email_id"] is None
+    assert detail.json()["email"]["gmail_thread_id"] is None
 
 
 async def test_require_run_allows_owned_run(monkeypatch):
@@ -1268,7 +1283,7 @@ def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
 def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
     import src.api as api
 
-    def unavailable(_user_id=None):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("network unavailable")
 
     def runs(**_kwargs):
@@ -1285,7 +1300,7 @@ def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(api, "gmail_resource", unavailable)
+    patch_provider(monkeypatch, api, list_inbox=unavailable)
     monkeypatch.setattr(api, "list_runs", runs)
 
     with TestClient(app) as client:
@@ -1318,10 +1333,10 @@ def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
 def test_inbox_action_returns_503_when_gmail_unavailable(monkeypatch):
     import src.api as api
 
-    def unavailable(_user_id=None):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("network unavailable")
 
-    monkeypatch.setattr(api, "gmail_resource", unavailable)
+    patch_provider(monkeypatch, api, archive_message=unavailable)
 
     with TestClient(app) as client:
         response = client.post("/inbox/msg-1/archive", headers={"X-Agora-User": "owner"})
@@ -1340,6 +1355,7 @@ def test_approval_action_type_derivation(monkeypatch):
     assert _derive_action_type(_pending("write_email"), None) == "reply_draft"
     assert _derive_action_type(_pending("forward_email"), None) == "forward"
     assert _derive_action_type(_pending("forward_email"), "notify") == "notify"
+    assert _derive_action_type(_pending("notify_internal"), None) == "notify"
     assert _derive_action_type(_pending("trash_email"), None) == "organize"
     assert _derive_action_type(_pending("some_unknown"), None) == "unknown"
 
@@ -1400,6 +1416,30 @@ def test_category_edit_endpoint_updates_workflow(monkeypatch, tmp_path):
     assert updated["policy"] == "auto_draft"
     assert updated["route_to"] == ["support@example.com", "backup@example.com"]
     assert updated["instructions"]["sla"] == "12h"
+
+
+def test_category_edit_endpoint_persists_approval_policy_fields(monkeypatch, tmp_path):
+    _seed_categories(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/categories/support",
+            json={
+                "display_name": "Support",
+                "priority": "normal",
+                "policy": "notify",
+                "owner": "Support team",
+                "route_to": ["support@example.com"],
+                "require_approval": True,
+                "external_send_allowed": False,
+            },
+        )
+        got = client.get("/categories")
+
+    assert response.status_code == 200
+    updated = next(c for c in got.json()["parsed"]["categories"] if c["name"] == "support")
+    assert updated["require_approval"] is True
+    assert updated["external_send_allowed"] is False
 
 
 def test_category_edit_endpoint_404_for_unknown(monkeypatch, tmp_path):
@@ -1707,3 +1747,239 @@ def test_runs_list_carries_confidence_and_review_reason(monkeypatch):
     assert row["confidence"] == "moyenne"
     assert row["action_type"] == "reply_draft"
     assert "review_reason" in row
+
+
+def test_instance_setup_get_requires_viewer_and_calls_through(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "get_setup", lambda: {
+        "status": "running_setup", "started_at": None, "finished_at": None, "error": None,
+        "steps": [], "progress": {"done": 1, "total": 9, "percent": 11},
+    })
+
+    with TestClient(app) as client:
+        response = client.get("/instance-setup", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running_setup"
+
+
+def test_instance_setup_mutations_require_owner_role(monkeypatch):
+    with TestClient(app) as client:
+        assert client.post(
+            "/instance-setup/start", headers={"X-Agora-Instance-Role": "approver"}
+        ).status_code == 403
+        assert client.post(
+            "/instance-setup/retry", headers={"X-Agora-Instance-Role": "viewer"}
+        ).status_code == 403
+        assert client.post(
+            "/instance-setup/skip", headers={"X-Agora-Instance-Role": "viewer"}
+        ).status_code == 403
+        assert client.post(
+            "/instance-setup/steps/learn_style/retry", headers={"X-Agora-Instance-Role": "approver"}
+        ).status_code == 403
+
+
+def test_instance_setup_start_rejects_double_start(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "get_setup", lambda: {
+        "status": "running_setup", "started_at": None, "finished_at": None, "error": None,
+        "steps": [], "progress": {"done": 1, "total": 9, "percent": 11},
+    })
+
+    with TestClient(app) as client:
+        response = client.post("/instance-setup/start", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 409
+
+
+def test_instance_setup_start_calls_through_for_owner(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "get_setup", lambda: {"status": "not_started"})
+    calls = []
+    monkeypatch.setattr(api, "start_setup", lambda user_id, instance_id, **kw: calls.append((user_id, instance_id, kw)) or {
+        "status": "created", "started_at": "now", "finished_at": None, "error": None,
+        "steps": [], "progress": {"done": 0, "total": 9, "percent": 0},
+    })
+    monkeypatch.setattr(api.settings, "job_queue_enabled", True)  # skip the inline BackgroundTask path
+
+    with TestClient(app) as client:
+        response = client.post("/instance-setup/start", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+    assert calls
+
+
+def test_instance_setup_step_retry_rejects_unknown_step(monkeypatch):
+    with TestClient(app) as client:
+        response = client.post(
+            "/instance-setup/steps/not_a_real_step/retry", headers={"X-Agora-Instance-Role": "owner"}
+        )
+    assert response.status_code == 422
+
+
+def test_notifications_list_and_unread_count(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "list_notifications", lambda **kw: [{"id": 1, "title": "Setup done"}])
+    monkeypatch.setattr(api, "unread_count", lambda **kw: 3)
+
+    with TestClient(app) as client:
+        listed = client.get("/notifications", headers={"X-Agora-Instance-Role": "viewer"})
+        count = client.get("/notifications/unread-count", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert listed.status_code == 200
+    assert listed.json()["notifications"] == [{"id": 1, "title": "Setup done"}]
+    assert count.status_code == 200
+    assert count.json()["unread_count"] == 3
+
+
+def test_notifications_mark_read_returns_404_when_missing(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "mark_read", lambda notification_id: None)
+
+    with TestClient(app) as client:
+        response = client.post("/notifications/999/read", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert response.status_code == 404
+
+
+def test_notifications_mark_all_read_and_delete(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "mark_all_read", lambda **kw: 5)
+    deleted = []
+    monkeypatch.setattr(api, "delete_notification", lambda notification_id: deleted.append(notification_id))
+
+    with TestClient(app) as client:
+        mark_all = client.post("/notifications/read-all", headers={"X-Agora-Instance-Role": "viewer"})
+        delete_response = client.delete("/notifications/7", headers={"X-Agora-Instance-Role": "viewer"})
+
+    assert mark_all.json()["marked_read"] == 5
+    assert delete_response.json()["deleted"] is True
+    assert deleted == [7]
+
+
+def test_signature_endpoint_rejects_unknown_mode(monkeypatch):
+    with TestClient(app) as client:
+        response = client.put("/signature", json={"enabled": True, "mode": "not_a_real_mode"})
+
+    assert response.status_code == 422
+
+
+def test_signature_apply_endpoint_composes_final_body(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "load_signature", lambda: api.SignatureConfig(enabled=True, text="Karim"))
+
+    with TestClient(app) as client:
+        response = client.post("/signature/apply", json={"content": "Bonjour", "mode": "append_platform_signature"})
+
+    assert response.status_code == 200
+    assert "Karim" in response.json()["content"]
+
+
+def test_signature_apply_endpoint_rejects_unknown_mode(monkeypatch):
+    with TestClient(app) as client:
+        response = client.post("/signature/apply", json={"content": "Bonjour", "mode": "not_a_real_mode"})
+    assert response.status_code == 422
+
+
+def test_signature_endpoint_accepts_known_mode(monkeypatch):
+    import src.api as api
+
+    monkeypatch.setattr(api, "save_signature", lambda body: None)
+
+    with TestClient(app) as client:
+        response = client.put("/signature", json={"enabled": True, "mode": "preserve_provider_signature"})
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "preserve_provider_signature"
+    assert "available_modes" in response.json()
+
+
+def test_contacts_migrate_legacy_requires_owner_and_calls_through(monkeypatch):
+    import src.contacts as contacts_module
+
+    calls = []
+    monkeypatch.setattr(
+        contacts_module, "migrate_legacy_category_contacts",
+        lambda **kw: calls.append(kw) or {"imported": 2, "skipped": 1},
+    )
+
+    with TestClient(app) as client:
+        denied = client.post("/contacts/migrate-legacy", headers={"X-Agora-Instance-Role": "viewer"})
+        allowed = client.post("/contacts/migrate-legacy", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["imported"] == 2
+
+
+def test_contacts_categorize_sender_requires_owner_and_upserts_directory(monkeypatch, tmp_path):
+    import src.contacts as contacts_module
+
+    path = tmp_path / "contacts.yaml"
+    monkeypatch.setattr(contacts_module, "DEFAULT_CONTACTS_PATH", path)
+    monkeypatch.setattr(
+        "src.categories.load_categories",
+        lambda **kw: type("C", (), {"categories": [type("Cat", (), {"name": "support"})()]})(),
+    )
+
+    with TestClient(app) as client:
+        denied = client.post(
+            "/contacts/categorize", json={"email": "Ana <ana@client.example>", "category": "support"},
+            headers={"X-Agora-Instance-Role": "viewer"},
+        )
+        allowed = client.post(
+            "/contacts/categorize", json={"email": "Ana <ana@client.example>", "category": "support"},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["contact"]["email"] == "ana@client.example"
+    assert allowed.json()["contact"]["category"] == "support"
+
+
+def test_contacts_categorize_domain_writes_legacy_categories_yaml(monkeypatch, tmp_path):
+    import src.api as api
+
+    calls = []
+    monkeypatch.setattr(api, "load_categories", lambda *a, **kw: api.CategoriesConfig(enabled=True))
+    monkeypatch.setattr(
+        api, "write_instance_text",
+        lambda kind, content, default, agent_instance_id=None: calls.append((kind, content)),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/contacts/categorize",
+            json={"email": "ana@client.example", "category": "support", "domain_only": True},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["domain"] == "client.example"
+    assert calls and calls[0][0] == "categories"
+    assert "client.example" in calls[0][1]
+
+
+def test_contacts_categorize_rejects_unknown_category(monkeypatch, tmp_path):
+    import src.contacts as contacts_module
+
+    path = tmp_path / "contacts.yaml"
+    monkeypatch.setattr(contacts_module, "DEFAULT_CONTACTS_PATH", path)
+    monkeypatch.setattr("src.categories.load_categories", lambda **kw: type("C", (), {"categories": []})())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/contacts/categorize", json={"email": "ana@client.example", "category": "not_real"},
+            headers={"X-Agora-Instance-Role": "owner"},
+        )
+
+    assert response.status_code == 422

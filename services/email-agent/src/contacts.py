@@ -40,6 +40,10 @@ class SegmentNotFoundError(ContactDirectoryError):
     """Raised when a requested segment does not exist."""
 
 
+class ContactCategoryError(ContactDirectoryError):
+    """Raised when a contact references a category that does not exist."""
+
+
 class Contact(BaseModel):
     email: str = Field(min_length=3)
     name: str | None = None
@@ -47,6 +51,13 @@ class Contact(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     active: bool = True
+    # Routing fields (workstream D — unifies this directory with the legacy
+    # categories.yaml contact list used by classify_category).
+    category: str | None = None
+    domain: str | None = None
+    priority: Literal["urgent", "normal", "low"] | None = None
+    category_source: Literal["manual", "inferred", "imported", "seeded"] = "manual"
+    category_confidence: float | None = None
 
     @field_validator("email")
     @classmethod
@@ -194,7 +205,8 @@ def load_contacts(path: str | Path | None = None, agent_instance_id: str | None 
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT email, name, audience, fields, tags, active "
+                    "SELECT email, name, audience, fields, tags, active, "
+                    "category, domain, priority, category_source, category_confidence "
                     "FROM email_agent_contacts WHERE agent_instance_id = %s ORDER BY email",
                     (instance_id,),
                 )
@@ -214,8 +226,16 @@ def load_contacts(path: str | Path | None = None, agent_instance_id: str | None 
                             fields=json.loads(fields) if isinstance(fields, str) else (fields or {}),
                             tags=json.loads(tags) if isinstance(tags, str) else (tags or []),
                             active=active,
+                            category=category,
+                            domain=domain,
+                            priority=priority,
+                            category_source=category_source or "manual",
+                            category_confidence=category_confidence,
                         )
-                        for email, name, audience, fields, tags, active in contacts_rows
+                        for (
+                            email, name, audience, fields, tags, active,
+                            category, domain, priority, category_source, category_confidence,
+                        ) in contacts_rows
                     ]
                     segments = [
                         Segment(
@@ -256,9 +276,10 @@ def save_contacts(config: ContactsConfig, path: str | Path | None = None, agent_
                     cur.execute(
                         """
                         INSERT INTO email_agent_contacts (
-                            agent_instance_id, email, name, audience, fields, tags, active, updated_at
+                            agent_instance_id, email, name, audience, fields, tags, active,
+                            category, domain, priority, category_source, category_confidence, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, NOW())
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, NOW())
                         """,
                         (
                             instance_id,
@@ -268,6 +289,11 @@ def save_contacts(config: ContactsConfig, path: str | Path | None = None, agent_
                             json.dumps(contact.fields),
                             json.dumps(contact.tags),
                             contact.active,
+                            contact.category,
+                            contact.domain,
+                            contact.priority,
+                            contact.category_source,
+                            contact.category_confidence,
                         ),
                     )
                 for segment in normalized.segments:
@@ -349,7 +375,18 @@ def get_contact(email: str, agent_instance_id: str | None = None) -> Contact | N
     return next((contact for contact in load_contacts(agent_instance_id=agent_instance_id).contacts if contact.email == normalized), None)
 
 
+def _validate_category(contact: Contact, agent_instance_id: str | None) -> None:
+    if not contact.category:
+        return
+    from src.categories import load_categories
+
+    known = {c.name for c in load_categories(agent_instance_id=agent_instance_id).categories}
+    if contact.category not in known:
+        raise ContactCategoryError(f"unknown category: {contact.category}")
+
+
 def create_contact(contact: Contact, agent_instance_id: str | None = None) -> Contact:
+    _validate_category(contact, agent_instance_id)
     config = load_contacts(agent_instance_id=agent_instance_id)
     if any(existing.email == contact.email for existing in config.contacts):
         raise ContactConflictError(f"contact '{contact.email}' already exists")
@@ -359,6 +396,7 @@ def create_contact(contact: Contact, agent_instance_id: str | None = None) -> Co
 
 
 def update_contact(email: str, contact: Contact, agent_instance_id: str | None = None) -> Contact:
+    _validate_category(contact, agent_instance_id)
     normalized = str(email).strip().lower()
     config = load_contacts(agent_instance_id=agent_instance_id)
     if normalized != contact.email:
@@ -379,8 +417,19 @@ def update_contact(email: str, contact: Contact, agent_instance_id: str | None =
 
 
 def upsert_contact(contact: Contact, agent_instance_id: str | None = None) -> Contact:
+    _validate_category(contact, agent_instance_id)
     config = load_contacts(agent_instance_id=agent_instance_id)
     by_email = {existing.email: existing for existing in config.contacts}
+    existing = by_email.get(contact.email)
+    if existing is not None and existing.category_source == "manual" and contact.category_source == "inferred":
+        # A manually-set category always wins over an auto-inferred one, regardless
+        # of the inferred write's confidence.
+        contact = contact.model_copy(update={
+            "category": existing.category,
+            "priority": existing.priority,
+            "category_source": existing.category_source,
+            "category_confidence": existing.category_confidence,
+        })
     by_email[contact.email] = contact
     config.contacts = list(by_email.values())
     save_contacts(config, agent_instance_id=agent_instance_id)
@@ -503,3 +552,45 @@ def import_contacts_csv(csv_text: str, audience_default: str = "client", agent_i
         "imported_count": len(imported),
         "rejected_count": len(rejected),
     }
+
+
+def migrate_legacy_category_contacts(agent_instance_id: str | None = None) -> dict:
+    """One-shot, non-destructive: upsert every categories.yaml contact that has
+    an email into the directory as category_source='imported'. categories.yaml
+    itself is left untouched — a bad conversion is revertible by deleting the
+    imported directory rows, nothing is lost on the legacy side."""
+    from src.categories import load_categories
+
+    iid = normalize_agent_instance_id(agent_instance_id or current_agent_instance_id())
+    legacy_contacts = load_categories(agent_instance_id=iid).contacts
+    directory = load_contacts(agent_instance_id=iid)
+    existing_emails = {c.email for c in directory.contacts}
+
+    imported = 0
+    skipped = 0
+    for legacy in legacy_contacts:
+        if not legacy.email:
+            # Domain-only legacy contacts have no directory equivalent (the
+            # directory's email field is required) — stay legacy-only for now.
+            skipped += 1
+            continue
+        normalized_email = str(legacy.email).strip().lower()
+        if normalized_email in existing_emails:
+            skipped += 1
+            continue
+        contact = Contact(
+            email=normalized_email,
+            name=legacy.name,
+            audience="prospect",
+            category=legacy.category,
+            priority=legacy.priority,
+            category_source="imported",
+        )
+        try:
+            upsert_contact(contact, agent_instance_id=iid)
+        except ContactCategoryError:
+            skipped += 1
+            continue
+        existing_emails.add(normalized_email)
+        imported += 1
+    return {"imported": imported, "skipped": skipped}
