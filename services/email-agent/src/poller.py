@@ -661,10 +661,16 @@ async def _process_message_locked(
         security_flagged = bool(
             verdict["injection_detected"] or verdict["classifier_unavailable"]
         )
+        # When the drafting model is hosted, it reads the redacted copy. The
+        # real values are restored in tool_node immediately before an action
+        # runs, so nothing leaves with a placeholder in it.
+        redaction_map = verdict.get("redaction_map") or {}
+        use_redacted = bool(settings.redact_for_model and redaction_map)
         email_input = {
             **email_input,
-            "email_thread": verdict["cleaned_text"],
+            "email_thread": verdict["redacted_text"] if use_redacted else verdict["cleaned_text"],
             "security": {
+                "redaction_map": redaction_map if use_redacted else {},
                 "injection_detected": verdict["injection_detected"],
                 "classification": verdict["classification"],
                 "classifier_unavailable": verdict["classifier_unavailable"],

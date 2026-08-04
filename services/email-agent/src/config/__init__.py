@@ -37,6 +37,16 @@ class Settings:
     openai_api_key: str = get_secret("AGENT", "OPENAI_API_KEY")
     anthropic_api_key: str = get_secret("AGENT", "ANTHROPIC_API_KEY")
     llm_profile: str = os.getenv("AGENT_LLM_PROFILE", "local")
+    # Send redacted content to the drafting model and restore the real values
+    # just before the action runs. Defaults on for any non-local profile, since
+    # that is exactly when mail content leaves the host.
+    redact_for_model: bool = (
+        os.getenv("AGENT_REDACT_FOR_MODEL", "").lower() == "true"
+        or (
+            os.getenv("AGENT_REDACT_FOR_MODEL", "") == ""
+            and os.getenv("AGENT_LLM_PROFILE", "local") not in ("local", "local-host", "local-docker", "safe")
+        )
+    )
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
     llm_streaming_enabled: bool = _env_bool("AGENT_LLM_STREAMING_ENABLED", "true")
     roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")

@@ -16,10 +16,15 @@ from src.models import (
     AuthorizeResponse,
     ClassifySourceRequest,
     ClassifySourceResponse,
+    RedactRequest,
+    RedactResponse,
+    RestoreRequest,
+    RestoreResponse,
     SanitizeRequest,
     SanitizeResponse,
 )
 from src.output_audit import audit_output
+from src.redact import redact as redact_text, restore as restore_text
 from src.policy import SERVICE_ROOT
 from src.sanitize import sanitize
 
@@ -53,6 +58,21 @@ def sanitize_endpoint(req: SanitizeRequest) -> SanitizeResponse:
 @app.post("/classify", response_model=ClassifySourceResponse)
 def classify_source_endpoint(req: ClassifySourceRequest) -> ClassifySourceResponse:
     return classify_source(req)
+
+
+@app.post("/redact", response_model=RedactResponse)
+def redact_endpoint(req: RedactRequest) -> RedactResponse:
+    """Strip identifiers from arbitrary text before it reaches a hosted model."""
+    result = redact_text(req.text)
+    return RedactResponse(
+        redacted_text=result.text, mapping=result.mapping, counts=result.kinds()
+    )
+
+
+@app.post("/restore", response_model=RestoreResponse)
+def restore_endpoint(req: RestoreRequest) -> RestoreResponse:
+    """Put redacted values back into content a model produced."""
+    return RestoreResponse(text=restore_text(req.text, req.mapping))
 
 
 @app.post("/authorize", response_model=AuthorizeResponse)

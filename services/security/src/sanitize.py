@@ -13,6 +13,7 @@ from src.models import (
     TrustLevel,
 )
 from src.quarantine_llm import build_quarantine_classifier
+from src.redact import redact
 
 # Initialized lazily on first real invocation; patched to a fake in tests.
 # No bind_tools: the quarantine LLM has no tool surface by construction.
@@ -137,6 +138,10 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
         "body": _tag(req.content, source_trust),
     }
 
+    # Redaction runs on the cleaned text, so the caller can hand `redacted_text`
+    # straight to a hosted drafting model and restore the values afterwards.
+    redaction = redact(cleaned) if settings.redact_pii else None
+
     return SanitizeResponse(
         classification=classification,
         injection_detected=injection,
@@ -146,4 +151,6 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
         classifier_unavailable=unavailable,
         source_trust=source_trust,
         fields=fields,
+        redacted_text=redaction.text if redaction else cleaned,
+        redaction_map=redaction.mapping if redaction else {},
     )
