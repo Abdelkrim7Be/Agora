@@ -73,6 +73,12 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+function AdminOnly({ children }) {
+  const { globalRole } = useAuth();
+  if (globalRole !== 'admin') return <Navigate to="/instances" replace />;
+  return children;
+}
+
 function PublicOnlyRoute({ children }) {
   const { token } = useAuth();
   if (token) {
@@ -112,7 +118,9 @@ export default function App() {
 
                       {/* Platform views */}
                       <Route path="/" element={<ProtectedRoute><PlatformLayout /></ProtectedRoute>}>
-                        <Route index element={<PlatformDashboardPage />} />
+                        {/* Instance owners work inside a workspace; the platform-wide
+                            overview is an administration view. */}
+                        <Route index element={<AdminOnly><PlatformDashboardPage /></AdminOnly>} />
                         <Route path="instances" element={<InstancesPage />} />
                         <Route path="agent-types" element={<AgentTypesPage />} />
                         {/* Route segments below deliberately avoid "health"/"audit"/"users" as a

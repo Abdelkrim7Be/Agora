@@ -5,13 +5,6 @@ import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { currentUsername } from '../../utils/jwt';
 
-const ROLE_SUMMARY = {
-  admin: 'Peut gérer les utilisateurs et consulter les vues opérationnelles de la plateforme.',
-  owner: 'Peut configurer les instances, cas métier, permissions, approbations et contrôles de coûts.',
-  approver: 'Peut relire, prendre en charge, approuver, rejeter et répondre aux validations assignées.',
-  viewer: 'Peut consulter les tableaux de bord, la boîte, les exécutions et la configuration sans les modifier.',
-};
-
 function profileStorageKey(username) {
   return `agora.profile.${username || 'anonymous'}`;
 }
@@ -77,7 +70,6 @@ export default function AccountPage() {
   const activeCount = instances.filter(isInstanceActive).length;
   const inactiveCount = instances.length - activeCount;
   const name = profile.displayName || username;
-  const roleSummary = ROLE_SUMMARY[currentInstanceRole] || 'Les permissions découlent du JWT global et des délégations d’instance.';
 
   const handlePhotoChange = async (event) => {
     const file = event.target.files?.[0];
@@ -147,9 +139,6 @@ export default function AccountPage() {
           <div><span>Type d’agent</span><strong>{currentInstance?.agent_type || 'email-agent'}</strong></div>
           <div><span>Statut de l’instance</span><strong>{String(currentInstance?.status || 'active').toLowerCase()}</strong></div>
           <div><span>Instances visibles</span><strong>{activeCount} actives / {inactiveCount} inactives</strong></div>
-        </div>
-        <div className="notice account-role-note">
-          <strong>{currentInstanceRole}</strong>: {roleSummary}
         </div>
       </div>
     </>

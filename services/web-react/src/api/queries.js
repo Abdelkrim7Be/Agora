@@ -38,6 +38,10 @@ export function useHealthQuery(period) {
       return { health, activity };
     },
     enabled: Boolean(token),
+    // A liveness board that only updates when you press a button is not a
+    // liveness board. The manual refresh stays for "is it back yet?".
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
   });
 }
 

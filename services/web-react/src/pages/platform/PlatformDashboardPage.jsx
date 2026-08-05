@@ -131,16 +131,15 @@ export default function PlatformDashboardPage() {
         <Card className="platform-overview-card">
           <div className="card-header">
             <div>
-              <h2>Contrôle humain</h2>
-              <div className="meta"><span>Ce qui nécessite une décision avant sortie client</span></div>
+              <h2>En attente de décision</h2>
+              <div className="meta"><span>Toutes instances confondues</span></div>
             </div>
           </div>
           <div className="platform-control-panel">
-            <div><span>Actions en attente</span><strong>{formatCountFr(totals.pending)}</strong></div>
-            <div><span>Coût du jour</span><strong>{formatCostEur(totals.dailyCost)}</strong></div>
-            <div><span>Boîtes connectées</span><strong>{formatCountFr(totals.mailboxes)}</strong></div>
+            <Link to="/instances"><span>Actions à valider</span><strong>{formatCountFr(totals.pending)}</strong></Link>
+            <Link to="/instances"><span>Coût du jour</span><strong>{formatCostEur(totals.dailyCost)}</strong></Link>
+            <Link to="/instances"><span>Boîtes connectées</span><strong>{formatCountFr(totals.mailboxes)}</strong></Link>
           </div>
-          <div className="notice">Chaque agent garde son espace de travail, mais la plateforme donne la vue d’ensemble : instances, boîtes, utilisateurs et contrôle humain.</div>
         </Card>
       </div>
     </>
