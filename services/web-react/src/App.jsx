@@ -6,6 +6,7 @@ import { I18nProvider } from './contexts/I18nContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
+import { BusyProvider } from './contexts/BusyContext';
 import { QueryClient, QueryCache, QueryClientProvider } from '@tanstack/react-query';
 import { recordFailure, clearFailure } from './api/failureLog';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -100,6 +101,7 @@ export default function App() {
             <ThemeProvider>
               <StatusProvider>
                 <DialogProvider>
+                  <BusyProvider>
                   <SessionBodyClass />
                   <BrowserRouter>
                     <ErrorBoundary>
@@ -158,6 +160,7 @@ export default function App() {
                     </Routes>
                     </ErrorBoundary>
                   </BrowserRouter>
+                  </BusyProvider>
                 </DialogProvider>
               </StatusProvider>
             </ThemeProvider>
