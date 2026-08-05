@@ -30,6 +30,9 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
   const messages = query.data?.messages || [];
   const warning = query.data?.warning;
   const isSentMailbox = mailbox === 'sent';
+  // Every row action mutates the mailbox, and none of them apply to a message
+  // already sent. Keeping the column produced a header over nothing but blanks.
+  const showActions = canManage && !isSentMailbox;
 
   const contacts = contactsQuery.data?.contacts || [];
   const categoryByEmail = useMemo(() => {
@@ -300,12 +303,13 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
                   disabled={!filteredMessages.length}
                 />
               </th>
-              <th>{isSentMailbox ? 'À' : 'De'}</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th>
+              <th>{isSentMailbox ? 'À' : 'De'}</th><th>Sujet</th><th>Date</th><th>Agent</th>
+              {showActions ? <th>Actions</th> : null}
             </tr>
           </thead>
           <tbody>
             {!filteredMessages.length ? (
-              <tr><td colSpan={6} className="empty-cell">
+              <tr><td colSpan={showActions ? 6 : 5} className="empty-cell">
                 {warning ? (
                   <div className="inbox-empty-state">
                     <strong>Cette boîte n’est pas encore connectée à Gmail.</strong>
@@ -335,32 +339,26 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
                     <td>{msg.unread ? <strong>{decodeHtmlEntities(msg.subject) || '(sans objet)'}</strong> : (decodeHtmlEntities(msg.subject) || '(sans objet)')}<div className="muted">{decodeHtmlEntities(msg.snippet)}</div></td>
                     <td>{formatDateTimeFr(msg.date)}</td>
                     <td>{msg.run_id ? <button className="link-button" type="button" onClick={() => handleOpen(msg)}>{verdictLabel}</button> : <span className="muted">aucun</span>}</td>
-                    <td>
-                      <div className="actions">
-                        {canManage && !isSentMailbox && (
+                    {showActions ? (
+                      <td>
+                        <div className="actions">
                           <button type="button" onClick={() => handleAction(msg.unread ? 'read' : 'unread', msg.id)}>
                             {msg.unread ? 'Marquer lu' : 'Marquer non lu'}
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>}
-                        {canManage && !isSentMailbox && (
+                          <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>
                           <button type="button" title="Catégoriser l’expéditeur" onClick={() => handleCategorize(msg, false)}>
                             Catégoriser l’expéditeur
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && (
                           <button type="button" title="Catégoriser le domaine" onClick={() => handleCategorize(msg, true)}>
                             Catégoriser le domaine
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && (
                           <button type="button" disabled={forceAgent.isPending} onClick={() => handleForceAgent(msg.id)}>
                             Forcer l’agent
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>}
-                      </div>
-                    </td>
+                          <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 );
               })
