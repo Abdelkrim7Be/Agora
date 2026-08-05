@@ -13,6 +13,12 @@ import org.springframework.web.client.RestClient;
 @Configuration
 public class RestClientConfig {
 
+    private final GatewayProperties properties;
+
+    public RestClientConfig(GatewayProperties properties) {
+        this.properties = properties;
+    }
+
     @Bean
     public RestClient.Builder restClientBuilder() {
         // The default HttpComponentsClientHttpRequestFactory() builds an HttpClient5
@@ -27,7 +33,7 @@ public class RestClientConfig {
 
         RequestConfig requestConfig = RequestConfig.custom()
                 .setConnectionRequestTimeout(Timeout.ofSeconds(10))
-                .setResponseTimeout(Timeout.ofSeconds(150))
+                .setResponseTimeout(Timeout.ofSeconds(properties.getUpstream().getResponseTimeoutSeconds()))
                 // HttpClient5 follows redirects by default. The Gmail OAuth callback
                 // now replies with a 303 pointing the browser back into the web app —
                 // if this client followed it instead, it would fetch that URL itself

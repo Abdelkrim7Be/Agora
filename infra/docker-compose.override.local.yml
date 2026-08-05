@@ -79,6 +79,10 @@ services:
       # which kills silent token refresh and logs the browser out every 15 min.
       # Never set this in a deployed stack; production serves the SPA over TLS.
       GATEWAY_JWT_SECURE_COOKIES: "false"
+      # The model runs on the host CPU here, where a tone rewrite or a redraft
+      # takes minutes. At the 150s default the gateway gave up mid-inference and
+      # the browser sat on a spinner that never resolved.
+      GATEWAY_UPSTREAM_TIMEOUT_SECONDS: "280"
     ports:
       - "${GATEWAY_PORT:-8081}:8080"
 

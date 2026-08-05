@@ -70,9 +70,24 @@ public class GatewayProperties {
 
     public static class Upstream {
         private String emailAgentUrl = "http://localhost:8000";
+        /**
+         * How long to wait for the agent to answer a proxied request, in seconds.
+         *
+         * The slow calls are the ones that run a model: a tone rewrite or a
+         * redraft against a local CPU-hosted model takes minutes, not seconds.
+         * At the old fixed 150s the gateway aborted while the agent was still
+         * working, and the browser was left on a spinner that never resolved —
+         * so this has to follow the deployment's inference speed.
+         */
+        private int responseTimeoutSeconds = 150;
 
         public String getEmailAgentUrl() { return emailAgentUrl; }
         public void setEmailAgentUrl(String emailAgentUrl) { this.emailAgentUrl = emailAgentUrl; }
+
+        public int getResponseTimeoutSeconds() { return responseTimeoutSeconds; }
+        public void setResponseTimeoutSeconds(int responseTimeoutSeconds) {
+            this.responseTimeoutSeconds = responseTimeoutSeconds;
+        }
     }
 
     public static class AgentType {

@@ -25,6 +25,10 @@ server:
 gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}
+    # Raise this wherever the model runs on CPU: a tone rewrite or a redraft can
+    # take several minutes there, and aborting mid-inference leaves the browser
+    # on a spinner while the agent is still working on the answer.
+    response-timeout-seconds: ${GATEWAY_UPSTREAM_TIMEOUT_SECONDS:150}
   default-agent-instance: ${GATEWAY_DEFAULT_AGENT_INSTANCE:default-email-agent}
   # Mailbox the seeded instance expects OAuth to authorize. Blank means "no
   # expectation" — whichever mailbox the user connects is accepted. A non-blank
