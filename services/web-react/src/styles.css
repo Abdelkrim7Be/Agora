@@ -4952,3 +4952,61 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 @media (prefers-reduced-motion: reduce) {
   .busy-spinner { animation-duration: 2.4s; }
 }
+
+/* The native file input renders its own browser-locale button ("Choose File"),
+   which is the one bit of English left on a French page. Hidden here, driven by
+   a label we style ourselves — the input itself still does the work. */
+.file-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.file-field-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+}
+
+.file-field-button {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 14px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  text-transform: none;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface-high);
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.file-field-button:hover { border-color: var(--secondary); }
+
+.file-field-input:focus-visible + .file-field-button {
+  outline: 2px solid color-mix(in srgb, var(--secondary) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.file-field-input:disabled + .file-field-button {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.file-field-name {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}

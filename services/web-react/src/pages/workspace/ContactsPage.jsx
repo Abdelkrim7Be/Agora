@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { FileField } from '../../components/ui/FileField';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { Pager } from '../../components/ui/Pager';
@@ -335,7 +336,13 @@ export default function ContactsPage() {
               {editingEmail && (
                 <div className="signature-image-row">
                   <span>Photo du contact</span>
-                  <input ref={fileInputRef} type="file" accept="image/png,image/jpeg" data-testid="contact-photo-file" onChange={handleUploadPhoto} />
+                  <FileField
+                    inputRef={fileInputRef}
+                    accept="image/png,image/jpeg"
+                    data-testid="contact-photo-file"
+                    label="Choisir une photo"
+                    onChange={handleUploadPhoto}
+                  />
                   {hasPhoto && <button type="button" className="ghost" onClick={handleDeletePhoto}>Retirer la photo</button>}
                 </div>
               )}
@@ -347,7 +354,14 @@ export default function ContactsPage() {
                   <span className="material-symbols-outlined" aria-hidden="true">restart_alt</span><span>Nouveau contact</span>
                 </button>
               </div>
-              <label><span>Importer un CSV</span><input type="file" accept=".csv,text/csv" onChange={(e) => setCsvFile(e.target.files?.[0] || null)} /></label>
+              <label>
+                <span>Importer un CSV</span>
+                <FileField
+                  accept=".csv,text/csv"
+                  label="Choisir un fichier CSV"
+                  onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                />
+              </label>
               <label><span>Ou coller le CSV</span><textarea rows={5} value={csvText} onChange={(e) => setCsvText(e.target.value)} placeholder={"email,name,audience,tags\nclient@example.com,Client,client,vip"} /></label>
               <label><span>Audience par défaut à l'import</span>
                 <select value={importAudience} onChange={(e) => setImportAudience(e.target.value)}>
