@@ -50,6 +50,8 @@ services:
     depends_on: !override
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       email-agent-migrate:
         condition: service_completed_successfully
       security:
@@ -105,6 +107,7 @@ services:
       AGENT_RUN_MIGRATIONS: "false"
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
+      REDIS_URL: redis://redis:6379/0
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
@@ -126,6 +129,8 @@ services:
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       email-agent-migrate:
         condition: service_completed_successfully
