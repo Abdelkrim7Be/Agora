@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
@@ -31,6 +33,7 @@ export default function NotificationsPage() {
   const notifications = (query.data?.notifications || []).filter(
     (n) => !severityFilter || n.severity === severityFilter
   );
+  const pager = usePagination(notifications);
   const allSelected = notifications.length > 0 && notifications.every((n) => selectedIds.has(n.id));
   const selectedNotifications = notifications.filter((n) => selectedIds.has(n.id));
 
@@ -146,7 +149,7 @@ export default function NotificationsPage() {
           <p className="empty-cell">Aucune notification.</p>
         ) : (
           <ul className="notification-list">
-            {notifications.map((notification) => (
+            {pager.visible.map((notification) => (
               <li className="notification-select-row" key={notification.id}>
                 <input
                   type="checkbox"
@@ -164,6 +167,17 @@ export default function NotificationsPage() {
             ))}
           </ul>
         )}
+        {notifications.length ? (
+          <TablePager
+            page={pager.page}
+            pageCount={pager.pageCount}
+            total={pager.total}
+            size={pager.size}
+            onPage={pager.setPage}
+            onSize={pager.setSize}
+            unit="notifications"
+          />
+        ) : null}
       </Card>
     </>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { PageHeading } from '../../components/layout/PageHeading';
-import { Pager } from '../../components/ui/Pager';
+import { TablePager } from '../../components/ui/TablePager';
 import { outcomeClass } from '../../utils/format';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAuditQuery } from '../../api/queries';
@@ -78,14 +78,7 @@ export default function AuditPage() {
           <span>Export CSV</span>
         </button>
         <span className="toolbar-spacer"></span>
-        <Pager
-          className="audit-pager"
-          page={page}
-          hasMore={hasMore}
-          onPrev={() => setPage((current) => Math.max(0, current - 1))}
-          onNext={() => setPage((current) => current + 1)}
-          countLabel={`${filtered.length} event${filtered.length === 1 ? '' : 's'}`}
-        />
+        <span className="counter">{filtered.length} événement{filtered.length === 1 ? '' : 's'} sur cette page</span>
       </div>
       <div className="table-wrap">
         <table className="data-table">
@@ -113,6 +106,14 @@ export default function AuditPage() {
           </tbody>
         </table>
       </div>
+      {/* The gateway answers a page at a time and never a total, so there is no
+          honest page count to render here — only whether another page exists. */}
+      <TablePager
+        page={page}
+        size={limit}
+        hasMore={hasMore}
+        onPage={(next) => setPage(Math.max(0, next))}
+      />
     </>
   );
 }

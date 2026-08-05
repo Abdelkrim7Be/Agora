@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
@@ -14,6 +16,7 @@ export default function DlqPage() {
   const query = useDlqQuery();
   const requeueEntry = useRequeueDlqEntry();
   const entries = query.data?.entries || [];
+  const pager = usePagination(entries);
 
   useEffect(() => {
     if (!query.data) return;
@@ -62,7 +65,7 @@ export default function DlqPage() {
                 <tr><td colSpan={6} className="empty-cell">{`DLQ indisponible : ${query.error.message}`}</td></tr>
               ) : !entries.length ? (
                 <tr><td colSpan={6} className="empty-cell">Aucune entrée DLQ.</td></tr>
-              ) : entries.map((entry) => (
+              ) : pager.visible.map((entry) => (
                 <tr key={entry.entry_id}>
                   <td>{entry.timestamp || '—'}</td>
                   <td>{entry.message_id || entry.entry_id || ''}</td>
@@ -83,6 +86,17 @@ export default function DlqPage() {
             </tbody>
           </table>
         </div>
+        {entries.length ? (
+          <TablePager
+            page={pager.page}
+            pageCount={pager.pageCount}
+            total={pager.total}
+            size={pager.size}
+            onPage={pager.setPage}
+            onSize={pager.setSize}
+            unit="entrées"
+          />
+        ) : null}
       </Card>
     </>
   );
