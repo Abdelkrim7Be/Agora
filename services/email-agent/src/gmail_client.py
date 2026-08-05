@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html as _html
+import re as _re
 from email.message import EmailMessage
 
 try:
@@ -449,6 +450,41 @@ def _encode_message(message: EmailMessage) -> str:
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
 
+def _signature_image_width() -> int:
+    """Configured render width for the signature image, in CSS pixels."""
+    try:
+        from src.signature import load_signature
+
+        return int(load_signature().image_width)
+    except Exception:
+        # Mirrors signature.DEFAULT_SIGNATURE_IMAGE_WIDTH — inlined because this
+        # branch exists for the case where importing that module is what failed.
+        return 420
+
+
+def _size_signature_image(rendered: str) -> str:
+    """Give the signature image explicit dimensions.
+
+    Markdown emits a bare <img>, and a mail client with nothing to go on renders
+    it at the file's natural pixel size — a small logo arrived as a stamp beside
+    the text, a large one blew the layout out. The width attribute is there for
+    Outlook, which ignores CSS width on images; the inline style covers everyone
+    else and `height:auto` keeps the aspect ratio whatever was uploaded.
+    """
+    from src.media import SIGNATURE_CID
+
+    width = _signature_image_width()
+    style = (
+        f"width:{width}px;max-width:100%;height:auto;"
+        "display:block;border:0;outline:none;text-decoration:none;margin-top:6px;"
+    )
+    return _re.sub(
+        rf'<img([^>]*?)src="cid:{_re.escape(SIGNATURE_CID)}"([^>]*?)/?>',
+        lambda m: f'<img{m.group(1)}src="cid:{SIGNATURE_CID}"{m.group(2)} width="{width}" style="{style}" />',
+        rendered,
+    )
+
+
 def render_rich_email_html(body: str) -> str:
     """Render agent-authored email text/markdown into Gmail-safe HTML.
 
@@ -466,6 +502,7 @@ def render_rich_email_html(body: str) -> str:
             "<p>" + _html.escape(part).replace("\n", "<br>") + "</p>"
             for part in paragraphs
         )
+    rendered = _size_signature_image(rendered)
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0 auto;">'

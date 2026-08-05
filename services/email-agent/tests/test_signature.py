@@ -166,3 +166,65 @@ def test_strip_detected_signature_removes_trailing_block():
     body = "Bonjour,\n\nDetails.\n\n-- \nKarim Ancien"
     stripped = strip_detected_signature(body, "-- \nKarim Ancien")
     assert stripped == "Bonjour,\n\nDetails."
+
+
+def test_signature_image_is_rendered_with_explicit_dimensions():
+    """A bare <img> renders at the file's natural size.
+
+    A small logo therefore arrived as a stamp beside the text and a large one
+    blew the layout out, depending only on what was uploaded.
+    """
+    from src.gmail_client import render_rich_email_html
+    from src.media import SIGNATURE_CID
+
+    from src.signature import DEFAULT_SIGNATURE_IMAGE_WIDTH as default_width
+
+    html = render_rich_email_html(f"Cordialement\n\n![Signature](cid:{SIGNATURE_CID})")
+
+    assert f'width="{default_width}"' in html   # attribute: Outlook ignores CSS width
+    assert f"width:{default_width}px" in html   # style: everyone else
+    assert "height:auto" in html            # aspect ratio preserved
+    assert "max-width:100%" in html         # never wider than the column
+
+
+def test_signature_image_width_follows_configuration(monkeypatch):
+    import src.gmail_client as gc
+    from src.media import SIGNATURE_CID
+
+    monkeypatch.setattr(gc, "_signature_image_width", lambda: 480)
+    html = gc.render_rich_email_html(f"![Signature](cid:{SIGNATURE_CID})")
+
+    assert 'width="480"' in html and "width:480px" in html
+
+
+def test_ordinary_images_are_left_alone():
+    """Only the signature cid is resized; body images keep whatever the author set."""
+    from src.gmail_client import render_rich_email_html
+
+    from src.signature import DEFAULT_SIGNATURE_IMAGE_WIDTH as default_width
+
+    html = render_rich_email_html("![Schema](https://example.com/x.png)")
+    assert f"width:{default_width}px" not in html
+
+def test_default_signature_image_width_fits_the_body_column():
+    """The default must stay inside the 640px body the HTML renderer emits.
+
+    A default wider than the column would be clamped by max-width in some clients
+    and overflow in the ones that ignore it, so the two numbers have to agree.
+    """
+    from src.signature import DEFAULT_SIGNATURE_IMAGE_WIDTH, MAX_SIGNATURE_IMAGE_WIDTH
+
+    assert DEFAULT_SIGNATURE_IMAGE_WIDTH <= MAX_SIGNATURE_IMAGE_WIDTH == 640
+
+
+def test_signature_image_width_is_bounded():
+    """Reject widths that would either vanish or blow past the body column."""
+    import pytest
+    from pydantic import ValidationError
+
+    from src.signature import SignatureConfig
+
+    with pytest.raises(ValidationError):
+        SignatureConfig(image_width=12)
+    with pytest.raises(ValidationError):
+        SignatureConfig(image_width=1200)

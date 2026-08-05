@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import yaml
 
 from src.config import SERVICE_ROOT
@@ -8,6 +8,14 @@ from src.instance_config import read_instance_text, write_instance_text
 
 DEFAULT_SIGNATURE_PATH = SERVICE_ROOT / "signature.yaml"
 SIGNATURE_TOOLS = {"write_email", "reply_all", "create_draft"}
+
+# Default render width of the signature image, in CSS pixels. The HTML email body
+# is capped at 640px, so this is roughly two thirds of the readable column — wide
+# enough for a logo to be legible next to the signature text rather than reading
+# as a stamp, without crowding the message above it. `gmail_client` mirrors this
+# number as a last-resort fallback for when the signature config cannot be read.
+DEFAULT_SIGNATURE_IMAGE_WIDTH = 420
+MAX_SIGNATURE_IMAGE_WIDTH = 640
 
 SIGNATURE_MODES = (
     "preserve_provider_signature",
@@ -29,6 +37,18 @@ class SignatureConfig(BaseModel):
     text: str = ""
     image_url: str | None = None
     image_alt: str = "Signature"
+    # Rendered width of the signature image, in CSS pixels.
+    #
+    # Mail clients render an <img> with no dimensions at the file's natural pixel
+    # size, so a small logo arrived as a stamp next to the text. Constraining the
+    # width and letting the height follow keeps the image aligned with the text
+    # block whatever the source resolution, and a high-DPI file is scaled down
+    # rather than displayed enormous. Height is never set: forcing one would
+    # distort or crop the upload, so a taller image comes from a taller source
+    # file, not from a setting.
+    image_width: int = Field(
+        default=DEFAULT_SIGNATURE_IMAGE_WIDTH, ge=48, le=MAX_SIGNATURE_IMAGE_WIDTH
+    )
     # Structured fields (§4): when any is filled they compose the signature
     # block; the legacy free-text `text` keeps working unchanged when they are
     # all empty.
