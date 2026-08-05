@@ -5,6 +5,8 @@ import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useBusy } from '../../contexts/BusyContext';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { useInboxQuery, useInboxAction, useForceAgentOnMessage, useCategorizeContact, useCategoriesQuery, useContactsQuery } from '../../api/queries';
 import { decodeHtmlEntities, formatDateTimeFr, parseSenderEmail, senderDomain } from '../../utils/format';
 
@@ -76,6 +78,9 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     isSentMailbox || categoryFilter === 'all' ? messages : messages.filter((msg) => categoryForMessage(msg) === categoryFilter)
   ), [messages, categoryFilter, categoryByEmail, isSentMailbox]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const pager = usePagination(filteredMessages);
+  const pageMessages = pager.visible;
+
   useEffect(() => {
     setMailbox(initialMailbox);
     setSelectedIds(new Set());
@@ -146,18 +151,18 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     });
   };
 
-  const allVisibleSelected = filteredMessages.length > 0
-    && filteredMessages.every((msg) => selectedIds.has(msg.id));
+  const allVisibleSelected = pageMessages.length > 0
+    && pageMessages.every((msg) => selectedIds.has(msg.id));
 
   const toggleSelectAll = () => {
     setSelectedIds((current) => {
       if (allVisibleSelected) {
         const next = new Set(current);
-        filteredMessages.forEach((msg) => next.delete(msg.id));
+        pageMessages.forEach((msg) => next.delete(msg.id));
         return next;
       }
       const next = new Set(current);
-      filteredMessages.forEach((msg) => next.add(msg.id));
+      pageMessages.forEach((msg) => next.add(msg.id));
       return next;
     });
   };
@@ -310,7 +315,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
             </tr>
           </thead>
           <tbody>
-            {!filteredMessages.length ? (
+            {!pageMessages.length ? (
               <tr><td colSpan={showActions ? 6 : 5} className="empty-cell">
                 {warning ? (
                   <div className="inbox-empty-state">
@@ -323,7 +328,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
                 ) : (isSentMailbox ? 'Aucun e-mail envoyé trouvé dans la boîte connectée.' : (categoryFilter === 'all' ? 'Boîte de réception vide.' : 'Aucun message dans ce dossier.'))}
               </td></tr>
             ) : (
-              filteredMessages.map((msg) => {
+              pageMessages.map((msg) => {
                 const verdictLabel = msg.run_status === 'pending_approval'
                   ? 'Relire le brouillon'
                   : msg.run_id ? 'Détail de l’exécution' : 'aucun';
@@ -368,6 +373,15 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
           </tbody>
         </table>
       </div>
+      <TablePager
+        page={pager.page}
+        pageCount={pager.pageCount}
+        total={pager.total}
+        size={pager.size}
+        onPage={pager.setPage}
+        onSize={pager.setSize}
+        unit="messages"
+      />
     </>
   );
 }

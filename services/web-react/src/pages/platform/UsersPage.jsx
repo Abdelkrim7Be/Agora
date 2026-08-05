@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
@@ -59,6 +61,7 @@ export default function UsersPage() {
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const users = query.data || [];
+  const userPager = usePagination(users);
   const instances = instancesQuery.data || [];
   const agentTypes = typesQuery.data || [];
   const grants = grantsQuery.data || [];
@@ -195,7 +198,7 @@ export default function UsersPage() {
           <table className="data-table">
             <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle plateforme</th><th>Département</th><th>Configuration</th><th></th></tr></thead>
             <tbody>
-              {users.map((user) => {
+              {userPager.visible.map((user) => {
                 const selfDisable = user.enabled && user.username === username;
                 const label = user.enabled ? 'Désactiver' : 'Activer';
                 const onboarding = onboardingState(user);
@@ -246,7 +249,17 @@ export default function UsersPage() {
             </tbody>
           </table>
         </div>
-        {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
+        {users.length ? (
+          <TablePager
+            page={userPager.page}
+            pageCount={userPager.pageCount}
+            total={userPager.total}
+            size={userPager.size}
+            onPage={userPager.setPage}
+            onSize={userPager.setSize}
+            unit="comptes"
+          />
+        ) : <div className="notice">Aucun compte utilisateur pour le moment.</div>}
         <form className="user-create-form" style={{ marginTop: '1rem' }} onSubmit={handleCreate}>
           <input
             placeholder="Nom d'utilisateur"

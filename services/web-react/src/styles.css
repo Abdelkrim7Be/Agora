@@ -5010,3 +5010,60 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   font-size: 13px;
   overflow-wrap: anywhere;
 }
+
+/* Pagination bar under a table. */
+.table-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--outline);
+}
+
+.table-pager-range {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.table-pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.table-pager-controls button {
+  min-width: 38px;
+  min-height: 34px;
+  padding: 4px 8px;
+  justify-content: center;
+}
+
+.table-pager-gap {
+  padding: 0 2px;
+  color: var(--muted);
+}
+
+.table-pager-size {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-pager-size span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: none;
+}
+
+.table-pager-size select {
+  min-height: 34px;
+  padding: 4px 8px;
+}
+
+@media (max-width: 720px) {
+  .table-pager-controls { margin-left: 0; }
+}

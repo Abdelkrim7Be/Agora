@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
-import { Pager } from '../../components/ui/Pager';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
-import { usePager } from '../../hooks/usePager';
 import { useCostsQuery } from '../../api/queries';
 import { formatCount, formatCost } from '../../utils/format';
 
@@ -28,7 +28,6 @@ export default function CostsPage() {
   const { instanceId } = useInstance();
   const { setStatus } = useStatus();
   const [period, setPeriod] = useState('session');
-  const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
@@ -51,14 +50,15 @@ export default function CostsPage() {
     setStatus(`Impossible de charger les coûts : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const entryPager = usePagination(entries, COST_PAGE_SIZE);
+
   useEffect(() => {
-    pager.reset();
+    entryPager.setPage(0);
   }, [period]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const modelRows = Object.entries(summary?.by_model || {}).sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0));
   const currentModel = modelRows[0]?.[0] || entries[0]?.model || 'unknown';
-  const pageEntries = entries.slice(pager.page * COST_PAGE_SIZE, pager.page * COST_PAGE_SIZE + COST_PAGE_SIZE);
-  const hasMore = (pager.page + 1) * COST_PAGE_SIZE < entries.length;
+  const pageEntries = entryPager.visible;
 
   return (
     <>
@@ -121,7 +121,15 @@ export default function CostsPage() {
               )) : <tr><td colSpan={6} className="empty-cell">Aucune entrée de coût enregistrée.</td></tr>}
             </tbody>
           </table>
-          <Pager page={pager.page} hasMore={hasMore} onPrev={pager.prev} onNext={pager.next} />
+          <TablePager
+            page={entryPager.page}
+            pageCount={entryPager.pageCount}
+            total={entryPager.total}
+            size={entryPager.size}
+            onPage={entryPager.setPage}
+            onSize={entryPager.setSize}
+            unit="appels"
+          />
         </div>
       </div>
     </>
