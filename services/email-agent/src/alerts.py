@@ -45,8 +45,21 @@ def _state_path() -> Path:
 
 
 def load_alert_settings(agent_instance_id: str | None = None) -> AlertSettings:
+    """Instance settings on top of the deployment defaults.
+
+    An instance that has never saved its own alert settings inherits whatever the
+    stack was deployed with, so component and token-cap alerts do not silently
+    stay off on a fresh install. An explicit saved value always wins.
+    """
     raw = read_instance_text("alerts", _settings_path(), agent_instance_id=agent_instance_id)
     data = yaml.safe_load(raw) or {}
+    defaults = {
+        "enabled": settings.alerts_enabled_default,
+        "admin_recipient": settings.alert_admin_recipient_default,
+    }
+    for key, value in defaults.items():
+        if data.get(key) in (None, "", False) and value:
+            data[key] = value
     return AlertSettings(**data)
 
 

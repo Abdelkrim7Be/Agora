@@ -224,6 +224,12 @@ services:
       # Shared with the poller: the inbox listing cache and the Gmail hourly call
       # budget are per-mailbox facts, and a per-process copy of either is wrong.
       REDIS_URL: redis://redis:6379/0
+      # System mail: approver reminders, SLA escalation and component alerts. Sent
+      # through the connected mailbox, so it stays off until a stack opts in.
+      AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-false}
+      AGENT_NOTIFY_APP_BASE_URL: ${AGENT_NOTIFY_APP_BASE_URL:-}
+      AGENT_ALERTS_ENABLED: ${AGENT_ALERTS_ENABLED:-false}
+      AGENT_ALERT_ADMIN_RECIPIENT: ${AGENT_ALERT_ADMIN_RECIPIENT:-}
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-default}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json

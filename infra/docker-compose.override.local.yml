@@ -45,6 +45,8 @@ services:
       # relative redirect from the OAuth callback just works). Local dev splits
       # them across ports, so the callback needs to know where the web app is.
       AGENT_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+      AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
+      AGENT_NOTIFY_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
     # The base file waits for ollama-init, which no longer runs — without this the
     # agent would block forever on a dependency that is behind a profile.
     depends_on: !override
@@ -108,6 +110,12 @@ services:
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
       REDIS_URL: redis://redis:6379/0
+      # The SLA escalation and component alerts run in this process, not the API.
+      # Both recipients below are on the outbound allow list at the top of the file.
+      AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
+      AGENT_NOTIFY_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+      AGENT_ALERTS_ENABLED: ${AGENT_ALERTS_ENABLED:-true}
+      AGENT_ALERT_ADMIN_RECIPIENT: ${AGENT_ALERT_ADMIN_RECIPIENT:-owner@example.com}
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
