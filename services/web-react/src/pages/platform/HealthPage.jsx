@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { StatusBadge } from '../../components/ui/Badge';
@@ -20,10 +20,15 @@ export default function HealthPage() {
   const { setStatus } = useStatus();
   const { instances, instanceId } = useInstance();
   const [period, setPeriod] = useState('week');
+  const announcedInitialLoad = useRef(false);
   const query = useHealthQuery(period);
 
+  // Announced once: with a 15 s poll this used to repaint the status line forever.
   useEffect(() => {
-    if (query.data) setStatus('Santé système actualisée.', 'ok');
+    if (query.data && !announcedInitialLoad.current) {
+      announcedInitialLoad.current = true;
+      setStatus('Santé système à jour.', 'ok');
+    }
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -51,10 +56,13 @@ export default function HealthPage() {
             <h2>Santé système</h2>
             <div className="meta"><span>Agent, poller, sécurité, base de données, file d'attente</span></div>
           </div>
-          <button type="button" onClick={() => query.refetch()}>
-            <span className="material-symbols-outlined" aria-hidden="true">sync</span>
-            <span>Actualiser</span>
-          </button>
+          <div className="health-refresh">
+            <span className="counter">{query.isFetching ? 'Actualisation…' : 'Actualisé toutes les 15 s'}</span>
+            <button type="button" onClick={() => query.refetch()}>
+              <span className="material-symbols-outlined" aria-hidden="true">sync</span>
+              <span>Actualiser</span>
+            </button>
+          </div>
         </div>
         {data && (
           <div id="health-tiles" className="metrics-grid" aria-label="État des composants">
@@ -82,7 +90,10 @@ export default function HealthPage() {
               />
             ) : null}
             <MetricTile
-              label="Notifications"
+              label="Notifications e-mail"
+              hint={notifyEnabled
+                ? 'Relance des validateurs, escalade SLA et alertes techniques par e-mail.'
+                : 'Le centre de notifications reste actif ; seuls les envois par e-mail sont coupés.'}
               value={<span className={`status-pill ${notifyEnabled ? 'ok' : 'warn'}`}>{notifyEnabled ? 'Activées' : 'Désactivées'}</span>}
             />
           </div>

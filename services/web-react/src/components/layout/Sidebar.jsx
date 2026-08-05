@@ -6,7 +6,7 @@ import { roleAtLeast } from '../../utils/roles';
 import AgoraLogo from '../brand/AgoraLogo';
 
 const NAV_ITEMS = [
-  { to: '/', end: true, icon: 'dashboard', key: 'nav.platformDashboard' },
+  { to: '/', end: true, icon: 'dashboard', key: 'nav.platformDashboard', minRole: 'admin' },
   { to: '/instances', icon: 'deployed_code', key: 'nav.instances' },
   { to: '/agent-types', icon: 'smart_toy', key: 'nav.agentTypes' },
   { to: '/system-health', icon: 'monitor_heart', key: 'nav.health', minRole: 'admin' },

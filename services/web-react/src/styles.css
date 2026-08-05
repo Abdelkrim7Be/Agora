@@ -1881,9 +1881,14 @@ body:not(.workspace-mode) .instance-context { display: none; }
   margin-top: auto;
 }
 
+/* The green border and the green rail together read as one thick strip. The
+   rail marks the live agent; a hairline ring carries the accent. */
 .type-card.active-healthy {
-  border-color: color-mix(in srgb, var(--secondary) 70%, var(--outline));
-  box-shadow: inset var(--rail-width) 0 0 var(--secondary), var(--shadow-subtle);
+  border-color: var(--outline);
+  box-shadow:
+    inset var(--rail-width) 0 0 var(--secondary),
+    0 0 0 1px color-mix(in srgb, var(--secondary) 26%, transparent),
+    var(--shadow-subtle);
 }
 .compact-summary { margin-top: 14px; }
 
@@ -1926,6 +1931,9 @@ body:not(.workspace-mode) .instance-context { display: none; }
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr);
   gap: var(--space-3);
+  /* Without this the shorter card stretched to the taller one's height and its
+     content floated in the middle, which is what read as a misaligned panel. */
+  align-items: start;
 }
 
 .button-link {
@@ -1987,17 +1995,23 @@ body:not(.workspace-mode) .instance-context { display: none; }
   margin-bottom: var(--space-3);
 }
 
-.platform-control-panel div {
+.platform-control-panel a {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 12px;
+  color: inherit;
+  text-decoration: none;
   border: 1px solid var(--outline);
   border-radius: var(--radius-card);
   background: var(--surface-low);
+  transition: border-color .15s ease;
 }
 
-.platform-control-panel span {
+.platform-control-panel a:hover { border-color: var(--primary); }
+
+.platform-control-panel a span {
   color: var(--muted);
 }
 .chip-row {
@@ -5108,3 +5122,9 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 
 .danger-text { color: var(--danger); }
 .danger-text:hover { border-color: var(--danger); }
+
+.health-refresh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
