@@ -54,12 +54,20 @@ function ruleThenSummary(rule) {
   return parts.join(' · ') || 'aucune action';
 }
 
-function TogglePill({ label, enabled, onClick }) {
+/**
+ * Five identical pills said "Automatisation : Activé" and left you to work out
+ * what each subsystem actually did. A switch with one line of plain French says
+ * both what it is and whether it is on.
+ */
+function SectionSwitch({ label, description, enabled, disabled, onToggle }) {
   return (
-    <button className={`toggle-pill ${enabled ? 'on' : 'off'}`} type="button" onClick={onClick}>
-      <span className="toggle-dot" aria-hidden="true" />
-      <span>{label} : {enabled ? 'Activé' : 'Désactivé'}</span>
-    </button>
+    <label className={`toggle-row rules-section-switch${enabled ? ' on' : ''}`}>
+      <input type="checkbox" checked={enabled} disabled={disabled} onChange={() => onToggle(!enabled)} />
+      <span>
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+    </label>
   );
 }
 
@@ -407,17 +415,40 @@ export default function RulesPage() {
       <Card className="editor-card">
         <strong>Règles configurées</strong>
         <div className="rules-preview">
-          <div className="rules-toggle-row">
-            {canManage && (
-              <>
-                <TogglePill label="Automatisation" enabled={Boolean(parsed?.enabled)} onClick={() => handleToggleSection('automation', !parsed?.enabled)} />
-                <TogglePill label={`Digest ${parsed?.digest?.hour ?? ''}:00`} enabled={Boolean(parsed?.digest?.enabled)} onClick={() => handleToggleSection('digest', !parsed?.digest?.enabled)} />
-                <TogglePill label="Mise en veille" enabled={Boolean(parsed?.snooze?.enabled)} onClick={() => handleToggleSection('snooze', !parsed?.snooze?.enabled)} />
-                <TogglePill label="Relances" enabled={Boolean(parsed?.follow_ups?.enabled)} onClick={() => handleToggleSection('follow_ups', !parsed?.follow_ups?.enabled)} />
-                <TogglePill label="Apprentissage" enabled={Boolean(parsed?.learning?.enabled)} onClick={() => handleToggleSection('learning', !parsed?.learning?.enabled)} />
-              </>
-            )}
-          </div>
+          {canManage && (
+            <div className="rules-section-grid">
+              <SectionSwitch
+                label="Automatisation"
+                description="Applique les règles ci-dessous à chaque e-mail entrant."
+                enabled={Boolean(parsed?.enabled)}
+                onToggle={(next) => handleToggleSection('automation', next)}
+              />
+              <SectionSwitch
+                label={`Résumé quotidien à ${parsed?.digest?.hour ?? 18}:00`}
+                description="Regroupe les e-mails sans urgence dans un seul récapitulatif."
+                enabled={Boolean(parsed?.digest?.enabled)}
+                onToggle={(next) => handleToggleSection('digest', next)}
+              />
+              <SectionSwitch
+                label="Mise en veille"
+                description="Permet de reporter un e-mail à une date choisie."
+                enabled={Boolean(parsed?.snooze?.enabled)}
+                onToggle={(next) => handleToggleSection('snooze', next)}
+              />
+              <SectionSwitch
+                label="Relances"
+                description="Repère les fils restés sans réponse et propose de relancer."
+                enabled={Boolean(parsed?.follow_ups?.enabled)}
+                onToggle={(next) => handleToggleSection('follow_ups', next)}
+              />
+              <SectionSwitch
+                label="Apprentissage"
+                description="Propose de nouvelles règles à partir de vos décisions."
+                enabled={Boolean(parsed?.learning?.enabled)}
+                onToggle={(next) => handleToggleSection('learning', next)}
+              />
+            </div>
+          )}
           <div className="rule-list">
             {!rules.length ? <div className="empty">Aucune règle configurée.</div> : rules.map((r) => (
               <div className="rule-row" key={r.name}>
@@ -426,20 +457,30 @@ export default function RulesPage() {
                   <span>{ruleWhenSummary(r)} → {ruleThenSummary(r)}</span>
                 </div>
                 <div className="rule-row-actions">
-                  <button
-                    type="button"
-                    className={`status-pill ${r.enabled ? 'ok' : 'error'}`}
-                    onClick={() => handleToggleRule(r.name, !r.enabled)}
-                  >
-                    {r.enabled ? 'Activée' : 'Désactivée'}
-                  </button>
+                  {/* Was a status badge that happened to be clickable — the state
+                      and the control now look like what they are. */}
+                  <label className="toggle-row rule-enabled-switch">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(r.enabled)}
+                      aria-label={`${r.enabled ? 'Désactiver' : 'Activer'} la règle ${r.name}`}
+                      onChange={() => handleToggleRule(r.name, !r.enabled)}
+                    />
+                    <span>{r.enabled ? 'Activée' : 'Désactivée'}</span>
+                  </label>
                   {canManage && (
                     <div className="directory-actions">
-                      <button type="button" onClick={() => startEdit(r)}>
-                        <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier</span>
+                      <button type="button" title="Modifier" aria-label={`Modifier ${r.name}`} onClick={() => startEdit(r)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">edit</span>
                       </button>
-                      <button className="danger" type="button" onClick={() => handleDeleteRule(r.name)}>
-                        <span className="material-symbols-outlined" aria-hidden="true">delete</span><span>Supprimer</span>
+                      <button
+                        className="ghost danger-text"
+                        type="button"
+                        title="Supprimer"
+                        aria-label={`Supprimer ${r.name}`}
+                        onClick={() => handleDeleteRule(r.name)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden="true">delete</span>
                       </button>
                     </div>
                   )}

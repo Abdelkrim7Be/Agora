@@ -1716,36 +1716,6 @@ pre {
   margin-bottom: 14px;
 }
 
-.toggle-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--outline);
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.toggle-pill:hover { border-color: var(--secondary); }
-
-.toggle-pill .toggle-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.toggle-pill.on {
-  color: var(--secondary);
-  border-color: var(--secondary);
-  background: color-mix(in srgb, var(--secondary) 14%, transparent);
-}
-
-.toggle-pill.on .toggle-dot { background: var(--secondary); }
 
 .hidden-by-filter { display: none !important; }
 
@@ -5094,3 +5064,47 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* Rules page: subsystem switches read as "what it does / is it on", not as five
+   identical pills. */
+.rules-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.rules-section-switch {
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--outline);
+  border-bottom: 1px solid var(--outline);
+  border-radius: var(--radius-card);
+  background: var(--surface-low);
+  cursor: pointer;
+}
+
+.rules-section-switch.on {
+  border-color: color-mix(in srgb, var(--secondary) 45%, var(--outline));
+  background: var(--secondary-bg);
+}
+
+.rules-section-switch > span {
+  display: grid;
+  gap: 3px;
+}
+
+.rules-section-switch strong { font-size: 13px; }
+.rules-section-switch small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+.rule-enabled-switch {
+  gap: 8px;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.rule-enabled-switch span { color: var(--muted); font-size: 12px; }
+
+.danger-text { color: var(--danger); }
+.danger-text:hover { border-color: var(--danger); }
