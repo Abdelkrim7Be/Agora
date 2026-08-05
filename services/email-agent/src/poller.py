@@ -593,6 +593,23 @@ async def _process_message_locked(
                 f"poller: {msg_id} claimed by category '{claimed_category}' but "
                 f"junk-gated anyway ({junk_reason})"
             )
+    # An automation rule the owner wrote explicitly outranks the generic junk
+    # heuristic. Both agree the mail is bulk; only the rule says where to file it.
+    # Without this the shipped starter rules were dead on arrival: "archive
+    # promotions" keys on CATEGORY_PROMOTIONS, which is exactly what the junk gate
+    # drops first, so the label was never applied and the mail never left the inbox.
+    junk_rule_plan = build_rule_plan(gate_input, rules_config) if junk else None
+    # A rule that matched but asks for nothing is not a reason to pay for the full
+    # pipeline on bulk mail — it would fall straight through to the triage LLM.
+    if junk_rule_plan and not (junk_rule_plan["tool_calls"] or junk_rule_plan["terminal_status"]):
+        junk_rule_plan = None
+    if junk and junk_rule_plan:
+        print(
+            f"poller: {msg_id} is automated ({junk_reason}) but matches "
+            f"{', '.join(junk_rule_plan['matched_rules'])}; applying the rule instead"
+        )
+        junk = False
+
     if junk:
         run_id = str(uuid.uuid4())
         upsert_run(

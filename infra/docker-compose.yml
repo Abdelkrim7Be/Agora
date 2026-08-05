@@ -233,6 +233,11 @@ services:
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-default}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      # The default instance keeps the pre-multi-instance token path, which is
+      # relative to the service root — i.e. inside the container's own writable
+      # layer. Left there, its Gmail grant is invisible to the poller and is lost
+      # on the next image build; it belongs on the shared volume like every other.
+      GMAIL_TOKEN_PATH: /app/data/token.json
       AGENT_MEDIA_DIR: /app/data/media
       GMAIL_WEBHOOK_ENABLED: ${GMAIL_WEBHOOK_ENABLED:-false}
       GMAIL_WEBHOOK_TOPIC: ${GMAIL_WEBHOOK_TOPIC:-}

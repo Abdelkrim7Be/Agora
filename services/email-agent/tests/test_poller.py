@@ -1172,6 +1172,39 @@ async def test_category_marked_accepts_automated_still_claims_bulk_mail(
     assert [status for _id, status, _run in outcomes] == ["pending_approval"]
 
 
+async def test_an_owner_rule_wins_over_the_junk_gate(
+    mocked_gmail, fake_llms, monkeypatch, provider
+):
+    # The starter rules ("archive promotions") key on exactly the Gmail category
+    # labels the junk gate drops first, so writing one used to change nothing:
+    # the mail was gated, marked read, and never labelled or archived.
+    from src.automation import RulesConfig
+
+    set_unread, _marked = mocked_gmail
+    message = _bulk_message("m_promo", "news@shop.example", "Soldes de printemps")
+    message["labelIds"] = ["INBOX", "UNREAD", "CATEGORY_PROMOTIONS"]
+    set_unread([message])
+
+    rules = RulesConfig(**{
+        "enabled": True,
+        "rules": [{
+            "name": "archive promotions",
+            "enabled": True,
+            "when": {"labels": ["CATEGORY_PROMOTIONS"]},
+            "then": {"labels": ["Auto/Promotions"], "archive": True, "mark_read": True},
+        }],
+    })
+    monkeypatch.setattr(poller, "load_rules", lambda *a, **k: rules)
+
+    outcomes = await poller.poll_once(_graph(), provider=provider, rules_config=rules)
+
+    from src.run_registry import list_runs
+
+    record = next(r for r in list_runs(limit=50) if r.get("email_id") == "m_promo")
+    assert record.get("category") != "junk_auto"
+    assert [status for _id, status, _run in outcomes] == ["completed"]
+
+
 async def test_poll_once_stops_refetching_mail_already_awaiting_approval(
     mocked_gmail, fake_llms, monkeypatch, provider
 ):

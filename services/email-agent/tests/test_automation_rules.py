@@ -496,3 +496,56 @@ def test_unknown_starter_rule_is_rejected():
 
     with pytest.raises(ValueError, match="unknown starter rule"):
         apply_starter_rules(RulesConfig(), ["nope"])
+
+
+def test_a_matching_rule_beats_the_junk_gate(tmp_path):
+    """The shipped starter rules key on CATEGORY_PROMOTIONS/SOCIAL/FORUMS — exactly
+    what the junk gate drops first. Before this, writing one of those rules did
+    nothing at all: the mail was gated, marked read and never labelled."""
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        "enabled: true\n"
+        "rules:\n"
+        "  - name: archive promotions\n"
+        "    enabled: true\n"
+        "    when: {labels: [CATEGORY_PROMOTIONS]}\n"
+        "    then: {labels: [Auto/Promotions], archive: true, mark_read: true}\n"
+    )
+    config = load_rules(rules_path)
+
+    gate_input = {
+        "author": "news@shop.example",
+        "subject": "Soldes de printemps",
+        "email_thread": "-50% cette semaine",
+        "labels": ["INBOX", "UNREAD", "CATEGORY_PROMOTIONS"],
+    }
+    plan = build_rule_plan(gate_input, config)
+
+    assert plan is not None
+    assert plan["matched_rules"] == ["archive promotions"]
+    names = [call["name"] for call in plan["tool_calls"]]
+    assert names == ["apply_label", "archive_email", "mark_read"]
+
+
+def test_a_rule_that_asks_for_nothing_is_not_a_rescue(tmp_path):
+    """An empty `then` must not pull bulk mail into the full pipeline."""
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        "enabled: true\n"
+        "rules:\n"
+        "  - name: noop\n"
+        "    enabled: true\n"
+        "    when: {labels: [CATEGORY_PROMOTIONS]}\n"
+        "    then: {}\n"
+    )
+    config = load_rules(rules_path)
+
+    plan = build_rule_plan(
+        {"author": "news@shop.example", "subject": "x", "email_thread": "y",
+         "labels": ["CATEGORY_PROMOTIONS"]},
+        config,
+    )
+
+    assert plan is not None
+    assert not plan["tool_calls"]
+    assert plan["terminal_status"] is None
