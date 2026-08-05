@@ -124,25 +124,51 @@ export default function NotificationsPage() {
             <h2>Notifications</h2>
             <div className="meta"><span>{instanceId}</span></div>
           </div>
-          <div className="toolbar">
+          {/* Filters and single actions only. The four selection buttons used to
+              sit here too, greyed out most of the time — they now appear as a bar
+              when there is actually a selection to act on. */}
+          <div className="toolbar notifications-toolbar">
             <label className="toggle-row">
               <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
               <span>Non lues uniquement</span>
             </label>
-            <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+            <select aria-label="Filtre de sévérité" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
               <option value="">Toutes sévérités</option>
               {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
-            <button type="button" onClick={handleMarkAllRead}>Tout marquer comme lu</button>
-            <button type="button" disabled={!notifications.length} onClick={toggleAll}>{allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}</button>
-            <button type="button" disabled={!selectedNotifications.length} onClick={handleBulkRead}>Marquer la sélection comme lue</button>
-            <button type="button" className="danger" disabled={!selectedNotifications.length} onClick={handleBulkDelete}>Supprimer la sélection</button>
-            <button type="button" disabled={browserPermission === 'granted' || browserPermission === 'unsupported'} onClick={handleBrowserPermission}>
-              Notifications navigateur
+            <button type="button" onClick={handleMarkAllRead}>
+              <span className="material-symbols-outlined" aria-hidden="true">mark_email_read</span>
+              <span>Tout marquer comme lu</span>
             </button>
-            <button type="button" onClick={() => query.refetch()}>Actualiser</button>
+            <button
+              className="ghost"
+              type="button"
+              disabled={browserPermission === 'granted' || browserPermission === 'unsupported'}
+              title={browserPermission === 'granted' ? 'Déjà autorisées dans ce navigateur' : undefined}
+              onClick={handleBrowserPermission}
+            >
+              <span className="material-symbols-outlined" aria-hidden="true">notifications_active</span>
+              <span>Alertes navigateur</span>
+            </button>
+            <button className="ghost" type="button" aria-label="Actualiser" onClick={() => query.refetch()}>
+              <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
+            </button>
           </div>
         </div>
+        {notifications.length ? (
+          <div className="bulk-bar notifications-bulk-bar">
+            <button type="button" onClick={toggleAll}>
+              {allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}
+            </button>
+            {selectedNotifications.length ? (
+              <>
+                <span>{selectedNotifications.length} sélectionnée(s)</span>
+                <button type="button" onClick={handleBulkRead}>Marquer comme lues</button>
+                <button className="danger" type="button" onClick={handleBulkDelete}>Supprimer</button>
+              </>
+            ) : <span>Sélectionnez des notifications pour agir en lot.</span>}
+          </div>
+        ) : null}
         {query.error ? (
           <p className="empty-cell">{`Notifications indisponibles : ${query.error.message}`}</p>
         ) : !notifications.length ? (

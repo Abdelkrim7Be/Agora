@@ -5067,3 +5067,30 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 @media (max-width: 720px) {
   .table-pager-controls { margin-left: 0; }
 }
+
+.notifications-toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin: 0;
+}
+
+/* Not sticky inside a card: it belongs to the list under it, not to the page. */
+.notifications-bulk-bar {
+  position: static;
+  flex-wrap: wrap;
+  margin: 12px 0;
+  border-color: var(--outline);
+  background: var(--surface-low);
+}
+
+.notifications-bulk-bar span { color: var(--muted); font-size: 13px; }
+
+/* A bare "—" on a KPI reads as broken. The hint says which it is: no data yet,
+   not a failed query. */
+.metric-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: 0;
+}
