@@ -14,6 +14,50 @@ export function requestHeaders(token, instanceId, path, options = {}) {
   return headers;
 }
 
+// The access token lives 15 minutes; the refresh cookie lives days. Without the
+// rotation below every session died mid-action a quarter of an hour after login,
+// which reads as "the app logged me out by itself".
+let refreshInFlight = null;
+let onTokenRefreshed = () => {};
+
+/** AuthProvider registers the setter so a rotated token reaches React state. */
+export function registerTokenListener(listener) {
+  onTokenRefreshed = typeof listener === 'function' ? listener : () => {};
+}
+
+/** Rotates the refresh cookie for a new access token. Concurrent callers share
+ * one request — a page firing six queries at once must not spend six rotations
+ * (the gateway treats a reused refresh token as a replay and kills the family). */
+export function refreshAccessToken(gatewayBase) {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const response = await fetch(gatewayUrl(gatewayBase, '/auth/refresh'), {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!response.ok) return '';
+        const data = await response.json().catch(() => null);
+        return data?.token || '';
+      } catch (_error) {
+        return '';
+      }
+    })();
+    refreshInFlight.finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
+/** Runs `send(token)`, and on a 401 rotates the session once and replays it. */
+async function withSessionRetry(gatewayBase, token, path, send) {
+  const response = await send(token);
+  if (response.status !== 401 || path.startsWith('/auth/')) return response;
+  const refreshed = await refreshAccessToken(gatewayBase);
+  if (!refreshed) return response;
+  onTokenRefreshed(refreshed);
+  return send(refreshed);
+}
+
 export async function responseError(response, signOut) {
   const text = await response.text();
   let message = text || `${response.status} ${response.statusText}`;
@@ -35,9 +79,11 @@ export async function responseError(response, signOut) {
 
 // We pass the auth details so this can be used outside React context (or inside hooks)
 export async function api(gatewayBase, token, instanceId, signOut, path, options = {}) {
-  const headers = requestHeaders(token, instanceId, path, options);
-  const response = await fetch(gatewayUrl(gatewayBase, path), { ...options, headers });
-  
+  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetch(
+    gatewayUrl(gatewayBase, path),
+    { ...options, headers: requestHeaders(activeToken, instanceId, path, options), credentials: 'include' },
+  ));
+
   if (!response.ok) throw await responseError(response, signOut);
   
   const contentType = response.headers.get('content-type') || '';
@@ -49,9 +95,11 @@ export async function api(gatewayBase, token, instanceId, signOut, path, options
 export async function apiUpload(gatewayBase, token, instanceId, signOut, path, file) {
   const formData = new FormData();
   formData.append('file', file, file.name);
-  const headers = { Authorization: `Bearer ${token}` };
-  if (path.startsWith('/api/agent') && instanceId) headers['X-Agora-Agent-Instance'] = instanceId;
-  const response = await fetch(gatewayUrl(gatewayBase, path), { method: 'POST', headers, body: formData });
+  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => {
+    const headers = { Authorization: `Bearer ${activeToken}` };
+    if (path.startsWith('/api/agent') && instanceId) headers['X-Agora-Agent-Instance'] = instanceId;
+    return fetch(gatewayUrl(gatewayBase, path), { method: 'POST', headers, body: formData, credentials: 'include' });
+  });
   if (!response.ok) throw await responseError(response, signOut);
   return response.json();
 }
@@ -59,16 +107,20 @@ export async function apiUpload(gatewayBase, token, instanceId, signOut, path, f
 // <img src> can't carry the Authorization header, so authenticated images
 // (the stored signature) are fetched as a blob and shown via an object URL.
 export async function apiBlob(gatewayBase, token, instanceId, signOut, path) {
-  const headers = requestHeaders(token, instanceId, path);
-  const response = await fetch(gatewayUrl(gatewayBase, path), { headers });
+  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetch(
+    gatewayUrl(gatewayBase, path),
+    { headers: requestHeaders(activeToken, instanceId, path), credentials: 'include' },
+  ));
   if (!response.ok) return null;
   return response.blob();
 }
 
 export async function streamApi(gatewayBase, token, instanceId, signOut, path, options = {}, onEvent = () => {}) {
-  const headers = requestHeaders(token, instanceId, path, options);
-  const response = await fetch(gatewayUrl(gatewayBase, path), { ...options, headers });
-  
+  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetch(
+    gatewayUrl(gatewayBase, path),
+    { ...options, headers: requestHeaders(activeToken, instanceId, path, options), credentials: 'include' },
+  ));
+
   if (!response.ok) throw await responseError(response, signOut);
   if (!response.body) {
     onEvent({ event: 'message', data: await response.text() });
