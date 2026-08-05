@@ -73,4 +73,37 @@ class AgentInstanceSeederTest {
         // A deliberately deleted default instance must stay deleted across restarts.
         verify(repo, never()).save(any());
     }
+
+    @Test
+    void seedsTheInstanceUnderTheConfiguredOwnerAccount() throws Exception {
+        // The poller stamps every run with the owning instance's creator, and
+        // tenant-scoped reads filter on the requesting user. A creator nobody can
+        // log in as means the validation queue is always empty.
+        GatewayProperties props = new GatewayProperties();
+        props.getOwner().setUsername("patron");
+
+        assertThat(seedWith(props).getCreatedBy()).isEqualTo("patron");
+    }
+
+    @Test
+    void fallsBackToTheAdminAccountWhenNoOwnerIsConfigured() throws Exception {
+        GatewayProperties props = new GatewayProperties();
+        props.getOwner().setUsername("");
+        props.getAdmin().setUsername("root");
+
+        assertThat(seedWith(props).getCreatedBy()).isEqualTo("root");
+    }
+
+    @Test
+    void aConfiguredDeploymentNeverSeedsTheUnloggableSystemCreator() throws Exception {
+        // Regression guard: "system" was the shipped literal, and it made the
+        // seeded instance's whole run history invisible to every real account.
+        // With no accounts configured at all there is nobody to own it and the
+        // fallback stands — but that deployment has no login either.
+        GatewayProperties props = new GatewayProperties();
+        props.getOwner().setUsername("owner");
+        props.getAdmin().setUsername("admin");
+
+        assertThat(seedWith(props).getCreatedBy()).isNotEqualTo("system");
+    }
 }
