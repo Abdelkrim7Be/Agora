@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from src.api import app
 from src.config import settings
+from src.gmail_client import GMAIL_SCOPES
 from src.gmail_oauth import build_state, validate_state
 
 
@@ -312,3 +313,95 @@ def test_gmail_connect_callback_surfaces_exchange_error_message(monkeypatch):
     location = response.headers["location"]
     assert "gmail=error" in location
     assert "Redirect%20URI%20mismatch" in location
+
+
+class _ScopedCredentials(_FakeCredentials):
+    """Credentials that report the scopes Google actually granted."""
+
+    def __init__(self, scopes):
+        self.scopes = scopes
+
+
+class _ScopeAwareFlow(_FakeFlow):
+    """Flow whose token exchange records the oauthlib relax flag it ran under."""
+
+    granted_scopes: list[str] = list(GMAIL_SCOPES)
+    seen_relax_flag = None
+
+    def fetch_token(self, code):
+        import os
+
+        type(self).seen_relax_flag = os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+        self.fetch_code = code
+        self.credentials = _ScopedCredentials(type(self).granted_scopes)
+
+
+def _exchange_env(monkeypatch, tmp_path, flow_cls):
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(oauth, "Flow", flow_cls)
+    state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
+    return oauth, validate_state(state)
+
+
+def test_token_exchange_relaxes_oauthlib_scope_check(monkeypatch, tmp_path):
+    """oauthlib must not raise when a prior broad grant widens the returned scopes.
+
+    An account that once granted `https://mail.google.com/` to the same OAuth client
+    gets the union back from Google, which oauthlib treats as tampering by default.
+    """
+    _ScopeAwareFlow.seen_relax_flag = None
+    _ScopeAwareFlow.granted_scopes = ["https://mail.google.com/", *GMAIL_SCOPES]
+    oauth, payload = _exchange_env(monkeypatch, tmp_path, _ScopeAwareFlow)
+    monkeypatch.delenv("OAUTHLIB_RELAX_TOKEN_SCOPE", raising=False)
+
+    path = oauth.exchange_code_for_token("abc", payload)
+
+    assert path.exists()
+    assert _ScopeAwareFlow.seen_relax_flag == "1"
+    # The flag is process-global; leaving it set would silently relax every later flow.
+    assert "OAUTHLIB_RELAX_TOKEN_SCOPE" not in __import__("os").environ
+
+
+def test_token_exchange_restores_preexisting_relax_flag(monkeypatch, tmp_path):
+    """A value the operator set in the environment must survive the exchange."""
+    _ScopeAwareFlow.granted_scopes = list(GMAIL_SCOPES)
+    oauth, payload = _exchange_env(monkeypatch, tmp_path, _ScopeAwareFlow)
+    monkeypatch.setenv("OAUTHLIB_RELAX_TOKEN_SCOPE", "0")
+
+    oauth.exchange_code_for_token("abc", payload)
+
+    assert __import__("os").environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] == "0"
+
+
+def test_token_exchange_rejects_missing_required_scope(monkeypatch, tmp_path):
+    """Relaxing the check must tolerate a superset, never a subset.
+
+    A token without gmail.modify would store fine and then fail on the first send,
+    long after the user left the connect screen.
+    """
+    _ScopeAwareFlow.granted_scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
+    oauth, payload = _exchange_env(monkeypatch, tmp_path, _ScopeAwareFlow)
+
+    with pytest.raises(ValueError, match="did not grant the permissions"):
+        oauth.exchange_code_for_token("abc", payload)
+
+
+def test_scope_change_error_explains_the_prior_grant():
+    """The raw oauthlib message names no cause and no fix; the wrapper must."""
+    from src.gmail_oauth import _explain_token_fetch_error
+
+    message = _explain_token_fetch_error(
+        Warning(
+            'Scope has changed from "https://www.googleapis.com/auth/gmail.modify" to '
+            '"https://mail.google.com/ https://www.googleapis.com/auth/gmail.modify".'
+        )
+    )
+
+    assert "myaccount.google.com/permissions" in message
