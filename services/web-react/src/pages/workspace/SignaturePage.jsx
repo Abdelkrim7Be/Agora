@@ -11,6 +11,9 @@ import {
   useDeleteSignatureImage,
 } from '../../api/queries';
 
+// Mirrors SignatureConfig.image_width's default in the email-agent.
+const DEFAULT_IMAGE_WIDTH = 420;
+
 const EMPTY_FORM = {
   enabled: false,
   mode: 'append_platform_signature',
@@ -23,6 +26,7 @@ const EMPTY_FORM = {
   text: '',
   image_alt: 'Signature',
   image_url: '',
+  image_width: DEFAULT_IMAGE_WIDTH,
 };
 
 const MODE_LABELS = {
@@ -86,6 +90,7 @@ export default function SignaturePage() {
       text: query.data.text || '',
       image_alt: query.data.image_alt || 'Signature',
       image_url: query.data.image_url || '',
+      image_width: query.data.image_width ?? DEFAULT_IMAGE_WIDTH,
     });
     refreshImage();
     if (!announcedInitialLoad.current) {
@@ -187,6 +192,24 @@ export default function SignaturePage() {
             {hasImage && <button type="button" className="ghost" onClick={handleDeleteImage}>Retirer l’image</button>}
           </div>
           <label><span>Texte alternatif de l’image</span><input type="text" placeholder="Logo Agora" value={form.image_alt} onChange={(e) => setForm({ ...form, image_alt: e.target.value })} /></label>
+          <label>
+            <span>Largeur de l’image (px)</span>
+            <input
+              type="number"
+              min="48"
+              max="640"
+              step="10"
+              value={form.image_width}
+              onChange={(e) => setForm({ ...form, image_width: Number(e.target.value) || DEFAULT_IMAGE_WIDTH })}
+            />
+            <small>
+              Sans largeur, le client mail affiche l’image à sa taille d’origine — un petit
+              logo apparaît minuscule. Le corps du mail fait 640 px de large ;
+              {' '}{DEFAULT_IMAGE_WIDTH} px occupe environ les deux tiers de cette largeur. La hauteur
+              suit automatiquement les proportions de l’image — pour une signature plus haute,
+              il faut une image source plus haute.
+            </small>
+          </label>
           <label className="signature-url-fallback"><span>Ou URL d’image externe</span><input type="url" placeholder="https://exemple.com/signature.png" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} /></label>
         </form>
         <Card>
@@ -198,7 +221,7 @@ export default function SignaturePage() {
           ) : (
             <div className="signature-preview">
               {previewLines.length ? <div>{previewLines.map((line, i) => <span key={i}>{line}<br /></span>)}</div> : null}
-              {previewImageUrl ? <img src={previewImageUrl} alt={form.image_alt || 'Signature'} /> : null}
+              {previewImageUrl ? <img src={previewImageUrl} alt={form.image_alt || 'Signature'} style={{ width: `${form.image_width || DEFAULT_IMAGE_WIDTH}px`, maxWidth: '100%', height: 'auto' }} /> : null}
             </div>
           )}
         </Card>
