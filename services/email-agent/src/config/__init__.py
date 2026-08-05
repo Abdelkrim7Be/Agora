@@ -155,6 +155,11 @@ class Settings:
     traces_path: str = os.getenv("AGENT_TRACES_PATH", "logs/llm_traces.jsonl")
     alerts_path: str = os.getenv("AGENT_ALERTS_PATH", "alerts.yaml")
     alerts_state_path: str = os.getenv("AGENT_ALERT_STATE_PATH", "logs/alert_state.yaml")
+    # Deployment-wide defaults for a fresh instance that has never saved its own
+    # alert settings. Without these, component and token-cap alerts stayed off on
+    # every new deployment until someone opened the settings page.
+    alerts_enabled_default: bool = _env_bool("AGENT_ALERTS_ENABLED", "false")
+    alert_admin_recipient_default: str = os.getenv("AGENT_ALERT_ADMIN_RECIPIENT", "")
     retention_path: str = os.getenv("AGENT_RETENTION_PATH", "retention.yaml")
     dlq_backend: str = os.getenv("AGENT_DLQ_BACKEND", "redis" if redis_url else ("postgres" if database_url else "json"))
     dlq_path: str = os.getenv("AGENT_DLQ_PATH", "logs/dlq.json")
