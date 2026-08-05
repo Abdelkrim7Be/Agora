@@ -7,14 +7,29 @@
 x-outbound-allowlist: &outbound_allowlist
   AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com"
 
+# Docker GPU passthrough is not configured on this machine, so an Ollama running
+# inside Compose falls back to CPU and a draft takes minutes. The host runs Ollama
+# as a systemd service with the GPU, so both containerised Ollama services move
+# behind a profile (not started by default) and every LLM caller reaches the host
+# through the docker host gateway instead. Start them with `--profile docker-ollama`
+# if the host service is not available.
+x-host-ollama: &host_ollama
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
 services:
   ollama:
+    profiles: ["docker-ollama"]
     gpus: !reset []
     environment:
       NVIDIA_VISIBLE_DEVICES: !reset ""
       NVIDIA_DRIVER_CAPABILITIES: !reset ""
 
+  ollama-init:
+    profiles: ["docker-ollama"]
+
   email-agent:
+    <<: *host_ollama
     volumes:
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
       # The live-test harness runs inside this container so the sender's OAuth
@@ -24,17 +39,29 @@ services:
       <<: *outbound_allowlist
       AGENT_DRY_RUN: "false"
       AGENT_DEFAULT_SEND_MODE: "live"
+      AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       GMAIL_OAUTH_REDIRECT_URI: http://localhost:${GATEWAY_PORT:-8081}/api/agent/connect/gmail/callback
       # Prod leaves this empty (Traefik puts web + gateway on one origin, so a
       # relative redirect from the OAuth callback just works). Local dev splits
       # them across ports, so the callback needs to know where the web app is.
       AGENT_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+    # The base file waits for ollama-init, which no longer runs — without this the
+    # agent would block forever on a dependency that is behind a profile.
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      email-agent-migrate:
+        condition: service_completed_successfully
+      security:
+        condition: service_healthy
 
   security:
+    <<: *host_ollama
     volumes:
       - ../services/security/policy.live-test.yaml:/app/policy.live-test.yaml:ro
     environment:
       SECURITY_POLICY_PATH: policy.live-test.yaml
+      SECURITY_SANITIZE_ENDPOINT: http://host.docker.internal:11434/v1
 
   gateway:
     environment:
@@ -57,6 +84,7 @@ services:
   # click — src/poller.py already loops every connected instance via
   # agent_instance_context, so it works unmodified for multi-instance local dev.
   poller:
+    <<: *host_ollama
     build:
       context: ../services/email-agent
       network: host
@@ -82,7 +110,7 @@ services:
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_LLM_PROFILE: local
-      AGENT_LLM_CONFIG_PATH: config/llm.local-docker.yaml
+      AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
       AGENT_DRY_RUN: ${AGENT_DRY_RUN:-false}
       AGENT_DEFAULT_SEND_MODE: "live"
@@ -99,7 +127,5 @@ services:
         condition: service_completed_successfully
       security:
         condition: service_healthy
-      ollama-init:
-        condition: service_completed_successfully
     networks:
       - agora
