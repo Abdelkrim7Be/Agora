@@ -32,11 +32,18 @@ public class AgentInstanceSeeder implements CommandLineRunner {
                 .findFirst()
                 .orElseGet(GatewayProperties.AgentType::defaultEmailAgent);
 
+        // A literal "default-mailbox" shipped here before. It is not an address, and
+        // the email-agent compares this value against the mailbox Google actually
+        // authorized and fails closed on a mismatch — so every clean install seeded an
+        // instance that could never connect Gmail. Blank restores the documented
+        // "no expectation" path; a configured value pins the instance to one mailbox.
+        String mailbox = props.getDefaultAgentMailbox();
+
         instances.save(new AgentInstance(
                 id,
                 type.getId(),
                 "Default Email Agent",
-                "default-mailbox",
+                mailbox == null ? "" : mailbox.trim(),
                 "Seeded email-agent instance that preserves the original single-mailbox flow.",
                 "active",
                 type.getBasePath(),
