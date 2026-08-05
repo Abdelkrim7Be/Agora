@@ -63,7 +63,7 @@ def _database_component() -> dict:
 
 def _redis_component() -> dict:
     if not settings.redis_url:
-        return {"status": "disabled"}
+        return {"status": "disabled", "detail": "per-process cache and call budget"}
     try:
         parsed = urlparse(settings.redis_url)
         host, port = parsed.hostname, parsed.port or 6379
@@ -71,7 +71,7 @@ def _redis_component() -> dict:
             return {"status": "down"}
         with socket.create_connection((host, port), timeout=PROBE_TIMEOUT_SECONDS):
             pass
-        return {"status": "up"}
+        return {"status": "up", "detail": "shared inbox cache and Gmail call budget"}
     except Exception:
         return {"status": "down"}
 

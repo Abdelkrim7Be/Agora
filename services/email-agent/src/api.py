@@ -104,6 +104,7 @@ from src.run_registry import get_run as get_run_record
 from src.run_registry import delete_runs, find_run_by_email, list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
 from src.health import aggregate_health
+from src.shared_cache import cache_delete_prefix, cache_get_json, cache_set_json
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
 from src.runtime_settings import RuntimeSettings, load_runtime_settings, save_runtime_settings
@@ -3736,9 +3737,23 @@ _INBOX_CACHE_TTL_SECONDS = float(os.getenv("AGENT_INBOX_CACHE_TTL_SECONDS", "60"
 _INBOX_CACHE_LOCK = threading.Lock()
 
 
+def _inbox_cache_key(key: tuple) -> str:
+    """Redis key for a cache tuple: (user_id, agent_instance_id, mailbox, limit)."""
+    return "agora:inbox:" + ":".join(str(part) for part in key)
+
+
+def _inbox_cache_prefix(user_id: str | None, agent_instance_id: str | None) -> str:
+    return f"agora:inbox:{user_id}:{agent_instance_id}:"
+
+
 def _inbox_cache_get(key: tuple) -> list[dict] | None:
     if _INBOX_CACHE_TTL_SECONDS <= 0:
         return None
+    # Shared first: the poller mutates the mailbox in its own process, and only a
+    # shared entry can be invalidated by whichever process did the mutating.
+    shared = cache_get_json(_inbox_cache_key(key))
+    if shared is not None:
+        return shared
     with _INBOX_CACHE_LOCK:
         entry = _INBOX_CACHE.get(key)
         if entry is None:
@@ -3753,12 +3768,17 @@ def _inbox_cache_get(key: tuple) -> list[dict] | None:
 def _inbox_cache_put(key: tuple, messages: list[dict]) -> None:
     if _INBOX_CACHE_TTL_SECONDS <= 0:
         return
+    cache_set_json(_inbox_cache_key(key), messages, _INBOX_CACHE_TTL_SECONDS)
     with _INBOX_CACHE_LOCK:
         _INBOX_CACHE[key] = (time.time(), [dict(message) for message in messages])
 
 
 def _inbox_cache_clear(user_id: str | None = None, agent_instance_id: str | None = None) -> None:
     """Drop cached listings after the mailbox is mutated."""
+    cache_delete_prefix(
+        "agora:inbox:" if user_id is None and agent_instance_id is None
+        else _inbox_cache_prefix(user_id, agent_instance_id)
+    )
     with _INBOX_CACHE_LOCK:
         if user_id is None and agent_instance_id is None:
             _INBOX_CACHE.clear()
