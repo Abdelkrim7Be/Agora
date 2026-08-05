@@ -207,6 +207,11 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/rules/rule-delete").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/rules/section-config").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/rules/suggestions/*").hasAnyRole("OWNER", "ADMIN")
+                // Poll cadence / batch caps. The endpoints existed on both sides but were
+                // never enumerated here, so default-deny answered 403 for every role and
+                // the workspace rendered a "reserved for another role" banner to everyone.
+                .requestMatchers(HttpMethod.GET, "/api/agent/runtime-settings").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/api/agent/runtime-settings").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/analytics").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/alerts/settings").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/alerts/settings").hasAnyRole("OWNER", "ADMIN")
