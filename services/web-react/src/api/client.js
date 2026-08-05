@@ -74,6 +74,9 @@ export async function responseError(response, signOut) {
   if (response.status === 403) {
     return new Error('Interdit pour ce rôle.');
   }
+  if (response.status === 410) {
+    return new Error("Cette exécution a expiré : son état n’existe plus. Elle a été retirée de la file.");
+  }
   return new Error(message);
 }
 

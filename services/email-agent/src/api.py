@@ -5,6 +5,7 @@ import base64
 import contextlib
 import html
 import json
+import logging
 import os
 import re
 import threading
@@ -22,6 +23,8 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Reques
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from src.config import settings
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
@@ -953,18 +956,100 @@ def _execute_pending_action(run_id: str, args_override: dict | None = None) -> R
     return response
 
 
+ORPHANED_RUN_DETAIL = (
+    "This run's conversation state is gone, so it can no longer be approved, "
+    "edited or resumed. It has been marked as expired."
+)
+
+
+def _mark_run_orphaned(record: dict) -> None:
+    """Registry says pending, checkpointer has nothing — retire the row.
+
+    The two stores can drift (a storage-backend switch, a pruned checkpoint DB,
+    a restore from an older dump). Left alone, the run keeps showing up in the
+    approval queue as a card whose every button 404s, forever. Marking it here
+    means the person sees one honest "expirée" state instead.
+    """
+    try:
+        upsert_run(
+            record["run_id"],
+            "orphaned",
+            email_input=_record_email_input(record),
+            classification=record.get("classification"),
+            pending_action=None,
+            user_id=record.get("user_id"),
+            agent_instance_id=record.get("agent_instance_id") or current_agent_instance_id(),
+            created_at=record.get("created_at"),
+        )
+    except Exception as exc:  # pragma: no cover - defensive, never break the request
+        logger.warning("run %s could not be marked orphaned: %s", record.get("run_id"), exc)
+
+
+async def _run_has_state(graph, run_id: str) -> bool:
+    state = await graph.aget_state(_thread_config(run_id))
+    return bool(state.values)
+
+
 async def _require_run(graph, run_id: str) -> dict:
-    if get_run_record(
+    record = get_run_record(
         run_id,
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
-    ) is None:
+    )
+    if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
     config = _thread_config(run_id)
-    state = await graph.aget_state(config)
-    if not state.values:
-        raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+    if not await _run_has_state(graph, run_id):
+        if record.get("status") in ACTIVE_RUN_STATUSES:
+            _mark_run_orphaned(record)
+        raise HTTPException(status_code=410, detail=ORPHANED_RUN_DETAIL)
     return config
+
+
+_reconciled_instances: set[str] = set()
+
+
+async def _ensure_orphans_reconciled(graph) -> None:
+    """Reconcile once per instance per process, on the first queue read.
+
+    Doing this at startup instead would have to guess the instance list; the
+    first listing request already carries the tenant context we need.
+    """
+    instance_id = current_agent_instance_id()
+    if instance_id in _reconciled_instances:
+        return
+    _reconciled_instances.add(instance_id)
+    try:
+        retired = await reconcile_orphaned_runs(graph)
+    except Exception as exc:  # pragma: no cover - never fail a listing over this
+        logger.warning("orphan reconciliation failed for %s: %s", instance_id, exc)
+        return
+    if retired:
+        logger.warning("marked %s run(s) orphaned on %s: no checkpoint state", retired, instance_id)
+
+
+async def reconcile_orphaned_runs(graph, limit: int = 500) -> int:
+    """Retire queued runs whose checkpoint no longer exists. Runs at startup so
+    the approval queue never opens on cards that cannot be acted on."""
+    orphaned = 0
+    for status in ACTIVE_RUN_STATUSES:
+        for record in list_runs(
+            status=status,
+            user_id=None,
+            agent_instance_id=current_agent_instance_id(),
+            limit=limit,
+        ):
+            run_id = record.get("run_id")
+            if not run_id:
+                continue
+            try:
+                has_state = await _run_has_state(graph, run_id)
+            except Exception:  # pragma: no cover - a probe failure is not proof of absence
+                continue
+            if not has_state:
+                _mark_run_orphaned(record)
+                orphaned += 1
+    return orphaned
 
 
 def _require_pending(run_id: str) -> None:
@@ -3401,6 +3486,7 @@ async def runs(
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     user_dept = _request_user_dept(request)
+    await _ensure_orphans_reconciled(request.app.state.graph)
     # Fetch extra limit so we can filter post-db and check has_more, wait, list_runs in json/postgres needs to return all if we filter post-db.
     # To keep pagination working properly, we'll fetch an un-paginated chunk, filter it, and then paginate in python.
     all_runs = await asyncio.to_thread(
