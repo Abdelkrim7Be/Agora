@@ -10,6 +10,13 @@ public class GatewayProperties {
 
     private Upstream upstream = new Upstream();
     private String defaultAgentInstance = "default-email-agent";
+    // Mailbox the seeded instance expects OAuth to authorize. Blank on purpose:
+    // the email-agent treats an empty identity as "no expectation" and skips
+    // mailbox verification, which is the legacy single-user path. Any non-blank
+    // value is compared against the address Google actually authorized and fails
+    // closed on a mismatch — so a placeholder here makes the instance impossible
+    // to connect. Set it to a real address to pin the seeded instance to one mailbox.
+    private String defaultAgentMailbox = "";
     private List<AgentType> agentTypes = new ArrayList<>(List.of(AgentType.defaultEmailAgent()));
     private Jwt jwt = new Jwt();
     private Mfa mfa = new Mfa();
@@ -36,6 +43,9 @@ public class GatewayProperties {
 
     public String getDefaultAgentInstance() { return defaultAgentInstance; }
     public void setDefaultAgentInstance(String defaultAgentInstance) { this.defaultAgentInstance = defaultAgentInstance; }
+
+    public String getDefaultAgentMailbox() { return defaultAgentMailbox; }
+    public void setDefaultAgentMailbox(String defaultAgentMailbox) { this.defaultAgentMailbox = defaultAgentMailbox; }
 
     public List<AgentType> getAgentTypes() { return agentTypes; }
     public void setAgentTypes(List<AgentType> agentTypes) { this.agentTypes = agentTypes; }

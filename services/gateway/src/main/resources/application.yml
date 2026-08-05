@@ -26,6 +26,11 @@ gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}
   default-agent-instance: ${GATEWAY_DEFAULT_AGENT_INSTANCE:default-email-agent}
+  # Mailbox the seeded instance expects OAuth to authorize. Blank means "no
+  # expectation" — whichever mailbox the user connects is accepted. A non-blank
+  # value is compared against the address Google reports and fails closed on a
+  # mismatch, so only set it to a real address, never a placeholder.
+  default-agent-mailbox: ${GATEWAY_DEFAULT_AGENT_MAILBOX:}
   # Public base URL of the web app; invitation links are built from it.
   app-url: ${GATEWAY_APP_URL:http://localhost:5173}
   invite-expiry-hours: ${GATEWAY_INVITE_EXPIRY_HOURS:48}
