@@ -106,13 +106,19 @@ export default function CapabilitiesPage() {
     <>
       <PageHeading view="capabilities" />
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
+        <button
+          type="button"
+          onClick={async () => { await query.refetch(); setStatus('Capacités chargées.', 'ok'); }}
+        >
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les capacités</span>
         </button>
         <button className="primary" type="button" onClick={handleSave}>
           <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer les capacités</span>
         </button>
-        <button type="button" onClick={() => policyQuery.refetch()}>
+        <button
+          type="button"
+          onClick={async () => { await policyQuery.refetch(); setStatus('Politique chargée.', 'ok'); }}
+        >
           <span className="material-symbols-outlined" aria-hidden="true">policy</span><span>Charger la politique</span>
         </button>
       </div>

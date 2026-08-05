@@ -7,6 +7,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { BusyProvider } from './contexts/BusyContext';
+import { RequireGlobalRole } from './components/layout/RequireGlobalRole';
 import { QueryClient, QueryCache, QueryClientProvider } from '@tanstack/react-query';
 import { recordFailure, clearFailure } from './api/failureLog';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
@@ -158,10 +159,10 @@ export default function App() {
                         <Route path="campaigns" element={<CampaignsPage />} />
                         <Route path="memory" element={<MemoryPage />} />
                         <Route path="rules" element={<RulesPage />} />
-                        <Route path="capabilities" element={<CapabilitiesPage />} />
-                        <Route path="permissions" element={<PermissionsPage />} />
-                        <Route path="dlq" element={<DlqPage />} />
-                        <Route path="costs" element={<CostsPage />} />
+                        <Route path="capabilities" element={<RequireGlobalRole view="capabilities"><CapabilitiesPage /></RequireGlobalRole>} />
+                        <Route path="permissions" element={<RequireGlobalRole view="permissions"><PermissionsPage /></RequireGlobalRole>} />
+                        <Route path="dlq" element={<RequireGlobalRole view="dlq"><DlqPage /></RequireGlobalRole>} />
+                        <Route path="costs" element={<RequireGlobalRole view="costs"><CostsPage /></RequireGlobalRole>} />
                       </Route>
 
                       {/* A mistyped or stale link used to render a blank page. */}
