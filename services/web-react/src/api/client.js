@@ -48,6 +48,35 @@ export function refreshAccessToken(gatewayBase) {
   return refreshInFlight;
 }
 
+// A request the gateway abandons mid-inference never resolves here, and the
+// blocking overlay above it waits forever. Nothing in this app should take
+// longer than this, and a stated failure beats a spinner with no end.
+const REQUEST_TIMEOUT_MS = Number(import.meta.env?.VITE_REQUEST_TIMEOUT_MS) || 300_000;
+
+export class RequestTimeoutError extends Error {
+  constructor() {
+    super("Le serveur n’a pas répondu à temps. L’action est peut-être toujours en cours côté agent.");
+    this.name = 'RequestTimeoutError';
+  }
+}
+
+/** Fetch with a deadline, preserving any caller-supplied abort signal. */
+async function fetchWithDeadline(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  if (options.signal) {
+    options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new RequestTimeoutError();
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Runs `send(token)`, and on a 401 rotates the session once and replays it. */
 async function withSessionRetry(gatewayBase, token, path, send) {
   const response = await send(token);
@@ -82,7 +111,7 @@ export async function responseError(response, signOut) {
 
 // We pass the auth details so this can be used outside React context (or inside hooks)
 export async function api(gatewayBase, token, instanceId, signOut, path, options = {}) {
-  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetch(
+  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetchWithDeadline(
     gatewayUrl(gatewayBase, path),
     { ...options, headers: requestHeaders(activeToken, instanceId, path, options), credentials: 'include' },
   ));
@@ -101,7 +130,7 @@ export async function apiUpload(gatewayBase, token, instanceId, signOut, path, f
   const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => {
     const headers = { Authorization: `Bearer ${activeToken}` };
     if (path.startsWith('/api/agent') && instanceId) headers['X-Agora-Agent-Instance'] = instanceId;
-    return fetch(gatewayUrl(gatewayBase, path), { method: 'POST', headers, body: formData, credentials: 'include' });
+    return fetchWithDeadline(gatewayUrl(gatewayBase, path), { method: 'POST', headers, body: formData, credentials: 'include' });
   });
   if (!response.ok) throw await responseError(response, signOut);
   return response.json();
@@ -119,7 +148,7 @@ export async function apiBlob(gatewayBase, token, instanceId, signOut, path) {
 }
 
 export async function streamApi(gatewayBase, token, instanceId, signOut, path, options = {}, onEvent = () => {}) {
-  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetch(
+  const response = await withSessionRetry(gatewayBase, token, path, (activeToken) => fetchWithDeadline(
     gatewayUrl(gatewayBase, path),
     { ...options, headers: requestHeaders(activeToken, instanceId, path, options), credentials: 'include' },
   ));

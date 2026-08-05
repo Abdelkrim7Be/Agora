@@ -86,6 +86,12 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     setSelectedIds(new Set());
   }, [initialMailbox]);
 
+  // Switching mailbox or folder is a new list, so it starts at its first page.
+  // Carrying the old index over dropped you into the middle of the new one.
+  useEffect(() => {
+    pager.setPage(0);
+  }, [mailbox, categoryFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
       announcedInitialLoad.current = true;
