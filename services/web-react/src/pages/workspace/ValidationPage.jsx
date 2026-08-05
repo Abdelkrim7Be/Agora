@@ -8,6 +8,7 @@ import ValidationCard from '../../components/domain/ValidationCard';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useApi } from '../../api/useApi';
 import { actionArgs, workflowLabelFr } from '../../utils/format';
 import {
@@ -31,6 +32,7 @@ export default function ValidationPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog } = useDialog();
+  const { runBusy } = useBusy();
   const { api, streamApi } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -127,6 +129,15 @@ export default function ValidationPage() {
     ? { ...actionArgs(run), ...editedFields[run.run_id] }
     : null);
 
+  // A run whose state is gone answers 410 and has just been retired server-side:
+  // refresh so the card leaves the queue instead of sitting there un-actionable.
+  const reportFailure = (message, error) => {
+    setStatus(`${message} : ${error.message}`, 'error');
+    if (error.message.includes('expiré')) {
+      queryClient.invalidateQueries({ queryKey: ['pending-runs'] });
+    }
+  };
+
   const handleDecision = async (command, runId, options = {}) => {
     const run = runs.find((item) => item.run_id === runId);
     if (!run) return;
@@ -137,13 +148,15 @@ export default function ValidationPage() {
     }
 
     if (command === 'tone') {
-      setStatus('Reformulation en cours...');
       try {
-        const result = await toneRun.mutateAsync({ runId, tone: options.tone });
+        const result = await runBusy(
+          `Reformulation du brouillon (${options.tone})`,
+          () => toneRun.mutateAsync({ runId, tone: options.tone }),
+        );
         handleFieldChange(runId, result.field || options.field || 'content', result.content);
         setStatus('Brouillon reformulé — vérifiez avant d’approuver.', 'ok');
       } catch (error) {
-        setStatus(`Échec de la reformulation : ${error.message}`, 'error');
+        reportFailure('Échec de la reformulation', error);
       }
       return;
     }
@@ -159,10 +172,10 @@ export default function ValidationPage() {
       });
       if (value === null) return;
       try {
-        await assignRun.mutateAsync({ runId, assignee: value || null });
+        await runBusy('Assignation de la validation', () => assignRun.mutateAsync({ runId, assignee: value || null }));
         setStatus(value ? `Assigné à ${value}.` : 'Assignation retirée.', 'ok');
       } catch (error) {
-        setStatus(`Échec de l’assignation : ${error.message}`, 'error');
+        reportFailure('Échec de l’assignation', error);
       }
       return;
     }
@@ -170,10 +183,10 @@ export default function ValidationPage() {
     if (command === 'claim') {
       setBusy(runId, true);
       try {
-        await claimRun.mutateAsync(runId);
-        setStatus('Pris en charge.', 'ok');
+        await runBusy('Prise en charge de la validation', () => claimRun.mutateAsync(runId));
+        setStatus('Cette validation vous est maintenant assignée.', 'ok');
       } catch (error) {
-        setStatus(`Échec de la prise en charge : ${error.message}`, 'error');
+        reportFailure('Échec de la prise en charge', error);
       } finally {
         setBusy(runId, false);
       }
@@ -183,11 +196,11 @@ export default function ValidationPage() {
     if (command === 'accept') {
       setBusy(runId, true);
       try {
-        await approveRun.mutateAsync({ runId, args: editedArgsFor(run) });
+        await runBusy('Envoi en cours', () => approveRun.mutateAsync({ runId, args: editedArgsFor(run) }));
         setEditedFields((prev) => { const next = { ...prev }; delete next[runId]; return next; });
         setStatus('Envoyé.', 'ok');
       } catch (error) {
-        setStatus(`Décision échouée : ${error.message}`, 'error');
+        reportFailure('Décision échouée', error);
       } finally {
         setBusy(runId, false);
       }
@@ -197,10 +210,10 @@ export default function ValidationPage() {
     if (command === 'ignore') {
       setBusy(runId, true);
       try {
-        await rejectRun.mutateAsync(runId);
+        await runBusy('Rejet en cours', () => rejectRun.mutateAsync(runId));
         setStatus('E-mail ignoré.', 'ok');
       } catch (error) {
-        setStatus(`Décision échouée : ${error.message}`, 'error');
+        reportFailure('Décision échouée', error);
       } finally {
         setBusy(runId, false);
       }
@@ -243,7 +256,7 @@ export default function ValidationPage() {
           await api(`/api/agent/run/${runId}/respond`, { method: 'POST', body: JSON.stringify({ feedback, draft: respondDraft }) });
         } catch (fallbackError) {
           settleFeedbackMessage(runId, agentMessageId, `La retouche a échoué : ${fallbackError.message}`);
-          setStatus(`Décision échouée : ${fallbackError.message}`, 'error');
+          reportFailure('Décision échouée', fallbackError);
           setBusy(runId, false);
           return;
         }
@@ -276,7 +289,10 @@ export default function ValidationPage() {
     });
     if (!confirmed) return;
     try {
-      const result = await bulkDecision.mutateAsync({ runIds, decision });
+      const result = await runBusy(
+        `${decision === 'approve' ? 'Approbation' : 'Rejet'} de ${runIds.length} validation(s)`,
+        () => bulkDecision.mutateAsync({ runIds, decision }),
+      );
       const errors = (result.results || []).filter((item) => item.status === 'error');
       setSelectedRuns((prev) => {
         if (!explicitRunIds) return new Set();
@@ -291,9 +307,8 @@ export default function ValidationPage() {
   };
 
   const handleSync = async () => {
-    setStatus('Vérification Gmail en cours...');
     try {
-      await syncGmail.mutateAsync();
+      await runBusy('Vérification de la boîte Gmail', () => syncGmail.mutateAsync());
       setStatus('Synchronisation terminée.', 'ok');
     } catch (error) {
       setStatus(`Synchronisation échouée : ${error.message}`, 'error');

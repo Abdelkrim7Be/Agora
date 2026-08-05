@@ -4,6 +4,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useInboxQuery, useInboxAction, useForceAgentOnMessage, useCategorizeContact, useCategoriesQuery, useContactsQuery } from '../../api/queries';
 import { decodeHtmlEntities, formatDateTimeFr, parseSenderEmail, senderDomain } from '../../utils/format';
 
@@ -11,6 +12,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog, selectDialog } = useDialog();
+  const { runBusy } = useBusy();
   const navigate = useNavigate();
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
@@ -128,7 +130,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
         });
     if (!category) return;
     try {
-      await categorizeContact.mutateAsync({ email, category, domainOnly });
+      await runBusy('Classement de l’expéditeur', () => categorizeContact.mutateAsync({ email, category, domainOnly }));
       setStatus(domainOnly ? `Domaine ${target} catégorisé.` : `Expéditeur ${target} catégorisé.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de catégoriser : ${error.message}`, 'error');
@@ -194,7 +196,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     const failed = [];
     for (const email of senders) {
       try {
-        await categorizeContact.mutateAsync({ email, category, domainOnly: false });
+        await runBusy('Classement des expéditeurs', () => categorizeContact.mutateAsync({ email, category, domainOnly: false }));
         done += 1;
       } catch (error) {
         failed.push(email);
@@ -220,7 +222,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
       if (!confirmed) return;
     }
     try {
-      await inboxAction.mutateAsync({ msgId, command });
+      await runBusy('Action sur la boîte de réception', () => inboxAction.mutateAsync({ msgId, command }));
       setStatus(`Terminé : ${command}.`, 'ok');
     } catch (error) {
       setStatus(`Action sur la boîte de réception échouée : ${error.message}`, 'error');
@@ -237,7 +239,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     });
     if (!confirmed) return;
     try {
-      const result = await forceAgent.mutateAsync(msgId);
+      const result = await runBusy('L’agent traite ce message', () => forceAgent.mutateAsync(msgId));
       setStatus(`Agent relancé : ${result.outcome?.status || 'traitement demandé'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de forcer l’agent : ${error.message}`, 'error');

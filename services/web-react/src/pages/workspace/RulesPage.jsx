@@ -3,6 +3,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useDialog } from '../../contexts/DialogContext';
 import {
   useRulesQuery,
@@ -65,6 +66,7 @@ function TogglePill({ label, enabled, onClick }) {
 export default function RulesPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
+  const { runBusy } = useBusy();
   const { confirmDialog } = useDialog();
   const canManage = hasRole('owner');
 
@@ -184,7 +186,7 @@ export default function RulesPage() {
       },
     };
     try {
-      await saveRule.mutateAsync(payload);
+      await runBusy('Enregistrement de la règle', () => saveRule.mutateAsync(payload));
       resetRuleForm();
       setStatus(`Règle « ${name} » enregistrée.`, 'ok');
     } catch (error) {
@@ -202,7 +204,7 @@ export default function RulesPage() {
     });
     if (!confirmed) return;
     try {
-      await deleteRule.mutateAsync(name);
+      await runBusy('Suppression de la règle', () => deleteRule.mutateAsync(name));
       setStatus(`Règle « ${name} » supprimée.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de supprimer la règle : ${error.message}`, 'error');
@@ -211,7 +213,7 @@ export default function RulesPage() {
 
   const handleToggleRule = async (name, enabled) => {
     try {
-      await toggleRule.mutateAsync({ name, enabled });
+      await runBusy('Mise à jour de la règle', () => toggleRule.mutateAsync({ name, enabled }));
       setStatus(`Règle « ${name} » ${enabled ? 'activée' : 'désactivée'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de basculer la règle : ${error.message}`, 'error');
@@ -220,7 +222,7 @@ export default function RulesPage() {
 
   const handleToggleSection = async (section, enabled) => {
     try {
-      await toggleSection.mutateAsync({ section, enabled });
+      await runBusy('Mise à jour de l’automatisation', () => toggleSection.mutateAsync({ section, enabled }));
       setStatus(`${section.replace('_', ' ')} ${enabled ? 'activé' : 'désactivé'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de basculer ${section} : ${error.message}`, 'error');
@@ -235,7 +237,7 @@ export default function RulesPage() {
         ? { label_prefix: snooze.labelPrefix.trim() || 'Snoozed', max_resurface_per_run: Number(snooze.maxResurface || 20) }
         : { label: followUps.label.trim() || 'Awaiting Reply', after_days: Number(followUps.afterDays || 3), max_results: Number(followUps.maxResults || 10), nudge: followUps.nudge.trim() || 'Just following up on this.' };
     try {
-      await saveSectionConfig.mutateAsync({ section, config });
+      await runBusy('Enregistrement de la configuration', () => saveSectionConfig.mutateAsync({ section, config }));
       setStatus('Sous-système enregistré.', 'ok');
     } catch (error) {
       setStatus(`Impossible d'enregistrer : ${error.message}`, 'error');
@@ -256,7 +258,7 @@ export default function RulesPage() {
   const handleApplyStarter = async () => {
     if (!starterPicks.length) return;
     try {
-      const result = await applyStarter.mutateAsync(starterPicks);
+      const result = await runBusy('Application des règles proposées', () => applyStarter.mutateAsync(starterPicks));
       setStarterPicks([]);
       setStatus(`${(result.added || []).length} règle(s) recommandée(s) ajoutée(s).`, 'ok');
     } catch (error) {
@@ -266,7 +268,7 @@ export default function RulesPage() {
 
   const handleSaveYaml = async () => {
     try {
-      await saveYaml.mutateAsync(yamlText);
+      await runBusy('Enregistrement des règles', () => saveYaml.mutateAsync(yamlText));
       setStatus('Règles enregistrées.', 'ok');
     } catch (error) {
       setStatus(`Impossible d'enregistrer les règles : ${error.message}`, 'error');
@@ -294,7 +296,7 @@ export default function RulesPage() {
 
   const handlePromote = async (index) => {
     try {
-      const result = await promoteSuggestion.mutateAsync(index);
+      const result = await runBusy('Création de la règle', () => promoteSuggestion.mutateAsync(index));
       setStatus(result.kind === 'workflow' ? 'Suggestion promue en workflow.' : 'Suggestion promue en règle active.', 'ok');
     } catch (error) {
       setStatus(`Impossible de promouvoir la suggestion : ${error.message}`, 'error');

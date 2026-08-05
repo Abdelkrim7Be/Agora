@@ -4896,3 +4896,45 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   color: var(--muted);
   font-size: 12px;
 }
+
+/* Blocking progress for any action slow enough that a still screen reads as a
+   dead button — model redrafts, Gmail round trips, campaign sends. */
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+.busy-panel {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  min-width: 260px;
+  padding: var(--space-5) var(--space-5);
+  text-align: center;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-subtle);
+}
+
+.busy-panel strong { font-size: 15px; }
+.busy-panel span:last-child { color: var(--muted); font-size: 13px; }
+
+.busy-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--outline);
+  border-top-color: var(--primary);
+  animation: spin .8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy-spinner { animation-duration: 2.4s; }
+}

@@ -3,6 +3,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { Pager } from '../../components/ui/Pager';
 import { useStatus } from '../../contexts/StatusContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { usePager } from '../../hooks/usePager';
 import {
@@ -53,6 +54,7 @@ function campaignStatusClass(status) {
 
 export default function CampaignsPage() {
   const { setStatus } = useStatus();
+  const { runBusy } = useBusy();
   const { confirmDialog } = useDialog();
 
   const [segmentId, setSegmentId] = useState('');
@@ -197,7 +199,7 @@ export default function CampaignsPage() {
 
   const handleApprove = async (campaignId) => {
     try {
-      const result = await approveCampaign.mutateAsync(campaignId);
+      const result = await runBusy('Envoi de la campagne', () => approveCampaign.mutateAsync(campaignId));
       const message = result.status === 'scheduled'
         ? 'Campagne approuvée et programmée.'
         : result.status === 'sent'
@@ -211,7 +213,7 @@ export default function CampaignsPage() {
 
   const handleReject = async (campaignId) => {
     try {
-      await rejectCampaign.mutateAsync(campaignId);
+      await runBusy('Annulation de la campagne', () => rejectCampaign.mutateAsync(campaignId));
       setStatus('Campagne annulée.', 'ok');
     } catch (error) {
       setStatus(`Impossible de rejeter la campagne : ${error.message}`, 'error');

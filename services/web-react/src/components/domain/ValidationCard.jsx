@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useI18n } from '../../contexts/I18nContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useSummarizeRun, useSignatureQuery, useApplySignatureToDraft } from '../../api/queries';
 import ActionArgsEditor from './ActionArgsEditor';
 import FeedbackChat from './FeedbackChat';
@@ -52,6 +53,7 @@ export default function ValidationCard({
 }) {
   const { hasRole } = useInstance();
   const { t } = useI18n();
+  const { runBusy } = useBusy();
   const canApprove = hasRole('approver');
   const [summary, setSummary] = useState(null);
   const [summarizing, setSummarizing] = useState(false);
@@ -74,7 +76,10 @@ export default function ValidationCard({
     setApplyingSignature(true);
     try {
       const baseContent = editedFields[contentField] ?? args[contentField] ?? '';
-      const result = await applySignature.mutateAsync({ content: baseContent, mode });
+      const result = await runBusy(
+        'Application de la signature',
+        () => applySignature.mutateAsync({ content: baseContent, mode }),
+      );
       onFieldChange(run.run_id, contentField, result.content);
     } finally {
       setApplyingSignature(false);
@@ -85,7 +90,7 @@ export default function ValidationCard({
     setSummarizing(true);
     setSummary('Résumé en cours…');
     try {
-      const result = await summarizeRun.mutateAsync(run.run_id);
+      const result = await runBusy('Résumé du fil de discussion', () => summarizeRun.mutateAsync(run.run_id));
       setSummary(result.summary || 'Aucun contenu à résumer.');
     } catch (error) {
       setSummary(`Résumé indisponible : ${error.message}`);
@@ -174,11 +179,23 @@ export default function ValidationCard({
           <button className="primary" type="button" disabled={busy} onClick={() => onDecision('accept')}>
             <span className="material-symbols-outlined" aria-hidden="true">send</span><span>Approuver et envoyer</span>
           </button>
-          <button className="ghost" type="button" disabled={busy} onClick={() => onDecision('claim')}>
-            <span className="material-symbols-outlined" aria-hidden="true">pan_tool</span><span>Prendre en charge</span>
+          <button
+            className="ghost"
+            type="button"
+            disabled={busy}
+            title="Vous devenez la personne responsable de cette validation"
+            onClick={() => onDecision('claim')}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">how_to_reg</span><span>M’assigner</span>
           </button>
-          <button className="ghost" type="button" disabled={busy} onClick={() => onDecision('assign')}>
-            <span className="material-symbols-outlined" aria-hidden="true">person_add</span><span>Assigner…</span>
+          <button
+            className="ghost"
+            type="button"
+            disabled={busy}
+            title="Confier cette validation à quelqu’un d’autre"
+            onClick={() => onDecision('assign')}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">person_add</span><span>Assigner à…</span>
           </button>
           <button className="danger" type="button" disabled={busy} onClick={() => onDecision('ignore')}>
             <span className="material-symbols-outlined" aria-hidden="true">block</span><span>Ignorer</span>
