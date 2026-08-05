@@ -1241,38 +1241,74 @@ pre {
 
 .toggle-row:last-child { border-bottom: 0; }
 
-.toggle-row input {
+/* One switch, defined once. Two hand-rolled copies had drifted apart, and the
+   workflow one never set min-height — so the generic `input { min-height: 42px }`
+   stretched a 38x22 pill into a 38x42 blob. */
+.toggle-row input[type="checkbox"],
+.workflow-checkbox input[type="checkbox"] {
   appearance: none;
-  width: 38px;
-  height: 22px;
-  min-height: 22px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--outline);
-  background: var(--surface-high);
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 40px;
+  min-width: 40px;
+  height: 23px;
+  min-height: 23px;
+  margin: 0;
   padding: 0;
   position: relative;
+  cursor: pointer;
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-lowest);
+  transition: background .15s ease, border-color .15s ease;
 }
 
-.toggle-row input::after {
+.toggle-row input[type="checkbox"]::after,
+.workflow-checkbox input[type="checkbox"]::after {
   content: "";
   position: absolute;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
   top: 3px;
   left: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
   background: var(--outline-strong);
-  transition: transform .15s ease, background .15s ease;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .35);
+  transition: transform .18s cubic-bezier(.4, 0, .2, 1), background .15s ease;
 }
 
-.toggle-row input:checked {
-  border-color: color-mix(in srgb, var(--secondary) 45%, transparent);
-  background: var(--secondary-bg);
+.toggle-row input[type="checkbox"]:hover,
+.workflow-checkbox input[type="checkbox"]:hover {
+  border-color: color-mix(in srgb, var(--secondary) 55%, var(--outline-strong));
 }
 
-.toggle-row input:checked::after {
-  transform: translateX(16px);
+.toggle-row input[type="checkbox"]:focus-visible,
+.workflow-checkbox input[type="checkbox"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--secondary) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.toggle-row input[type="checkbox"]:checked,
+.workflow-checkbox input[type="checkbox"]:checked {
+  border-color: var(--secondary);
   background: var(--secondary);
+}
+
+.toggle-row input[type="checkbox"]:checked::after,
+.workflow-checkbox input[type="checkbox"]:checked::after {
+  transform: translateX(17px);
+  background: var(--surface);
+}
+
+.toggle-row input[type="checkbox"]:disabled,
+.workflow-checkbox input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle-row input[type="checkbox"]::after,
+  .workflow-checkbox input[type="checkbox"]::after { transition: none; }
 }
 
 .policy-viewer {
@@ -2410,43 +2446,21 @@ button.is-busy .material-symbols-outlined {
   display: flex !important;
   flex-direction: row !important;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
-.workflow-checkbox input {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 38px;
-  height: 22px;
-  min-width: 38px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--outline);
-  background: var(--surface-lowest);
-  padding: 0;
-  position: relative;
+/* A switch reads as a sentence you turn on, not as a field label — the shouty
+   uppercase inherited from .workflow-form label span made two-line captions
+   next to a control that is one line tall. */
+.workflow-checkbox span {
+  color: var(--text) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  text-transform: none !important;
+  line-height: 1.35;
 }
 
-.workflow-checkbox input::after {
-  content: "";
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  top: 3px;
-  left: 3px;
-  background: var(--outline-strong);
-  transition: transform .15s ease, background .15s ease;
-}
-
-.workflow-checkbox input:checked {
-  border-color: color-mix(in srgb, var(--secondary) 45%, transparent);
-  background: var(--secondary-bg);
-}
-
-.workflow-checkbox input:checked::after {
-  transform: translateX(16px);
-  background: var(--secondary);
-}
+/* The switch itself is defined once, next to .toggle-row. */
 
 .workflow-form-actions {
   display: flex;
