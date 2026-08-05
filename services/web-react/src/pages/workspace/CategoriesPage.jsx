@@ -680,10 +680,15 @@ export default function CategoriesPage() {
         <div className="rules-preview">
           <div className="rules-toggle-row">
             {canManage && (
-              <button className={`toggle-pill ${parsed?.enabled ? 'on' : 'off'}`} type="button" onClick={handleToggleGlobalEnabled}>
-                <span className="toggle-dot" aria-hidden="true" />
-                <span>Moteur de cas : {parsed?.enabled ? 'Activé' : 'Désactivé'}</span>
-              </button>
+              <label className="toggle-row rule-enabled-switch">
+                <input
+                  type="checkbox"
+                  checked={Boolean(parsed?.enabled)}
+                  aria-label="Moteur de cas métier"
+                  onChange={handleToggleGlobalEnabled}
+                />
+                <span>Moteur de cas : {parsed?.enabled ? 'activé' : 'désactivé'}</span>
+              </label>
             )}
             <span className="counter">{activeCount}/{categories.length} actifs</span>
           </div>
@@ -738,9 +743,15 @@ export default function CategoriesPage() {
                       </div>
                       {canManage && (
                         <div className="directory-actions">
-                          <button className={`toggle-pill ${category.enabled === false ? 'off' : 'on'}`} type="button" onClick={() => handleToggleEnabled(category)}>
-                            <span className="toggle-dot" aria-hidden="true" /><span>{category.enabled === false ? 'Activer' : 'Désactiver'}</span>
-                          </button>
+                          <label className="toggle-row rule-enabled-switch">
+                            <input
+                              type="checkbox"
+                              checked={category.enabled !== false}
+                              aria-label={`${category.enabled === false ? 'Activer' : 'Désactiver'} ${category.display_name || category.name}`}
+                              onChange={() => handleToggleEnabled(category)}
+                            />
+                            <span>{category.enabled === false ? 'Désactivé' : 'Activé'}</span>
+                          </label>
                           <button type="button" onClick={() => startEdit(category)}>
                             <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier</span>
                           </button>
