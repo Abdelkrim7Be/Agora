@@ -71,6 +71,10 @@ services:
       # the UI is at fault rather than the allow list.
       GATEWAY_CORS_ALLOWED_ORIGINS: http://localhost:${WEB_PORT:-5173}
       GATEWAY_APP_URL: http://localhost:${WEB_PORT:-5173}
+      # Local dev is plain HTTP, and a Secure cookie is silently dropped there —
+      # which kills silent token refresh and logs the browser out every 15 min.
+      # Never set this in a deployed stack; production serves the SPA over TLS.
+      GATEWAY_JWT_SECURE_COOKIES: "false"
     ports:
       - "${GATEWAY_PORT:-8081}:8080"
 

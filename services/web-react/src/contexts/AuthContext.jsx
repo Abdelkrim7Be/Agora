@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { decodeJwtRole } from '../utils/jwt';
+import { registerTokenListener } from '../api/client';
 
 const AuthContext = createContext(null);
 
@@ -17,6 +18,10 @@ export function AuthProvider({ children }) {
   });
 
   const globalRole = token ? decodeJwtRole(token) : '';
+
+  // A token rotated inside the fetch layer (401 → /auth/refresh → replay) has to
+  // land back in React state, or the next request would carry the dead one again.
+  useEffect(() => registerTokenListener(setToken), []);
 
   useEffect(() => {
     if (token) {
