@@ -119,6 +119,7 @@ services:
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      GMAIL_TOKEN_PATH: /app/data/token.json
       AGENT_MEDIA_DIR: /app/data/media
       GMAIL_CREDENTIALS_PATH: credentials.json
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
@@ -135,6 +136,9 @@ services:
     volumes:
       - agent_data:/app/data
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
+      # The rules harness has to run where the rules run: it pauses this process's
+      # sweep to set up label predicates, then lets it pick the mail up.
+      - ../services/email-agent/scripts:/app/scripts:ro
     depends_on:
       postgres:
         condition: service_healthy
