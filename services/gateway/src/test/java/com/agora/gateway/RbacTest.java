@@ -497,6 +497,50 @@ class RbacTest {
     }
 
     @Test
+    void viewer_can_read_runtime_settings() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/runtime-settings"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"poll_interval_min\":5}")));
+
+        mockMvc.perform(get("/api/agent/runtime-settings")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/runtime-settings")));
+    }
+
+    @Test
+    void viewer_cannot_change_runtime_settings_403() throws Exception {
+        mockMvc.perform(put("/api/agent/runtime-settings")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"poll_interval_min\":1}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, putRequestedFor(urlPathEqualTo("/runtime-settings")));
+    }
+
+    @Test
+    void owner_can_change_runtime_settings() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlPathEqualTo("/runtime-settings"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"poll_interval_min\":1}")));
+
+        mockMvc.perform(put("/api/agent/runtime-settings")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"poll_interval_min\":1}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, putRequestedFor(urlPathEqualTo("/runtime-settings")));
+    }
+
+    @Test
     void viewer_cannot_add_rule_403() throws Exception {
         mockMvc.perform(post("/api/agent/rules/rule")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
