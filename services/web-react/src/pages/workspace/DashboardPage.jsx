@@ -51,8 +51,20 @@ export default function DashboardPage() {
       </div>
       <div className="cost-summary-grid dashboard-summary-grid">
         <div><strong>{formatCountFr(totals.emails_handled)}</strong><span>E-mails traités</span></div>
-        <div><strong>{formatPercentFr(totals.approval_rate_pct)}</strong><span>Taux d'approbation</span></div>
-        <div><strong>{formatDurationFr(totals.avg_turnaround_seconds)}</strong><span>Délai moyen</span></div>
+        <div>
+            <strong>{formatPercentFr(totals.approval_rate_pct)}</strong>
+            <span>Taux d'approbation</span>
+            {totals.approval_rate_pct === null || totals.approval_rate_pct === undefined ? (
+              <small className="metric-hint">Aucune validation décidée sur la période</small>
+            ) : null}
+          </div>
+        <div>
+            <strong>{formatDurationFr(totals.avg_turnaround_seconds)}</strong>
+            <span>Délai moyen</span>
+            {totals.avg_turnaround_seconds === null || totals.avg_turnaround_seconds === undefined ? (
+              <small className="metric-hint">Se calcule dès la première décision</small>
+            ) : null}
+          </div>
         <div><strong>{formatCountFr(totals.pending)}</strong><span>En attente</span></div>
       </div>
       <div className="notice dashboard-notice">
