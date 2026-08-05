@@ -11,8 +11,7 @@ const TAB_GROUPS = [
     tabs: [
       { to: 'guide', icon: 'help', label: 'Guide' },
       { to: '', end: true, icon: 'dashboard', label: 'Tableau de bord' },
-      { to: 'validation', icon: 'inbox', label: 'Validation' },
-      { to: 'drafts', icon: 'drafts', label: 'Brouillons' },
+      { to: 'validation', icon: 'inbox', label: 'À valider' },
       { to: 'inbox', icon: 'mail', label: 'Messages' },
       { to: 'sent', icon: 'send', label: 'Envoyés' },
       { to: 'notifications', icon: 'notifications', label: 'Notifications' },

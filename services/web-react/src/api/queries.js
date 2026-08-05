@@ -294,24 +294,6 @@ export function useSyncGmail() {
   });
 }
 
-// --- Drafts ---
-
-export function useDraftsQuery(category, priority, q = '', since = '') {
-  const { api } = useApi();
-  const { token } = useAuth();
-  const { instanceId } = useInstance();
-  const params = new URLSearchParams({ limit: '100' });
-  if (category) params.set('category', category);
-  if (priority) params.set('priority', priority);
-  if (q) params.set('q', q);
-  if (since) params.set('since', since);
-  return useQuery({
-    queryKey: ['drafts', instanceId, category, priority, q, since],
-    queryFn: async () => (await api(`/api/agent/drafts?${params.toString()}`)).drafts || [],
-    enabled: Boolean(token),
-  });
-}
-
 // --- Inbox ---
 
 const INBOX_PAGE_SIZE = 25;
@@ -356,7 +338,6 @@ export function useForceAgentOnMessage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] });
       queryClient.invalidateQueries({ queryKey: ['pending-runs', instanceId] });
-      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
     },
   });
 }
@@ -395,7 +376,6 @@ export function useGmailSyncNow() {
     mutationFn: () => api('/api/agent/sync', { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] });
-      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
     },
   });
 }
