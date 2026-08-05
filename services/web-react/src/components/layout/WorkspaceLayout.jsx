@@ -104,7 +104,6 @@ export default function WorkspaceLayout() {
     if (setupStatus !== 'ready' || !paramId) return;
     [
       ['inbox', paramId],
-      ['drafts', paramId],
       ['categories', paramId],
       ['contacts', paramId],
       ['persona', paramId],

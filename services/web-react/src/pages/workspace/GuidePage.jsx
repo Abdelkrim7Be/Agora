@@ -15,12 +15,12 @@ const EVERYDAY_SECTIONS = [
     ],
   },
   {
-    title: 'Validation et brouillons',
+    title: 'À valider',
     icon: 'inbox',
     body: [
-      'Rien ne part sans vous. Un brouillon vous attend dans Validation : vous pouvez l’accepter, le modifier avant envoi, demander une nouvelle version en expliquant ce qui ne va pas, ou l’ignorer.',
+      'Rien ne part sans vous. Un brouillon vous attend dans « À valider » : vous pouvez l’accepter, le modifier avant envoi, demander une nouvelle version en expliquant ce qui ne va pas, ou l’ignorer.',
       'Chaque correction est apprise : modifier un brouillon ajuste le style des suivants, en ignorer un ajuste le tri.',
-      'Brouillons regroupe tout ce qui est en attente, avec filtres par cas métier, priorité, texte et date.',
+      'Cette page regroupe tout ce qui est en attente, avec filtres par cas métier, priorité, texte et date.',
     ],
   },
   {

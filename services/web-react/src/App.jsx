@@ -22,7 +22,6 @@ import AuditPage from './pages/platform/AuditPage';
 import UsersPage from './pages/platform/UsersPage';
 import AccountPage from './pages/platform/AccountPage';
 import ValidationPage from './pages/workspace/ValidationPage';
-import DraftsPage from './pages/workspace/DraftsPage';
 import InboxPage from './pages/workspace/InboxPage';
 import RunDetailPage from './pages/workspace/RunDetailPage';
 import GmailPage from './pages/workspace/GmailPage';
@@ -134,7 +133,9 @@ export default function App() {
                         <Route path="junk" element={<JunkPage />} />
                         <Route path="notifications" element={<NotificationsPage />} />
                         <Route path="validation" element={<ValidationPage />} />
-                        <Route path="drafts" element={<DraftsPage />} />
+                        {/* Brouillons and Validation listed the same pending_approval runs
+                            through two endpoints — one queue, one page. */}
+                        <Route path="drafts" element={<Navigate to="../validation" replace />} />
                         <Route path="inbox" element={<InboxPage />} />
                         <Route path="sent" element={<InboxPage initialMailbox="sent" />} />
                         <Route path="run/:runId" element={<RunDetailPage />} />
