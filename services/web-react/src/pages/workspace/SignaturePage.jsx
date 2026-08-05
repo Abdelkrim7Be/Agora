@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { FileField } from '../../components/ui/FileField';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
@@ -188,7 +189,13 @@ export default function SignaturePage() {
           <label><span>Texte complémentaire (optionnel)</span><textarea rows={3} spellCheck={false} placeholder="L’humain d’abord." value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} /></label>
           <div className="signature-image-row">
             <span>Logo / image</span>
-            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg" data-testid="signature-image-file" onChange={handleUpload} />
+            <FileField
+              inputRef={fileInputRef}
+              accept="image/png,image/jpeg"
+              data-testid="signature-image-file"
+              label="Choisir une image"
+              onChange={handleUpload}
+            />
             {hasImage && <button type="button" className="ghost" onClick={handleDeleteImage}>Retirer l’image</button>}
           </div>
           <label><span>Texte alternatif de l’image</span><input type="text" placeholder="Logo Agora" value={form.image_alt} onChange={(e) => setForm({ ...form, image_alt: e.target.value })} /></label>
