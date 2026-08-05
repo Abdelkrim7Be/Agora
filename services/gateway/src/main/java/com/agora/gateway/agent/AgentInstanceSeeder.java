@@ -39,6 +39,19 @@ public class AgentInstanceSeeder implements CommandLineRunner {
         // "no expectation" path; a configured value pins the instance to one mailbox.
         String mailbox = props.getDefaultAgentMailbox();
 
+        // The literal "system" shipped as the creator here, and nobody can log in
+        // as "system". The poller stamps each run it files with the owning
+        // instance's creator, and tenant-scoped reads filter on the requesting
+        // user — so every run on the seeded instance was written under an
+        // identity no session ever carries, and the validation queue came up
+        // empty however much mail the agent had processed. Own it with the
+        // seeded owner account instead, falling back only if none is configured.
+        String createdBy = firstNonBlank(
+                props.getOwner() == null ? null : props.getOwner().getUsername(),
+                props.getAdmin() == null ? null : props.getAdmin().getUsername(),
+                "system"
+        );
+
         instances.save(new AgentInstance(
                 id,
                 type.getId(),
@@ -48,10 +61,17 @@ public class AgentInstanceSeeder implements CommandLineRunner {
                 "active",
                 type.getBasePath(),
                 "owner,viewer",
-                "system",
+                createdBy,
                 type.getColor(),
                 type.getIcon()
         ));
-        log.info("seeded agent instance {} ({})", id, type.getId());
+        log.info("seeded agent instance {} ({}) owned by {}", id, type.getId(), createdBy);
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        return "system";
     }
 }
