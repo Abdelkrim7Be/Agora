@@ -98,6 +98,20 @@ export function useCreateInstance() {
   });
 }
 
+/** Suspend or resume an instance. Suspending stops the poller touching that
+ * mailbox and closes its workspace, without destroying anything. */
+export function useSetInstanceActive() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, active }) => api(
+      `/agent-instances/${encodeURIComponent(id)}/${active ? 'activate' : 'deactivate'}`,
+      { method: 'POST' },
+    ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-instances'] }),
+  });
+}
+
 export function useDeleteInstance() {
   const { api } = useApi();
   const queryClient = useQueryClient();

@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useNavigate } from 'react-router-dom';
 import { currentUsername } from '../../utils/jwt';
 import { agentTypeLabel, formatDateTimeFr, roleLabelFr } from '../../utils/format';
 import {
@@ -34,6 +35,7 @@ export default function UsersPage() {
   const { setStatus } = useStatus();
   const { token } = useAuth();
   const { promptDialog, confirmDialog } = useDialog();
+  const navigate = useNavigate();
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
@@ -436,9 +438,24 @@ export default function UsersPage() {
                 </div>
                 <div className="user-instance-pills">
                   {userInstances.length ? userInstances.map((instance) => (
-                    <span className="mini-chip grant-chip" key={instance.id}>
-                      {instance.display_name || instance.id} · {agentTypeLabel(instance.agent_type, agentTypes)}
+                    <span
+                      className={`mini-chip grant-chip${String(instance.status || 'active').toLowerCase() === 'active' ? '' : ' suspended'}`}
+                      key={instance.id}
+                    >
+                      {/* A suspended instance still shows here: the person keeps the
+                          access, the agent simply is not running. Hiding it would
+                          make "why can't they see it" impossible to answer. */}
+                      <button
+                        type="button"
+                        className="link-button"
+                        title="Ouvrir cette instance"
+                        onClick={() => navigate(`/instance/${encodeURIComponent(instance.id)}`)}
+                      >
+                        {instance.display_name || instance.id}
+                      </button>
+                      {' · '}{agentTypeLabel(instance.agent_type, agentTypes)}
                       {instance.created_by === user.username ? ' · créateur' : ` · ${roleLabelFr(grantFor(user, instance)?.role)}`}
+                      {String(instance.status || 'active').toLowerCase() === 'active' ? '' : ' · suspendue'}
                       {instance.created_by !== user.username ? (
                         <button type="button" aria-label={`Retirer ${instance.display_name || instance.id} à ${user.username}`} onClick={() => handleRemoveGrant(instance.id, user.username)}>
                           <span className="material-symbols-outlined" aria-hidden="true">close</span>
