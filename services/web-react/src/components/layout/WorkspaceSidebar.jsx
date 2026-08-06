@@ -48,7 +48,7 @@ const TAB_GROUPS = [
     label: 'Contrôle',
     tabs: [
       { to: 'capabilities', icon: 'shield', label: 'Capacités', minGlobalRole: 'admin' },
-      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minGlobalRole: 'admin' },
+      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minRole: 'owner' },
       { to: 'dlq', icon: 'warning', label: 'File d’erreurs', minGlobalRole: 'admin' },
       { to: 'costs', icon: 'monitoring', label: 'Coûts', minGlobalRole: 'admin' },
     ],

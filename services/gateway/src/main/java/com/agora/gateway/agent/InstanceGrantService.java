@@ -2,6 +2,8 @@ package com.agora.gateway.agent;
 
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -13,16 +15,16 @@ import java.util.Set;
  * Role hierarchy (highest to lowest): owner > approver > viewer.
  *
  * Effective role resolution order:
- *   1. If the caller's global JWT role is "admin" → effective role is "owner" for every instance.
- *   2. If the caller created this instance → effective role is "owner".
- *   3. If the caller has an explicit grant for this instance → use that grant's role.
- *   4. If the instance's allowedRoles list includes the JWT role → use the JWT role.
- *   5. Otherwise → no access.
+ *   1. If the caller created this instance → effective role is "owner".
+ *   2. If the caller has an explicit grant for this instance → use that grant's role.
+ *   3. If the instance's allowedRoles list includes the JWT role → use the JWT role.
+ *   4. Otherwise → no access.
  */
 @Service
 public class InstanceGrantService {
 
     private static final Set<String> VALID_ROLES = Set.of("owner", "approver", "viewer");
+    private static final long DEFAULT_VIEWER_GRANT_HOURS = 24;
 
     private final AgentInstanceGrantRepository grants;
     private final AgentInstanceRepository instances;
@@ -36,14 +38,13 @@ public class InstanceGrantService {
      * Resolve the effective instance role for a caller. Returns empty if no access.
      */
     public Optional<String> effectiveRole(String agentInstanceId, String userId, String jwtRole) {
-        // Admin is the IT superuser tier. Other users are scoped by ownership,
-        // explicit grants, or the instance's allowed global roles.
-        if ("admin".equals(jwtRole)) return Optional.of("owner");
+        // Platform admin remains a platform role. Mailbox access is scoped by
+        // creator ownership, explicit grants, or deliberately widened roles.
         Optional<AgentInstance> instance = instances.findById(agentInstanceId);
         if (instance.isPresent()) {
             if (userId != null && userId.equals(instance.get().getCreatedBy())) return Optional.of("owner");
             Optional<AgentInstanceGrant> grant = grants.findByAgentInstanceIdAndUserId(agentInstanceId, userId);
-            if (grant.isPresent()) return Optional.of(grant.get().getRole());
+            if (grant.isPresent() && active(grant.get())) return Optional.of(grant.get().getRole());
             boolean allowed = java.util.Arrays.stream(instance.get().getAllowedRoles().split(","))
                     .map(String::trim)
                     .anyMatch(r -> r.equalsIgnoreCase(jwtRole));
@@ -67,10 +68,16 @@ public class InstanceGrantService {
     }
 
     public List<AgentInstanceGrant> listGrants(String agentInstanceId) {
-        return grants.findByAgentInstanceId(agentInstanceId);
+        return grants.findByAgentInstanceId(agentInstanceId).stream()
+                .filter(InstanceGrantService::active)
+                .toList();
     }
 
     public AgentInstanceGrant addGrant(String agentInstanceId, String userId, String role, String grantedBy) {
+        return addGrant(agentInstanceId, userId, role, grantedBy, null);
+    }
+
+    public AgentInstanceGrant addGrant(String agentInstanceId, String userId, String role, String grantedBy, Instant expiresAt) {
         if (!VALID_ROLES.contains(role)) {
             throw new InvalidGrantRoleException(role);
         }
@@ -81,9 +88,12 @@ public class InstanceGrantService {
         if (existing.isPresent()) {
             AgentInstanceGrant g = existing.get();
             g.setRole(role);
+            g.setExpiresAt(resolveExpiry(role, expiresAt));
             return grants.save(g);
         }
-        return grants.save(new AgentInstanceGrant(agentInstanceId, userId, role, grantedBy));
+        AgentInstanceGrant grant = new AgentInstanceGrant(agentInstanceId, userId, role, grantedBy);
+        grant.setExpiresAt(resolveExpiry(role, expiresAt));
+        return grants.save(grant);
     }
 
     public void removeGrant(String agentInstanceId, String userId) {
@@ -95,5 +105,15 @@ public class InstanceGrantService {
         public InvalidGrantRoleException(String role) {
             super("invalid grant role: " + role + ". Must be one of: owner, approver, viewer");
         }
+    }
+
+    public static boolean active(AgentInstanceGrant grant) {
+        return grant.getExpiresAt() == null || grant.getExpiresAt().isAfter(Instant.now());
+    }
+
+    private Instant resolveExpiry(String role, Instant expiresAt) {
+        if (expiresAt != null) return expiresAt;
+        if ("viewer".equals(role)) return Instant.now().plus(DEFAULT_VIEWER_GRANT_HOURS, ChronoUnit.HOURS);
+        return null;
     }
 }

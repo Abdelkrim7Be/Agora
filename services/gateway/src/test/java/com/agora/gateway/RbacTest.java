@@ -249,7 +249,7 @@ class RbacTest {
     }
 
     @Test
-    void admin_can_read_cost_summary() throws Exception {
+    void admin_without_instance_grant_cannot_read_cost_summary() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -258,6 +258,28 @@ class RbacTest {
 
         mockMvc.perform(get("/api/agent/costs/summary?period=session")
                         .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/costs/summary?period=session")));
+    }
+
+    @Test
+    void admin_with_instance_grant_can_read_cost_summary() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/costs/summary"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"period\":\"session\"}")));
+
+        String adminToken = login("admin", "adminpass");
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "owner"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/agent/costs/summary?period=session")
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.period").value("session"));
 
@@ -335,7 +357,7 @@ class RbacTest {
 
 
     @Test
-    void admin_can_update_signature() throws Exception {
+    void admin_without_instance_grant_cannot_update_signature() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlEqualTo("/signature"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -344,6 +366,30 @@ class RbacTest {
 
         mockMvc.perform(put("/api/agent/signature")
                         .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":true,\"text\":\"Karim\"}"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, putRequestedFor(urlEqualTo("/signature")));
+    }
+
+    @Test
+    void admin_with_owner_grant_can_update_signature() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.put(urlEqualTo("/signature"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"enabled\":true}")));
+
+        String adminToken = login("admin", "adminpass");
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "owner"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(put("/api/agent/signature")
+                        .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"enabled\":true,\"text\":\"Karim\"}"))
                 .andExpect(status().isOk())
@@ -1043,7 +1089,7 @@ class RbacTest {
     }
 
     @Test
-    void admin_can_read_inbox() throws Exception {
+    void admin_without_instance_grant_cannot_read_inbox() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -1052,6 +1098,28 @@ class RbacTest {
 
         mockMvc.perform(get("/api/agent/inbox?limit=25")
                         .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, getRequestedFor(urlPathEqualTo("/inbox")));
+    }
+
+    @Test
+    void admin_with_instance_grant_can_read_inbox() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("[]")));
+
+        String token = login("admin", "adminpass");
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "viewer"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/agent/inbox?limit=25")
+                        .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
 
         wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox")));

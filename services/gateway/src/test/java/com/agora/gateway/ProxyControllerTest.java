@@ -200,6 +200,12 @@ class ProxyControllerTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody("{\"messages\":[]}")));
 
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "viewer"))))
+                .andExpect(status().isCreated());
+
         mockMvc.perform(get("/api/agent/inbox")
                         .header("Authorization", "Bearer " + adminToken())
                         .header("X-Agora-Agent-Instance", "default-email-agent"))
