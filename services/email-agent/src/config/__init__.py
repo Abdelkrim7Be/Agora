@@ -92,6 +92,7 @@ class Settings:
     # The API and poller are separate processes sharing the same store, so this is
     # a server-side change-detection loop, not a client-visible poll.
     events_poll_interval_seconds: float = float(os.getenv("AGENT_EVENTS_POLL_INTERVAL_SECONDS", "2"))
+    triage_cache_ttl_seconds: int = int(os.getenv("AGENT_TRIAGE_CACHE_TTL_SECONDS", "604800"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 import os
 import threading
@@ -42,7 +43,9 @@ from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.roles import list_roles, resolve_role
 from src.security_client import audit_output, authorize_action
+from src.shared_cache import cache_get_json, cache_set_json
 from src.signature import apply_signature_to_args, strip_signature
+from src.tenant import current_agent_instance_id, current_user_id
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
@@ -1719,6 +1722,96 @@ def should_continue(state: State) -> Literal["environment", "force_redraft", "__
     return END
 
 
+_SUBJECT_TOKEN_RE = _re.compile(r"\b\d+\b")
+_SUBJECT_SPACE_RE = _re.compile(r"\s+")
+
+
+def _triage_subject_shape(subject: str) -> str:
+    shaped = _SUBJECT_TOKEN_RE.sub("#", subject.lower())
+    return _SUBJECT_SPACE_RE.sub(" ", shaped).strip()
+
+
+def _triage_sender_key(author: str) -> str:
+    _name, address = parseaddr(author or "")
+    return (address or author or "").strip().lower()
+
+
+def _triage_cache_key(
+    *,
+    author: str,
+    subject: str,
+    triage_instructions: str,
+    category_section: str,
+) -> str:
+    payload = {
+        "user": current_user_id(),
+        "instance": current_agent_instance_id(),
+        "sender": _triage_sender_key(author),
+        "subject_shape": _triage_subject_shape(subject),
+        "rules_hash": hashlib.sha256(
+            f"{triage_instructions}\n{category_section}".encode("utf-8")
+        ).hexdigest(),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"agora:triage:{digest}"
+
+
+def _triage_cacheable(state: State, attachments: list, category_update: dict) -> bool:
+    return (
+        settings.triage_cache_ttl_seconds > 0
+        and not attachments
+        and not state["email_input"].get("security")
+        and not category_update
+    )
+
+
+def _route_triage_decision(
+    state: State,
+    *,
+    classification: str,
+    category_update: dict,
+    email_markdown: str,
+) -> Command[Literal["llm_call", "environment", "__end__"]]:
+    if classification == "respond":
+        print("📧 Classification: RESPOND - This email requires a response")
+        return Command(
+            goto="llm_call",
+            update={
+                "classification_decision": classification,
+                **category_update,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Respond to the email: {email_markdown}",
+                    }
+                ],
+            },
+        )
+    if classification == "ignore":
+        print("🚫 Classification: IGNORE - This email can be safely ignored")
+        if _can_auto_organize():
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": classification,
+                    **category_update,
+                    "auto_organized": True,
+                    "messages": [_auto_organize_message()],
+                },
+            )
+        return Command(
+            goto=END,
+            update={"classification_decision": classification, **category_update},
+        )
+    if classification == "notify":
+        print("🔔 Classification: NOTIFY - This email contains important information")
+        return Command(
+            goto=END,
+            update={"classification_decision": classification, **category_update},
+        )
+    raise ValueError(f"Invalid classification: {classification}")
+
+
 def triage_router(
     state: State, store: BaseStore, config=None
 ) -> Command[Literal["llm_call", "environment", "__end__"]]:
@@ -1771,6 +1864,20 @@ def triage_router(
         attachments=att_str or "none",
     )
     email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
+    cache_key = _triage_cache_key(
+        author=author,
+        subject=subject,
+        triage_instructions=triage_instructions,
+        category_section=category_section,
+    )
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, dict) and cached.get("classification") in {"respond", "ignore", "notify"}:
+        return _route_triage_decision(
+            state,
+            classification=str(cached["classification"]),
+            category_update={},
+            email_markdown=email_markdown,
+        )
 
     run_id = _run_id_from_config(config)
     result = _invoke_llm(
@@ -1808,40 +1915,19 @@ def triage_router(
         if policy_command is not None:
             return policy_command
 
-    if classification == "respond":
-        print("📧 Classification: RESPOND - This email requires a response")
-        goto = "llm_call"
-        update = {
-            "classification_decision": classification,
-            **category_update,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"Respond to the email: {email_markdown}",
-                }
-            ],
-        }
-    elif classification == "ignore":
-        print("🚫 Classification: IGNORE - This email can be safely ignored")
-        if _can_auto_organize():
-            goto = "environment"
-            update = {
-                "classification_decision": classification,
-                **category_update,
-                "auto_organized": True,
-                "messages": [_auto_organize_message()],
-            }
-        else:
-            goto = END
-            update = {"classification_decision": classification, **category_update}
-    elif classification == "notify":
-        print("🔔 Classification: NOTIFY - This email contains important information")
-        goto = END
-        update = {"classification_decision": classification, **category_update}
-    else:
-        raise ValueError(f"Invalid classification: {classification}")
+    if _triage_cacheable(state, atts, category_update):
+        cache_set_json(
+            cache_key,
+            {"classification": classification},
+            settings.triage_cache_ttl_seconds,
+        )
 
-    return Command(goto=goto, update=update)
+    return _route_triage_decision(
+        state,
+        classification=classification,
+        category_update=category_update,
+        email_markdown=email_markdown,
+    )
 
 
 overall_workflow = (

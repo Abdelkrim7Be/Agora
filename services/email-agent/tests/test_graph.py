@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+from types import SimpleNamespace
+
 from conftest import ai_tool_call, patch_provider
 
 from src.graph import _recover_tool_call_from_failed_generation, email_assistant
@@ -449,6 +451,45 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
     assert result["workflow_owner"] == "Support team"
     assert result["workflow_approver"] == "support.manager@example.com"
     assert result["workflow_route_to"] == ["support@example.com"]
+
+
+def test_triage_cache_reuses_repeated_sender_subject_decision(monkeypatch):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cache = {}
+    calls = []
+
+    class _CountingRouter:
+        def invoke(self, _messages, config=None):
+            calls.append(config)
+            return SimpleNamespace(classification="notify", category=None)
+
+    monkeypatch.setattr(g, "llm_router", _CountingRouter())
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g.settings, "triage_cache_ttl_seconds", 60)
+    monkeypatch.setattr(g, "cache_get_json", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        g,
+        "cache_set_json",
+        lambda key, value, ttl_seconds: cache.setdefault(key, value) is value,
+    )
+
+    first = {
+        "author": "Digest <updates@example.com>",
+        "to": "Me <me@example.com>",
+        "subject": "Daily report 123",
+        "email_thread": "Here is today's report.",
+    }
+    second = {
+        **first,
+        "subject": "Daily report 456",
+        "email_thread": "A different body should not matter for this cache key.",
+    }
+
+    assert email_assistant.invoke({"email_input": first}, _cfg())["classification_decision"] == "notify"
+    assert email_assistant.invoke({"email_input": second}, _cfg())["classification_decision"] == "notify"
+    assert len(calls) == 1
 
 
 def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, respond_email):
