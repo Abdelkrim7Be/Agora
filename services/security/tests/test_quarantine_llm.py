@@ -26,7 +26,7 @@ class FakeModel:
                 injection=False,
                 spam=False,
                 reasons=[],
-                sanitized="clean",
+                spans=[],
             )
         if self.structured_schema is TrustClassificationVerdict:
             return TrustClassificationVerdict(trust="UNTRUSTED", reasons=[])
@@ -59,7 +59,7 @@ def test_quarantine_classifier_uses_structured_schema(monkeypatch):
     classifier = build_quarantine_classifier()
     verdict = classifier.invoke([])
 
-    assert verdict.sanitized == "clean"
+    assert verdict.spans == []
     with pytest.raises(RuntimeError, match="cannot bind tools"):
         classifier.bind_tools([])
 
