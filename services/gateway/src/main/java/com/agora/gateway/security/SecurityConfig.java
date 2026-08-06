@@ -81,6 +81,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/mailboxes").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/agent-instances/*/admin-access").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/agent-instances/*").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances/*/activate").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/agent-instances/*/deactivate").hasRole("ADMIN")

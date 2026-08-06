@@ -174,6 +174,10 @@ public class ProxyController {
                 auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
                         downstreamPath, status, "forwarded");
             }
+            if ("admin".equals(jwtRole) && shouldRecordAdminMailboxAccess(request, downstreamPath)) {
+                auditService.record(username, jwtRole, "admin_mailbox_access", request.getMethod(),
+                        "/agent-instances/" + agentInstance, status, deriveAction(request));
+            }
 
             response.setStatus(status);
             MediaType upstreamContentType = resp.getHeaders().getContentType();
@@ -228,6 +232,16 @@ public class ProxyController {
 
     private boolean shouldRecordForwardedAudit(HttpServletRequest request, String downstreamPath) {
         return !("GET".equals(request.getMethod()) && "/api/agent/runs".equals(downstreamPath));
+    }
+
+    private boolean shouldRecordAdminMailboxAccess(HttpServletRequest request, String downstreamPath) {
+        if ("GET".equals(request.getMethod()) && "/api/agent/health".equals(downstreamPath)) {
+            return false;
+        }
+        if ("GET".equals(request.getMethod()) && "/api/agent/metrics".equals(downstreamPath)) {
+            return false;
+        }
+        return downstreamPath.startsWith("/api/agent/");
     }
 
     private String deriveAction(HttpServletRequest request) {

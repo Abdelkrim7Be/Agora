@@ -10,7 +10,7 @@ import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
 import { currentUsername } from '../../utils/jwt';
-import { agentTypeLabel, instanceIdentity, instanceSummaryFields, roleLabelFr } from '../../utils/format';
+import { agentTypeLabel, formatDateTimeFr, instanceIdentity, instanceSummaryFields, roleLabelFr } from '../../utils/format';
 import {
   useAgentInstancesQuery,
   useAgentTypesQuery,
@@ -21,6 +21,7 @@ import {
   useSetInstanceActive,
   useTestMailboxConnection,
   useInstanceGrantsQuery,
+  useAdminAccessQuery,
 } from '../../api/queries';
 
 const EMPTY_CREATE_FORM = { agentType: '', displayName: '', assignedTo: '' };
@@ -57,8 +58,10 @@ export default function InstancesPage() {
   // Who, besides the creator, can reach each instance. Admin-only: the grants
   // endpoint is, so a non-admin simply gets an empty list rather than an error.
   const grantsQuery = useInstanceGrantsQuery(instances, canManage);
+  const adminAccessQuery = useAdminAccessQuery(instances, true);
   const accessFor = (instanceId) => (grantsQuery.data || [])
     .filter((grant) => grant.agent_instance_id === instanceId);
+  const adminAccessFor = (instanceId) => adminAccessQuery.data?.[instanceId] || [];
   const announcedInitialLoad = useRef(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
@@ -352,6 +355,19 @@ export default function InstancesPage() {
                       {!accessFor(instance.id).length ? (
                         <span className="muted">Aucun accès délégué</span>
                       ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {adminAccessFor(instance.id).length ? (
+                  <div className="instance-admin-access-row" aria-label={`Accès administrateur récents pour ${instance.display_name || instance.id}`}>
+                    <span>Accès administrateur</span>
+                    <div className="admin-access-events">
+                      {adminAccessFor(instance.id).slice(0, 3).map((event) => (
+                        <span className="mini-chip admin-access-chip" key={`${event.timestamp}-${event.username}-${event.outcome}`}>
+                          <span className="material-symbols-outlined" aria-hidden="true">visibility</span>
+                          {event.username || 'admin'} · {formatDateTimeFr(event.timestamp)} · {event.outcome || event.method}
+                        </span>
+                      ))}
                     </div>
                   </div>
                 ) : null}
