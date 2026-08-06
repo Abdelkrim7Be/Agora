@@ -69,6 +69,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/me").authenticated()
                 .requestMatchers(HttpMethod.PUT, "/me/password").authenticated()
                 .requestMatchers(HttpMethod.PUT, "/users/*/password").hasRole("ADMIN")
+                // Recovery path for an account whose second-factor device is gone.
+                .requestMatchers(HttpMethod.POST, "/users/*/mfa/reset").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")

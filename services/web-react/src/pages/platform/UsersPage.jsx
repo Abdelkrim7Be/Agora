@@ -15,6 +15,7 @@ import {
   useInviteUser,
   useUpdateUser,
   useSetUserPassword,
+  useResetUserMfa,
   useAgentInstancesQuery,
   useAgentTypesQuery,
   useInstanceGrantsQuery,
@@ -32,13 +33,14 @@ function onboardingState(user) {
 export default function UsersPage() {
   const { setStatus } = useStatus();
   const { token } = useAuth();
-  const { promptDialog } = useDialog();
+  const { promptDialog, confirmDialog } = useDialog();
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
   const inviteUser = useInviteUser();
   const updateUser = useUpdateUser();
   const setUserPassword = useSetUserPassword();
+  const resetUserMfa = useResetUserMfa();
   const instancesQuery = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const grantsQuery = useInstanceGrantsQuery(instancesQuery.data || [], true);
@@ -150,6 +152,24 @@ export default function UsersPage() {
     }
   };
 
+  // Every other MFA route is self-service, which leaves nobody able to help a
+  // person who lost their device. This is that recovery path.
+  const handleResetMfa = async (user) => {
+    const confirmed = await confirmDialog({
+      title: `Réinitialiser la double authentification de ${user.username}`,
+      message: "Le second facteur sera retiré du compte. La personne pourra se reconnecter avec son seul mot de passe, puis reconfigurer son application d'authentification.",
+      confirmLabel: 'Réinitialiser',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await resetUserMfa.mutateAsync(user.id);
+      setStatus(`Double authentification réinitialisée pour ${user.username}.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de réinitialiser la 2FA : ${error.message}`, 'error');
+    }
+  };
+
   const handleToggle = async (user) => {
     const enabling = !user.enabled;
     if (!enabling && user.username === username) {
@@ -230,7 +250,7 @@ export default function UsersPage() {
         ) : null}
         <div className="table-wrap users-table">
           <table className="data-table">
-            <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle plateforme</th><th>Département</th><th>Configuration</th><th></th></tr></thead>
+            <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle plateforme</th><th>Département</th><th>Configuration</th><th>2FA</th><th></th></tr></thead>
             <tbody>
               {userPager.visible.map((user) => {
                 const selfDisable = user.enabled && user.username === username;
@@ -269,6 +289,11 @@ export default function UsersPage() {
                       {user.invitationExpiresAt ? <small className="muted">Expire {formatDateTimeFr(user.invitationExpiresAt)}</small> : null}
                     </td>
                     <td>
+                      <span className={`status-pill ${user.mfaEnabled ? 'ok' : ''}`.trim()}>
+                        {user.mfaEnabled ? 'Activée' : 'Non configurée'}
+                      </span>
+                    </td>
+                    <td>
                       <button type="button" onClick={() => handleUpdateUser(user)}>
                         Enregistrer
                       </button>
@@ -278,6 +303,11 @@ export default function UsersPage() {
                       <button type="button" onClick={() => handleSetPassword(user)}>
                         Mot de passe
                       </button>
+                      {user.mfaEnabled ? (
+                        <button type="button" onClick={() => handleResetMfa(user)}>
+                          Réinitialiser 2FA
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         disabled={selfDisable}

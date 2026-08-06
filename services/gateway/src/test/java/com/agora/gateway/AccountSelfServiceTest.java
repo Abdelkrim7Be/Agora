@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -196,6 +197,35 @@ class AccountSelfServiceTest {
         mockMvc.perform(put("/users/" + adminId + "/password")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
                         .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void an_admin_can_clear_a_locked_out_accounts_second_factor() throws Exception {
+        // Every other MFA route proves possession of the device, so losing the
+        // device meant losing the account. This is the only way back in.
+        long targetId = idOf("approverless");
+
+        mockMvc.perform(post("/users/" + targetId + "/mfa/reset")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andExpect(status().isOk());
+
+        String body = mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andReturn().getResponse().getContentAsString();
+        for (var user : objectMapper.readTree(body)) {
+            if ("approverless".equals(user.get("username").asText())) {
+                assertThat(user.get("mfaEnabled").asBoolean()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void a_non_admin_cannot_clear_someone_elses_second_factor() throws Exception {
+        long adminId = idOf("admin");
+
+        mockMvc.perform(post("/users/" + adminId + "/mfa/reset")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
                 .andExpect(status().isForbidden());
     }
 }
