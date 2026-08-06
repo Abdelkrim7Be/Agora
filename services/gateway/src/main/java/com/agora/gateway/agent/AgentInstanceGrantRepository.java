@@ -11,6 +11,8 @@ public interface AgentInstanceGrantRepository extends Repository<AgentInstanceGr
 
     List<AgentInstanceGrant> findByAgentInstanceId(String agentInstanceId);
 
+    List<AgentInstanceGrant> findByUserIdIgnoreCase(String userId);
+
     Optional<AgentInstanceGrant> findByAgentInstanceIdAndUserId(String agentInstanceId, String userId);
 
     void deleteById(Long id);

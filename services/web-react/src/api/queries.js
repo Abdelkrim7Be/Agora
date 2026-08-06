@@ -151,6 +151,19 @@ export function useUpdateUser() {
   });
 }
 
+export function useAnonymizeUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/anonymize`, { method: 'POST' }),
+    // Grants and instances change too, so the whole admin view is refetched.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
+    },
+  });
+}
+
 export function useInviteUser() {
   const { api } = useApi();
   const queryClient = useQueryClient();

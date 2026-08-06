@@ -36,6 +36,55 @@ public class AuditService {
         repository.save(event);
     }
 
+    /**
+     * Replace every occurrence of an actor's name with a pseudonym, then reseal
+     * the chain. Returns how many rows were renamed.
+     *
+     * <p>This is the one operation that rewrites recorded history, and it exists
+     * because a right-to-erasure request outranks an append-only convention. The
+     * trade is real and worth stating plainly: the hash chain covers the actor
+     * name, so a rename invalidates every link after it. Resealing restores the
+     * chain, but it can then only attest "unmodified since the last
+     * anonymization" rather than "unmodified since written". The resealing is
+     * itself recorded as an audit event, so the rewrite is never invisible.
+     *
+     * <p>Synchronized on the same monitor as {@link #record}: a row appended
+     * mid-reseal would link to a hash that is about to be replaced.
+     */
+    public synchronized int anonymizeActor(String username, String pseudonym) {
+        List<AuditEvent> events = repository.findAllByOrderByIdAsc();
+        int renamed = 0;
+        for (AuditEvent event : events) {
+            if (username != null && username.equalsIgnoreCase(event.getUsername())) {
+                event.anonymizeUsername(pseudonym);
+                renamed++;
+            }
+        }
+        if (renamed > 0) {
+            reseal(events);
+        }
+        return renamed;
+    }
+
+    /**
+     * Relink and rehash the whole chain, following exactly the rules verifyChain
+     * uses — including restarting from genesis at pre-chain rows, so a resealed
+     * log verifies the same way a freshly written one does.
+     */
+    private void reseal(List<AuditEvent> events) {
+        String expectedPrev = GENESIS_HASH;
+        for (AuditEvent event : events) {
+            if (event.getHash() == null || event.getPrevHash() == null) {
+                expectedPrev = GENESIS_HASH;
+                continue;
+            }
+            event.setPrevHash(expectedPrev);
+            event.setHash(hashOf(expectedPrev, event));
+            expectedPrev = event.getHash();
+            repository.save(event);
+        }
+    }
+
     /** Recomputes every row's hash from its stored fields and checks the chain links. */
     public ChainVerification verifyChain() {
         List<AuditEvent> events = repository.findAllByOrderByIdAsc();

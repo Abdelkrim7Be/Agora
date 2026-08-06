@@ -33,18 +33,21 @@ public class UserController {
     private final AuditService auditService;
     private final InvitationService invitations;
     private final InvitationMailer mailer;
+    private final UserAnonymizationService anonymization;
     private final SecureRandom random = new SecureRandom();
 
     public UserController(UserRepository users,
                           PasswordEncoder passwordEncoder,
                           AuditService auditService,
                           InvitationService invitations,
-                          InvitationMailer mailer) {
+                          InvitationMailer mailer,
+                          UserAnonymizationService anonymization) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
         this.invitations = invitations;
         this.mailer = mailer;
+        this.anonymization = anonymization;
     }
 
     public record UserResponse(
@@ -254,6 +257,26 @@ public class UserController {
     @PostMapping("/{id}/enable")
     public ResponseEntity<?> enable(@PathVariable Long id, Authentication auth) {
         return setEnabled(id, true, auth, "enable_user");
+    }
+
+    /**
+     * Right to erasure. Irreversible: the account keeps its id but loses every
+     * identifying field, its access, and its name in the audit trail.
+     */
+    @PostMapping("/{id}/anonymize")
+    public ResponseEntity<?> anonymize(@PathVariable Long id, Authentication auth) {
+        return users.findById(id).map(u -> {
+            // Same guard as disable, for a stronger reason: an admin erasing
+            // their own account leaves the platform with no way back in.
+            if (auth != null && u.getUsername().equals(auth.getName())) {
+                audit(auth, "anonymize_user", "/users/" + id + "/anonymize", "denied");
+                return ResponseEntity.badRequest().body(Map.of("error", "cannot anonymize current user"));
+            }
+            if (u.getUsername().equals(UserAnonymizationService.pseudonymFor(id))) {
+                return ResponseEntity.badRequest().body(Map.of("error", "user is already anonymized"));
+            }
+            return ResponseEntity.ok((Object) anonymization.anonymize(u));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     private ResponseEntity<?> setEnabled(Long id, boolean enabled, Authentication auth, String action) {

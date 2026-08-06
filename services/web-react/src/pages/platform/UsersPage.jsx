@@ -17,6 +17,7 @@ import {
   useUpdateUser,
   useSetUserPassword,
   useResetUserMfa,
+  useAnonymizeUser,
   useAgentInstancesQuery,
   useAgentTypesQuery,
   useInstanceGrantsQuery,
@@ -43,6 +44,7 @@ export default function UsersPage() {
   const updateUser = useUpdateUser();
   const setUserPassword = useSetUserPassword();
   const resetUserMfa = useResetUserMfa();
+  const anonymizeUser = useAnonymizeUser();
   const instancesQuery = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const grantsQuery = useInstanceGrantsQuery(instancesQuery.data || [], true);
@@ -172,6 +174,37 @@ export default function UsersPage() {
     }
   };
 
+  // Right to erasure. Irreversible, and it rewrites the audit trail, so the
+  // dialog says both instead of leaving the admin to find out afterwards.
+  const handleAnonymize = async (user) => {
+    if (user.username === username) {
+      setStatus('Vous ne pouvez pas anonymiser votre propre compte.', 'error');
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: `Anonymiser définitivement ${user.username}`,
+      message:
+        "Le nom, l'adresse e-mail et le mot de passe seront effacés, les accès aux boîtes retirés, "
+        + "et le nom remplacé par un pseudonyme dans le journal d'audit. "
+        + "Cette action est irréversible. Les données côté agent (exécutions, brouillons, mémoire) "
+        + "s'effacent séparément depuis la page RGPD.",
+      confirmLabel: 'Anonymiser',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      const result = await anonymizeUser.mutateAsync(user.id);
+      setStatus(
+        `${user.username} anonymisé en ${result.pseudonym} : `
+        + `${result.grantsRevoked} accès retiré(s), `
+        + `${result.auditEventsRenamed} entrée(s) d'audit renommée(s).`,
+        'ok',
+      );
+    } catch (error) {
+      setStatus(`Impossible d'anonymiser le compte : ${error.message}`, 'error');
+    }
+  };
+
   const handleToggle = async (user) => {
     const enabling = !user.enabled;
     if (!enabling && user.username === username) {
@@ -256,6 +289,7 @@ export default function UsersPage() {
             <tbody>
               {userPager.visible.map((user) => {
                 const selfDisable = user.enabled && user.username === username;
+                const anonymized = user.username === `deleted-user-${user.id}`;
                 const label = user.enabled ? 'Désactiver' : 'Activer';
                 const onboarding = onboardingState(user);
                 const edit = editFormFor(user);
@@ -319,6 +353,18 @@ export default function UsersPage() {
                       >
                         {label}
                       </button>
+                      {anonymized ? null : (
+                        <button
+                          type="button"
+                          className="danger"
+                          disabled={user.username === username}
+                          title={user.username === username ? 'Vous ne pouvez pas anonymiser votre propre compte' : undefined}
+                          aria-label={`Anonymiser ${user.username || 'utilisateur'}`}
+                          onClick={() => handleAnonymize(user)}
+                        >
+                          Anonymiser
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

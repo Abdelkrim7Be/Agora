@@ -76,6 +76,14 @@ public class AppUser {
 
     public Long getId() { return id; }
     public String getUsername() { return username; }
+
+    /**
+     * The login identity is fixed for the life of the account — every grant,
+     * audit row and agent-side record keys off it. The one exception is
+     * right-to-erasure, which replaces it with a pseudonym; named rather than a
+     * plain setter so nothing renames an account by accident.
+     */
+    void anonymizeUsername(String pseudonym) { this.username = pseudonym; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }

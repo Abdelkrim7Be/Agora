@@ -84,6 +84,15 @@ public class AuditEvent {
     public String getPath() { return path; }
     public Integer getUpstreamStatus() { return upstreamStatus; }
     public String getOutcome() { return outcome; }
+    /**
+     * The only way a recorded field ever changes, and only for right-to-erasure:
+     * the actor's name becomes a stable pseudonym so the row still links to the
+     * same account without naming a person. Named rather than a plain setter so
+     * the exception stays visible at every call site. The chain must be resealed
+     * afterwards — see {@link AuditService#anonymizeActor}.
+     */
+    void anonymizeUsername(String pseudonym) { this.username = pseudonym; }
+
     public String getPrevHash() { return prevHash; }
     public void setPrevHash(String prevHash) { this.prevHash = prevHash; }
     public String getHash() { return hash; }
