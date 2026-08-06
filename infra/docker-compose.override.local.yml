@@ -134,7 +134,9 @@ services:
       OPENAI_API_KEY: ollama-local
       AGENT_DRY_RUN: ${AGENT_DRY_RUN:-false}
       AGENT_DEFAULT_SEND_MODE: "live"
-      AGENT_POLL_INTERVAL_MIN: "1"
+      # One minute meant the poller was almost always mid-inference, so a click
+      # in the UI queued behind it. The mailbox does not change that fast.
+      AGENT_POLL_INTERVAL_MIN: "5"
       GMAIL_POLLING_FALLBACK_ENABLED: "true"
       AGENT_JOB_QUEUE_ENABLED: "false"
     volumes:

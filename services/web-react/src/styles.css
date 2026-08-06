@@ -865,7 +865,9 @@ p {
 .instance-grid > .card + .card,
 .memory-cards-grid > .card + .card,
 .campaigns-grid > .card + .card,
-.editor-grid > .card + .card {
+.editor-grid > .card + .card,
+.cost-layout > .card + .card,
+.platform-dashboard-layout > .card + .card {
   margin-top: 0;
 }
 
