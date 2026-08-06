@@ -25,7 +25,7 @@ Required values:
 - `AGENT_TOKEN_KEYS_FILE` / `AGENT_VAULT_TOKEN_FILE` — host paths to the ignored keyring and scoped Vault credential
 - `GMAIL_OAUTH_REDIRECT_URI` / `GATEWAY_CORS_ALLOWED_ORIGINS` — the public HTTPS origin
 
-The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). LLM calls are local-first: agents and the security quarantine classifier run on Ollama (`qwen2.5:3b-8k` via the OpenAI-compatible endpoint); no cloud LLM key is required. Cloud providers remain available through the optional `cloud` compose profile (LiteLLM) and the explicit `dev`/`prod` LLM profiles. Compose enables `AGENT_SECURITY_ENABLED=true`, points the agent at `http://security:8001`, stores agent graph/run state in Postgres, and stores security rate limits in Redis.
+The email-agent also needs its own `.env` at `services/email-agent/.env` (see `services/email-agent/.env.example` if present). LLM calls are local-first: agents and the security quarantine classifier run on Ollama (`qwen3:4b-4k` via the OpenAI-compatible endpoint); no cloud LLM key is required. Cloud providers remain available through the optional `cloud` compose profile (LiteLLM) and the explicit `dev`/`prod` LLM profiles. Compose enables `AGENT_SECURITY_ENABLED=true`, points the agent at `http://security:8001`, stores agent graph/run state in Postgres, and stores security rate limits in Redis.
 
 Schema migrations run in a one-shot owner process. The API and poller use the `agora_email_agent` role, which is created with `NOSUPERUSER NOBYPASSRLS`; forced Postgres row-level policies bind every app-owned business query to `agora.user_id` and `agora.agent_instance_id`.
 
@@ -54,6 +54,26 @@ Live Gmail sends are opt-in. The explicit local demo uses HTTP development ports
 docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
 ```
 
+
+### Running Ollama on a small GPU
+
+Every role — triage, drafting, and the security quarantine classifier — points at
+one model on purpose. A second model does not fit beside the first on a 4 GB card,
+and the two evict each other on every alternating call: that alone turned a
+two-second rewrite into a multi-minute request.
+
+Two things matter as much as the model choice:
+
+- **Context size is a memory cost, not a free ceiling.** The KV cache is allocated
+  for the whole window whether or not it is used. `qwen3:4b-4k` exists because the
+  largest prompt this agent builds is ~2.2k tokens, so an 8k window was spending
+  1152 MiB to push a third of the model onto the CPU.
+- **Use a non-thinking model.** `qwen3:4b` emits a long reasoning block before its
+  answer; `qwen3:4b-instruct` (the base of the `-4k` tag, built from
+  `ollama/qwen3-4b-4k.Modelfile`) answers directly.
+
+For a host-run Ollama, install `ollama/ollama-service-override.conf` — it quantises
+the KV cache and keeps the model resident. See that file for the measurements.
 
 ## Postgres backup and restore drill
 
