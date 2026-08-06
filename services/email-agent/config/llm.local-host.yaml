@@ -8,7 +8,11 @@ timeout: 300
 # drafting and instruction-following on retouches.
 roles:
   triage: "openai:qwen3:4b-8k"
-  quarantine: "openai:qwen2.5:3b-8k"
+  # Same model as every other role on purpose. Pointing the classifier at a
+  # second model made Ollama hold two of them on a 4GB card: each alternating
+  # call logged "predicted to exceed available memory, evicting" and reloaded
+  # the other one, which is how a 2-second rewrite became a 12-minute request.
+  quarantine: "openai:qwen3:4b-8k"
   # Draft role: slightly creative. qwen3's structured (JSON) drafts need more
   # completion room than qwen2.5 — a 550 cap truncated the JSON mid-draft and
   # every redraft failed to parse.
