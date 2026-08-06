@@ -3,6 +3,7 @@ package com.agora.gateway;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.agora.gateway.config.GatewayProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -66,6 +67,9 @@ class AgentRegistryTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private GatewayProperties gatewayProperties;
+
     @AfterEach
     void resetWireMock() {
         wireMock.resetAll();
@@ -79,6 +83,30 @@ class AgentRegistryTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(response).get("token").asText();
+    }
+
+    @Test
+    void configured_agent_types_satisfy_platform_contract() {
+        assertThat(gatewayProperties.getAgentTypes()).isNotEmpty();
+        for (GatewayProperties.AgentType type : gatewayProperties.getAgentTypes()) {
+            assertThat(type.getId()).isNotBlank();
+            assertThat(type.getDisplayName()).isNotBlank();
+            assertThat(type.getDescription()).isNotBlank();
+            assertThat(type.getCapabilities()).isNotEmpty();
+            assertThat(type.getBasePath()).startsWith("/");
+            assertThat(type.getHealthPath()).startsWith("/");
+            assertThat(type.getSettingsSchema()).isNotEmpty();
+        }
+
+        GatewayProperties.AgentType emailAgent = gatewayProperties.getAgentTypes().stream()
+                .filter(type -> "email-agent".equals(type.getId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(emailAgent.getBasePath()).isEqualTo("/api/agent");
+        assertThat(emailAgent.getHealthPath()).isEqualTo("/health");
+        assertThat(emailAgent.getSettingsSchema())
+                .extracting(GatewayProperties.SettingSection::key)
+                .contains("persona", "categories", "rules", "capabilities", "permissions");
     }
 
     @Test
@@ -96,6 +124,7 @@ class AgentRegistryTest {
                 .andExpect(jsonPath("$[0].display_name").value("Email Agent"))
                 .andExpect(jsonPath("$[0].capabilities", hasItem("gmail_sync")))
                 .andExpect(jsonPath("$[0].base_path").value("/api/agent"))
+                .andExpect(jsonPath("$[0].settings_schema[?(@.key == \"rules\")].path").value(hasItem("/rules")))
                 .andExpect(jsonPath("$[0].health").value("healthy"));
 
         wireMock.verify(1, getRequestedFor(urlEqualTo("/health")));

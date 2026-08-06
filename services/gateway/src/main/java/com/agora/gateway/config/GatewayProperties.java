@@ -112,6 +112,7 @@ public class GatewayProperties {
         private List<String> capabilities = new ArrayList<>();
         private String basePath = "";
         private String healthPath = "/health";
+        private List<SettingSection> settingsSchema = new ArrayList<>();
         private String color = "";
         private String icon = "";
 
@@ -123,6 +124,13 @@ public class GatewayProperties {
             type.setCapabilities(List.of("email_triage", "draft_approval", "gmail_sync", "style_learning", "cost_observability"));
             type.setBasePath("/api/agent");
             type.setHealthPath("/health");
+            type.setSettingsSchema(List.of(
+                    new SettingSection("persona", "Persona", "Background, triage rules, response preferences and writing style.", "/persona"),
+                    new SettingSection("categories", "Categories", "Workflow categories, routing, policies and templates.", "/categories"),
+                    new SettingSection("rules", "Rules", "Deterministic automation, starter rules, digest and follow-up settings.", "/rules"),
+                    new SettingSection("capabilities", "Capabilities", "Enabled tools and approval gates for this agent instance.", "/capabilities"),
+                    new SettingSection("permissions", "Permissions", "Per-instance mailbox access grants.", "/permissions")
+            ));
             type.setColor("#38bdf8");
             type.setIcon("mail");
             return type;
@@ -146,12 +154,19 @@ public class GatewayProperties {
         public String getHealthPath() { return healthPath; }
         public void setHealthPath(String healthPath) { this.healthPath = healthPath; }
 
+        public List<SettingSection> getSettingsSchema() { return settingsSchema; }
+        public void setSettingsSchema(List<SettingSection> settingsSchema) {
+            this.settingsSchema = settingsSchema;
+        }
+
         public String getColor() { return color; }
         public void setColor(String color) { this.color = color; }
 
         public String getIcon() { return icon; }
         public void setIcon(String icon) { this.icon = icon; }
     }
+
+    public record SettingSection(String key, String label, String description, String path) {}
 
     public static class LoginRateLimit {
         private boolean enabled = true;

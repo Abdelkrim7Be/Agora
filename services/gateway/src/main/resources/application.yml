@@ -58,6 +58,27 @@ gateway:
         - cost_observability
       base-path: /api/agent
       health-path: /health
+      settings-schema:
+        - key: persona
+          label: Persona
+          description: Background, triage rules, response preferences and writing style.
+          path: /persona
+        - key: categories
+          label: Categories
+          description: Workflow categories, routing, policies and templates.
+          path: /categories
+        - key: rules
+          label: Rules
+          description: Deterministic automation, starter rules, digest and follow-up settings.
+          path: /rules
+        - key: capabilities
+          label: Capabilities
+          description: Enabled tools and approval gates for this agent instance.
+          path: /capabilities
+        - key: permissions
+          label: Permissions
+          description: Per-instance mailbox access grants.
+          path: /permissions
       color: "#38bdf8"
       icon: mail
   jwt:
