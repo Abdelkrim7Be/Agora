@@ -3089,6 +3089,7 @@ button.is-busy .material-symbols-outlined {
 
 .grants-user-select { flex: 1 1 auto; min-width: 0; }
 .grants-role-select { flex: 0 0 auto; width: 132px; }
+.grants-expiry-input { flex: 0 1 220px; min-width: 190px; }
 
 .security-rules-card > strong {
   display: block;

@@ -142,6 +142,7 @@ export default function InstancesPage() {
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpen = (instance) => {
+    if (!instance?.effective_role) return;
     setInstanceId(instance.id);
     const setupStatus = instance.summary?.setup_status;
     const needsSetup = setupStatus !== 'ready';
@@ -260,7 +261,10 @@ export default function InstancesPage() {
             const health = summary.service_health || status || 'unknown';
             const typeLabel = agentTypeLabel(instance.agent_type, typesQuery.data || []);
             const identity = instanceIdentity(instance);
-            const openTitle = active ? 'Ouvrir l’espace de travail' : 'Activez cette instance avant de l’ouvrir';
+            const canOpen = active && Boolean(instance.effective_role);
+            const openTitle = !active
+              ? 'Activez cette instance avant de l’ouvrir'
+              : (canOpen ? 'Ouvrir l’espace de travail' : 'Accès boîte requis');
             const renameTitle = canManage ? 'Renommer l’instance' : 'Administration requise';
             const deleteTitle = canManage ? 'Supprimer l’instance' : 'Administration requise';
             return (
@@ -284,7 +288,7 @@ export default function InstancesPage() {
                     <button
                       className="primary icon-button"
                       type="button"
-                      disabled={!active}
+                      disabled={!canOpen}
                       title={openTitle}
                       aria-label={openTitle}
                       onClick={() => handleOpen(instance)}

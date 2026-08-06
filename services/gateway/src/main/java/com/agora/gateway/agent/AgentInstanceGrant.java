@@ -43,6 +43,8 @@ public class AgentInstanceGrant {
 
     private Instant grantedAt;
 
+    private Instant expiresAt;
+
     public AgentInstanceGrant() {}
 
     public AgentInstanceGrant(String agentInstanceId, String userId, String role, String grantedBy) {
@@ -64,4 +66,6 @@ public class AgentInstanceGrant {
     public void setRole(String role) { this.role = role; }
     public String getGrantedBy() { return grantedBy; }
     public Instant getGrantedAt() { return grantedAt; }
+    public Instant getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(Instant expiresAt) { this.expiresAt = expiresAt; }
 }

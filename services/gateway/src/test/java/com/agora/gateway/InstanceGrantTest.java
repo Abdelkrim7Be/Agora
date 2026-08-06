@@ -20,6 +20,7 @@ import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.hamcrest.Matchers.hasSize;
@@ -89,18 +90,18 @@ class InstanceGrantTest {
     }
 
     @Test
-    void admin_can_list_grants_empty() throws Exception {
+    void owner_can_list_grants_empty() throws Exception {
         mockMvc.perform(get("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray());
     }
 
     @Test
-    void admin_can_add_grant_and_list_it() throws Exception {
+    void owner_can_add_grant_and_list_it() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "alice", "role", "approver"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -108,22 +109,23 @@ class InstanceGrantTest {
                 .andExpect(jsonPath("$.user_id").value("alice"));
 
         mockMvc.perform(get("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.user_id == 'alice')]").exists());
     }
 
     @Test
-    void admin_can_delete_grant() throws Exception {
+    void owner_can_delete_grant() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "bob", "role", "viewer"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isCreated());
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.expires_at").exists());
 
         mockMvc.perform(delete("/agent-instances/default-email-agent/grants/bob")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
                 .andExpect(status().isNoContent());
     }
 
@@ -148,7 +150,7 @@ class InstanceGrantTest {
     void invalid_role_returns_400() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "eve", "role", "superadmin"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest());
@@ -159,7 +161,7 @@ class InstanceGrantTest {
         // Grant viewer-JWT user "viewer" an approver role on the default instance.
         String grantBody = objectMapper.writeValueAsString(Map.of("user_id", "viewer", "role", "approver"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
-                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(grantBody))
                 .andExpect(status().isCreated());
@@ -180,6 +182,37 @@ class InstanceGrantTest {
 
         wireMock.verify(1, postRequestedFor(urlPathEqualTo("/run/xyz/approve"))
                 .withHeader("X-Agora-Instance-Role", equalTo("approver")));
+    }
+
+    @Test
+    void expired_viewer_grant_does_not_allow_proxy_read() throws Exception {
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "private-expiring",
+                                "agent_type", "email-agent",
+                                "display_name", "Private Expiring"
+                        ))))
+                .andExpect(status().isCreated());
+
+        String grantBody = objectMapper.writeValueAsString(Map.of(
+                "user_id", "viewer",
+                "role", "viewer",
+                "expires_at", "2020-01-01T00:00:00Z"
+        ));
+        mockMvc.perform(post("/agent-instances/private-expiring/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(grantBody))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .header("X-Agora-Agent-Instance", "private-expiring"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, getRequestedFor(urlPathEqualTo("/inbox")));
     }
 
     @Test
@@ -217,14 +250,12 @@ class InstanceGrantTest {
     }
 
     @Test
-    void admin_can_add_grant() throws Exception {
+    void admin_without_instance_owner_role_cannot_add_grant() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "admin-added", "role", "viewer"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
                         .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.role").value("viewer"))
-                .andExpect(jsonPath("$.user_id").value("admin-added"));
+                .andExpect(status().isForbidden());
     }
 }

@@ -115,7 +115,9 @@ public class AgentRegistryService {
     public boolean canView(AgentInstance instance, String username, String role) {
         if ("admin".equals(role)) return true;
         if (username != null && username.equals(instance.getCreatedBy())) return true;
-        if (username != null && grants.findByAgentInstanceIdAndUserId(instance.getId(), username).isPresent()) return true;
+        if (username != null && grants.findByAgentInstanceIdAndUserId(instance.getId(), username)
+                .filter(InstanceGrantService::active)
+                .isPresent()) return true;
         return Arrays.stream(instance.getAllowedRoles().split(","))
                 .map(String::trim)
                 .anyMatch(r -> r.equalsIgnoreCase(role));

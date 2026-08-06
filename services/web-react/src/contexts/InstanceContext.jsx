@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, useMemo } from 'react';
-import { useAuth } from './AuthContext';
 import { roleAtLeast } from '../utils/roles';
 
 const InstanceContext = createContext(null);
@@ -10,7 +9,6 @@ export function isInstanceActive(instance) {
 
 export function InstanceProvider({ children }) {
   const [instanceId, setInstanceId] = useState(() => localStorage.getItem('agora.agentInstanceId') || 'default-email-agent');
-  const { globalRole } = useAuth();
   
   // Hydrated by useAgentInstancesQuery's sync effect once it loads.
   const [instances, setInstances] = useState([]);
@@ -34,7 +32,7 @@ export function InstanceProvider({ children }) {
     if (fallback) setInstanceId(fallback.id);
   }, [instances]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const currentInstanceRole = currentInstance?.effective_role || globalRole || "viewer";
+  const currentInstanceRole = currentInstance?.effective_role || "viewer";
 
   const hasRole = (minimum) => roleAtLeast(currentInstanceRole, minimum);
 

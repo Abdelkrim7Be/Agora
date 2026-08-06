@@ -163,7 +163,10 @@ export function useInviteUser() {
 export function useInstanceGrantsQuery(instances, enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
-  const ids = (instances || []).map((instance) => instance.id).filter(Boolean);
+  const ids = (instances || [])
+    .filter((instance) => instance.effective_role === 'owner')
+    .map((instance) => instance.id)
+    .filter(Boolean);
   return useQuery({
     queryKey: ['instance-grants', ids.join('|')],
     queryFn: async () => {
@@ -1127,9 +1130,9 @@ export function useAddGrant() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: ({ userId, role }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
+    mutationFn: ({ userId, role, expiresAt }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
       method: 'POST',
-      body: JSON.stringify({ user_id: userId, role }),
+      body: JSON.stringify({ user_id: userId, role, expires_at: expiresAt || null }),
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['grants', instanceId] }),
   });
