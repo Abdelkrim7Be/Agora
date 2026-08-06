@@ -98,3 +98,33 @@ def test_unknown_run_id_still_answers_404():
 
     assert response.status_code == 404
     assert "Unknown run_id" in response.json()["detail"]
+
+
+def test_a_run_that_never_had_graph_state_is_still_readable():
+    """A message stopped by the junk gate is filed straight into the registry and
+    never reaches the graph. Requiring a checkpoint to read it answered "this run
+    has expired" for runs that had simply never needed one — and that is exactly
+    the run someone lands on after 'Forcer l'agent' on bulk mail."""
+    upsert_run(
+        "run-junk-gated",
+        "completed",
+        email_input={
+            "subject": "Soldes de printemps",
+            "author": "news@shop.example",
+            "junk_reason": "gmail:category_promotions",
+        },
+        classification="ignore",
+        pending_action=None,
+        agent_instance_id=current_agent_instance_id(),
+    )
+
+    with TestClient(app) as client:
+        client.app.state.graph = _FakeGraph()  # no state for any thread
+        response = client.get("/run/run-junk-gated/detail")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_graph_state"] is False
+    assert body["subject"] == "Soldes de printemps"
+    assert body["junk_reason"] == "gmail:category_promotions"
+    assert body["classification"] == "ignore"

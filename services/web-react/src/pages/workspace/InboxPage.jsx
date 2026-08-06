@@ -250,8 +250,26 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     });
     if (!confirmed) return;
     try {
-      const result = await runBusy('L’agent traite ce message', () => forceAgent.mutateAsync(msgId));
-      setStatus(`Agent relancé : ${result.outcome?.status || 'traitement demandé'}.`, 'ok');
+      const result = await runBusy(
+        'L’agent lit le message et rédige une proposition',
+        () => forceAgent.mutateAsync(msgId),
+      );
+      const outcome = result.outcome || {};
+      // Land on what the agent just produced rather than leaving the person on
+      // the list to work out which row changed: a draft waiting for a decision
+      // opens in the validation queue with that card focused, anything else
+      // (ignored, notified, failed) opens its run so the verdict is readable.
+      if (outcome.run_id && outcome.status === 'pending_approval') {
+        setStatus('Brouillon prêt — relisez-le avant envoi.', 'ok');
+        navigate(`../validation?run=${encodeURIComponent(outcome.run_id)}`);
+        return;
+      }
+      if (outcome.run_id) {
+        setStatus(`Traitement terminé : ${outcome.status || 'terminé'}.`, 'ok');
+        navigate(`../run/${encodeURIComponent(outcome.run_id)}`);
+        return;
+      }
+      setStatus(`Agent relancé : ${outcome.status || 'traitement demandé'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de forcer l’agent : ${error.message}`, 'error');
     }

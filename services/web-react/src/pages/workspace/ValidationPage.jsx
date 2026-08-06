@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Pager } from '../../components/ui/Pager';
@@ -36,6 +36,7 @@ export default function ValidationPage() {
   const { api, streamApi } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const canApprove = hasRole('approver');
 
   const [page, setPage] = useState(0);
@@ -77,6 +78,19 @@ export default function ValidationPage() {
   useEffect(() => {
     if (query.error) setStatus(`Impossible de charger la validation : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Arriving from "Forcer l'agent" with ?run=<id>: put the person on the draft
+  // that was just written for them instead of the top of a queue where they have
+  // to find it. Cleared from the URL afterwards so a refresh is an ordinary visit.
+  const requestedRunId = searchParams.get('run');
+  useEffect(() => {
+    if (!requestedRunId || !runs.length) return;
+    if (!runs.some((run) => run.run_id === requestedRunId)) return;
+    setActiveRunId(requestedRunId);
+    document.querySelector(`[data-card="${requestedRunId}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setSearchParams({}, { replace: true });
+  }, [requestedRunId, runs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Prune selection/edits to runs still present.
   useEffect(() => {
