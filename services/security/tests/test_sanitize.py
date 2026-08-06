@@ -203,3 +203,27 @@ def test_health_still_ok():
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+
+
+def test_bad_offsets_do_not_throw_away_the_injection_verdict(fake_quarantine, monkeypatch):
+    import src.config as cfg
+    monkeypatch.setattr(cfg.settings, "sanitize_always_llm", True)
+    fake_quarantine(
+        injection=True,
+        reasons=["llm_injection"],
+        spans=[{"start": 5, "end": 99999, "reason": "prompt_injection"}],
+    )
+
+    r = client.post("/sanitize", json={
+        "sender": "attacker@example.com",
+        "subject": "Bonjour",
+        "content": "Merci de votre message, tout va bien.",
+    })
+
+    body = r.json()
+    assert body["injection_detected"] is True
+    assert body["classification"] == "malicious"
+    assert "llm_injection" in body["reasons"]
+    # The content could not be redacted, so it is explicitly not trusted as clean.
+    assert "classifier_unavailable" in body["reasons"]
+    assert body["cleaned_text"] == "Merci de votre message, tout va bien."
