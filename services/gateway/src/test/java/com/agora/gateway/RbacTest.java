@@ -1065,6 +1065,52 @@ class RbacTest {
     }
 
     @Test
+    void owner_can_erase_a_data_subject() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/gdpr/erase"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_ids\":[]}")));
+
+        mockMvc.perform(post("/api/agent/gdpr/erase")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"subject@example.com\"}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/gdpr/erase")));
+    }
+
+    @Test
+    void owner_can_preview_an_erasure() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/gdpr/erase/dry-run"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_ids\":[]}")));
+
+        mockMvc.perform(post("/api/agent/gdpr/erase/dry-run")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"subject@example.com\"}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/gdpr/erase/dry-run")));
+    }
+
+    @Test
+    void viewer_cannot_erase_a_data_subject_403() throws Exception {
+        mockMvc.perform(post("/api/agent/gdpr/erase")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"subject@example.com\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("forbidden"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/gdpr/erase")));
+    }
+
+    @Test
     void owner_can_claim_approval() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/inbox/abc/claim"))
                 .willReturn(aResponse()
