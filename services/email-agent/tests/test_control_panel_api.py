@@ -1210,6 +1210,7 @@ def test_gmail_webhook_processes_history_from_stored_baseline(monkeypatch):
         return [("m1", "completed", "run-1")]
 
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/test/topics/gmail")
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: "100")
@@ -1244,6 +1245,7 @@ def test_gmail_webhook_seeds_baseline_on_first_push(monkeypatch):
         return []
 
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/test/topics/gmail")
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: None)
@@ -1272,6 +1274,7 @@ def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
     import src.api as api
 
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/test/topics/gmail")
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
 
     with TestClient(app) as client:
