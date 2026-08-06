@@ -5130,3 +5130,25 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   align-items: center;
   gap: 10px;
 }
+
+/* A suspended instance is still listed against whoever can reach it — the access
+   is intact, the agent just is not running. Dimmed rather than hidden. */
+.mini-chip.grant-chip.suspended {
+  opacity: .62;
+  border-style: dashed;
+}
+
+.instance-access-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--outline);
+}
+
+.instance-access-row > span {
+  color: var(--muted);
+  font: 500 11px/16px var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}

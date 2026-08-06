@@ -10,7 +10,7 @@ import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
 import { currentUsername } from '../../utils/jwt';
-import { agentTypeLabel, instanceIdentity, instanceSummaryFields } from '../../utils/format';
+import { agentTypeLabel, instanceIdentity, instanceSummaryFields, roleLabelFr } from '../../utils/format';
 import {
   useAgentInstancesQuery,
   useAgentTypesQuery,
@@ -18,6 +18,9 @@ import {
   useDeleteInstance,
   useCreateInstance,
   useUsersQuery,
+  useSetInstanceActive,
+  useTestMailboxConnection,
+  useInstanceGrantsQuery,
 } from '../../api/queries';
 
 const EMPTY_CREATE_FORM = { agentType: '', displayName: '', assignedTo: '' };
@@ -40,6 +43,8 @@ export default function InstancesPage() {
   const usersQuery = useUsersQuery(globalRole === 'admin');
   const renameInstance = useRenameInstance();
   const deleteInstance = useDeleteInstance();
+  const setInstanceActive = useSetInstanceActive();
+  const testConnection = useTestMailboxConnection();
   const createInstance = useCreateInstance();
   const isAdmin = globalRole === 'admin';
   const username = currentUsername(token);
@@ -49,6 +54,11 @@ export default function InstancesPage() {
   const selfServiceLimitReached = !isAdmin && ownEmailInstanceCount >= SELF_SERVICE_LIMIT;
   const canCreate = isAdmin || !selfServiceLimitReached;
   const canManage = isAdmin;
+  // Who, besides the creator, can reach each instance. Admin-only: the grants
+  // endpoint is, so a non-admin simply gets an empty list rather than an error.
+  const grantsQuery = useInstanceGrantsQuery(instances, canManage);
+  const accessFor = (instanceId) => (grantsQuery.data || [])
+    .filter((grant) => grant.agent_instance_id === instanceId);
   const announcedInitialLoad = useRef(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
@@ -154,6 +164,46 @@ export default function InstancesPage() {
     }
   };
 
+  // Suspending is the reversible half of "stop this agent": the poller leaves the
+  // mailbox alone and the workspace closes, but nothing is destroyed. Deleting was
+  // the only control here before, which made "pause it for now" mean "lose it".
+  const handleToggleActive = async (instance) => {
+    const label = instance.display_name || instance.id;
+    const active = isInstanceActive(instance);
+    if (active) {
+      const confirmed = await confirmDialog({
+        title: 'Suspendre l’instance',
+        message: `${label} cessera de relever sa boîte et son espace de travail sera fermé. Rien n’est supprimé : vous pouvez la réactiver à tout moment.`,
+        confirmLabel: 'Suspendre',
+        confirmIcon: 'pause',
+        variant: 'danger',
+      });
+      if (!confirmed) return;
+    }
+    try {
+      await setInstanceActive.mutateAsync({ id: instance.id, active: !active });
+      setStatus(active ? `Instance « ${label} » suspendue.` : `Instance « ${label} » réactivée.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de changer l’état : ${error.message}`, 'error');
+    }
+  };
+
+  // Answers "is this mailbox actually reachable right now", which the status
+  // badge cannot: that reflects the last sync, not this moment.
+  const handleTest = async (instance) => {
+    const label = instance.display_name || instance.id;
+    try {
+      const result = await testConnection.mutateAsync(instance.id);
+      if (result?.ok) {
+        setStatus(`${label} : boîte joignable (${result.mailbox || 'compte vérifié'}).`, 'ok');
+      } else {
+        setStatus(`${label} : ${result?.error || 'boîte injoignable'}.`, 'error');
+      }
+    } catch (error) {
+      setStatus(`${label} : test impossible — ${error.message}`, 'error');
+    }
+  };
+
   const handleDelete = async (instance) => {
     const label = instance.display_name || instance.id;
     const confirmed = await confirmDialog({
@@ -249,6 +299,30 @@ export default function InstancesPage() {
                       <span className="material-symbols-outlined" aria-hidden="true">edit</span>
                     </button>
                     <button
+                      className="icon-button"
+                      type="button"
+                      disabled={!canManage || !active}
+                      title={active ? 'Tester la boîte connectée' : 'Activez l’instance pour la tester'}
+                      aria-label={`Tester ${instance.display_name || instance.id}`}
+                      onClick={() => handleTest(instance)}
+                    >
+                      <span className="material-symbols-outlined" aria-hidden="true">network_check</span>
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={!canManage}
+                      title={canManage
+                        ? (active ? 'Suspendre l’instance' : 'Réactiver l’instance')
+                        : 'Administration requise'}
+                      aria-label={`${active ? 'Suspendre' : 'Réactiver'} ${instance.display_name || instance.id}`}
+                      onClick={() => handleToggleActive(instance)}
+                    >
+                      <span className="material-symbols-outlined" aria-hidden="true">
+                        {active ? 'pause_circle' : 'play_circle'}
+                      </span>
+                    </button>
+                    <button
                       className="danger icon-button"
                       type="button"
                       disabled={!canManage}
@@ -265,6 +339,22 @@ export default function InstancesPage() {
                     <div key={label}><span>{label}</span><strong>{value}</strong></div>
                   ))}
                 </div>
+                {canManage ? (
+                  <div className="instance-access-row">
+                    <span>Accès</span>
+                    <div className="user-instance-pills">
+                      <span className="mini-chip grant-chip">{instance.created_by || 'inconnu'} · créateur</span>
+                      {accessFor(instance.id).map((grant) => (
+                        <span className="mini-chip grant-chip" key={grant.user_id}>
+                          {grant.user_id} · {roleLabelFr(grant.role)}
+                        </span>
+                      ))}
+                      {!accessFor(instance.id).length ? (
+                        <span className="muted">Aucun accès délégué</span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
               </Card>
             );
           })
