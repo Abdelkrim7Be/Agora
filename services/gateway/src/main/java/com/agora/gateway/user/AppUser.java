@@ -35,6 +35,11 @@ public class AppUser {
     @Column(nullable = false)
     private String role;
 
+    /** How the person wants to be named in the interface. Held here rather than in
+     * the browser: it used to live in localStorage, so it was lost on a new
+     * machine and invisible to everyone else. */
+    private String displayName;
+
     /** Free-text department label (HR, Finance, ...); references the same vocabulary
      * as the email-agent role/actor directory. Null for users with no department
      * scope (owner, admin, viewer). */
@@ -79,6 +84,9 @@ public class AppUser {
     public void setRole(String role) { this.role = role; }
     public String getDepartment() { return department; }
     public void setDepartment(String department) { this.department = department; }
+
+    public String getDisplayName() { return displayName; }
+    public void setDisplayName(String displayName) { this.displayName = displayName; }
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
 

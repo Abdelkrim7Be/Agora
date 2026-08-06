@@ -129,9 +129,9 @@ export function useUpdateUser() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, role, department }) => api(`/users/${encodeURIComponent(id)}`, {
+    mutationFn: ({ id, role, department, email }) => api(`/users/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify({ role, department: department || null }),
+      body: JSON.stringify({ role, department: department || null, email: email ?? null }),
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
@@ -188,6 +188,47 @@ export function useRemoveInstanceGrant() {
       queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
       queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
     },
+  });
+}
+
+// --- Own account (any signed-in role) ---
+
+export function useMyProfileQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['me'],
+    queryFn: () => api('/me'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useUpdateMyProfile() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body) => api('/me', { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me'] }),
+  });
+}
+
+export function useChangeMyPassword() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ currentPassword, newPassword }) => api('/me/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  });
+}
+
+export function useSetUserPassword() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ id, password }) => api(`/users/${encodeURIComponent(id)}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    }),
   });
 }
 
