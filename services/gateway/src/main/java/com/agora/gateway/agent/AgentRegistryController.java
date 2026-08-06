@@ -159,6 +159,7 @@ public class AgentRegistryController {
             List<String> capabilities,
             @JsonProperty("base_path") String basePath,
             @JsonProperty("health_path") String healthPath,
+            @JsonProperty("settings_schema") List<GatewayProperties.SettingSection> settingsSchema,
             String color,
             String icon,
             String health
@@ -166,7 +167,7 @@ public class AgentRegistryController {
         static AgentTypeResponse from(GatewayProperties.AgentType type, String health) {
             return new AgentTypeResponse(type.getId(), type.getDisplayName(), type.getDescription(),
                     type.getCapabilities(), type.getBasePath(), type.getHealthPath(),
-                    type.getColor(), type.getIcon(), health);
+                    type.getSettingsSchema(), type.getColor(), type.getIcon(), health);
         }
     }
 

@@ -86,6 +86,11 @@ export default function AgentTypesPage() {
                 <div className="chip-row">
                   {(type.capabilities || []).map((capability) => <Badge key={capability}>{capabilityLabelFr(capability)}</Badge>)}
                 </div>
+                {type.settings_schema?.length ? (
+                  <div className="chip-row">
+                    {type.settings_schema.map((section) => <Badge key={section.key}>{section.label}</Badge>)}
+                  </div>
+                ) : null}
               </Card>
             );
           })
