@@ -40,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.datasource.password=",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.hibernate.ddl-auto=create-drop",
+        "gateway.upstream.summary-cache-seconds=0",
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.owner.username=owner",
         "gateway.owner.password=ownerpass",

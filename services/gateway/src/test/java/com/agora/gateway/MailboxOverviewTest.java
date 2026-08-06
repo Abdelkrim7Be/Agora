@@ -33,6 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.password=",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.hibernate.ddl-auto=create-drop",
+        "gateway.upstream.summary-cache-seconds=0",
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",

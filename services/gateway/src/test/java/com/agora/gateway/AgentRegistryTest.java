@@ -22,6 +22,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -37,6 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.password=",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.hibernate.ddl-auto=create-drop",
+        "gateway.upstream.summary-cache-seconds=0",
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",
@@ -362,4 +364,5 @@ class AgentRegistryTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("inactive"));
     }
+
 }

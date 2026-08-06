@@ -30,6 +30,21 @@ public class AgentRegistryService {
     private final AgentInstanceGrantRepository grants;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    /**
+     * Per-instance summary, briefly cached.
+     *
+     * Building one summary costs three separate upstream calls (drafts, today's
+     * cost, setup progress), and the listing builds one per instance — so the
+     * page every user lands on was O(instances x 3) round trips, serially, on
+     * every single view. These are counters on a dashboard, not decisions: a few
+     * seconds stale is invisible, and the alternative is a page that gets slower
+     * with every mailbox onboarded.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, SummaryCacheEntry> summaryCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record SummaryCacheEntry(Map<String, Object> summary, Instant expiresAt) {}
+
     private final java.util.concurrent.ConcurrentHashMap<String, HealthCacheEntry> healthCache =
             new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -153,6 +168,28 @@ public class AgentRegistryService {
     }
 
     public Map<String, Object> summary(AgentInstance instance, String username) {
+        // Keyed by user too: pending drafts and cost are tenant-scoped, so one
+        // person's totals must never be served to another.
+        long ttl = props.getUpstream().getSummaryCacheSeconds();
+        if (ttl <= 0) {
+            return buildSummary(instance, username);
+        }
+        String cacheKey = instance.getId() + "\u0000" + (username == null ? "" : username);
+        SummaryCacheEntry cached = summaryCache.get(cacheKey);
+        if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
+            return cached.summary();
+        }
+        Map<String, Object> built = buildSummary(instance, username);
+        summaryCache.put(cacheKey, new SummaryCacheEntry(built, Instant.now().plusSeconds(ttl)));
+        return built;
+    }
+
+    /** Drop cached summaries for an instance whose state just changed. */
+    public void invalidateSummary(String instanceId) {
+        summaryCache.keySet().removeIf(key -> key.startsWith(instanceId + "\u0000"));
+    }
+
+    private Map<String, Object> buildSummary(AgentInstance instance, String username) {
         Map<String, Object> summary = new LinkedHashMap<>();
         if ("inactive".equalsIgnoreCase(instance.getStatus())) {
             summary.put("service_health", "inactive");
@@ -297,6 +334,7 @@ public class AgentRegistryService {
         AgentInstance instance = instances.findById(instanceId)
                 .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
         instance.setStatus("inactive");
+        invalidateSummary(instanceId);
         return instances.save(instance);
     }
 
@@ -304,6 +342,7 @@ public class AgentRegistryService {
         AgentInstance instance = instances.findById(instanceId)
                 .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
         instance.setStatus("active");
+        invalidateSummary(instanceId);
         return instances.save(instance);
     }
 
@@ -318,6 +357,7 @@ public class AgentRegistryService {
         AgentInstance instance = instances.findById(instanceId)
                 .orElseThrow(() -> new UnknownAgentTypeException(instanceId));
         grants.findByAgentInstanceId(instanceId).forEach(grant -> grants.deleteById(grant.getId()));
+        invalidateSummary(instanceId);
         instances.delete(instance);
     }
 
