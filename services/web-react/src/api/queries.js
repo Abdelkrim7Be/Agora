@@ -177,6 +177,26 @@ export function useInstanceGrantsQuery(instances, enabled = true) {
   });
 }
 
+export function useAdminAccessQuery(instances, enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const ids = (instances || [])
+    .filter((instance) => instance.effective_role === 'owner')
+    .map((instance) => instance.id)
+    .filter(Boolean);
+  return useQuery({
+    queryKey: ['admin-access', ids.join('|')],
+    queryFn: async () => {
+      const pairs = await Promise.all(ids.map(async (id) => {
+        const events = await api(`/agent-instances/${encodeURIComponent(id)}/admin-access`);
+        return [id, events];
+      }));
+      return Object.fromEntries(pairs);
+    },
+    enabled: Boolean(token) && enabled && ids.length > 0,
+  });
+}
+
 export function useAddInstanceGrant() {
   const { api } = useApi();
   const queryClient = useQueryClient();

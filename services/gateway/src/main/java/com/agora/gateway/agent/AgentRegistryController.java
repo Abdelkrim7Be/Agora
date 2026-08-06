@@ -2,10 +2,13 @@ package com.agora.gateway.agent;
 
 import com.agora.gateway.config.GatewayProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.agora.gateway.audit.AuditEvent;
+import com.agora.gateway.audit.AuditRepository;
 import com.agora.gateway.audit.AuditService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -25,14 +28,16 @@ import java.util.Map;
 public class AgentRegistryController {
 
     private final AgentRegistryService service;
+    private final AuditRepository auditRepository;
     private final AuditService auditService;
     private final InstanceGrantService grants;
 
     public AgentRegistryController(AgentRegistryService service, AuditService auditService,
-                                   InstanceGrantService grants) {
+                                   InstanceGrantService grants, AuditRepository auditRepository) {
         this.service = service;
         this.auditService = auditService;
         this.grants = grants;
+        this.auditRepository = auditRepository;
     }
 
     @GetMapping("/agents")
@@ -99,6 +104,24 @@ public class AgentRegistryController {
         auditService.record(auth.getName(), role(auth), "delete_instance", "DELETE",
                 "/agent-instances/" + instanceId, null, "deleted");
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/agent-instances/{instanceId}/admin-access")
+    public ResponseEntity<List<AdminAccessResponse>> adminAccess(Authentication auth,
+            @PathVariable String instanceId) {
+        String effectiveRole = grants.effectiveRole(instanceId, auth.getName(), role(auth)).orElse("");
+        if (!"owner".equals(effectiveRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        List<AdminAccessResponse> rows = auditRepository
+                .findByActionAndPathOrderByTimestampDesc(
+                        "admin_mailbox_access",
+                        "/agent-instances/" + instanceId,
+                        PageRequest.of(0, 20))
+                .stream()
+                .map(AdminAccessResponse::from)
+                .toList();
+        return ResponseEntity.ok(rows);
     }
 
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)
@@ -168,6 +191,23 @@ public class AgentRegistryController {
                     instance.getMailboxIdentity(), instance.getDescription(), instance.getStatus(),
                     instance.getBasePath(), instance.getAllowedRoles(), instance.getCreatedBy(),
                     instance.getColor(), instance.getIcon(), instance.getCreatedAt(), effectiveRole, summary);
+        }
+    }
+
+    record AdminAccessResponse(
+            Instant timestamp,
+            String username,
+            String method,
+            @JsonProperty("upstream_status") Integer upstreamStatus,
+            String outcome
+    ) {
+        static AdminAccessResponse from(AuditEvent event) {
+            return new AdminAccessResponse(
+                    event.getTimestamp(),
+                    event.getUsername(),
+                    event.getMethod(),
+                    event.getUpstreamStatus(),
+                    event.getOutcome());
         }
     }
 }

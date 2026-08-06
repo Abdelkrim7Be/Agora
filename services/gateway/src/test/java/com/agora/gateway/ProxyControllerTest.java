@@ -1,5 +1,6 @@
 package com.agora.gateway;
 
+import com.agora.gateway.audit.AuditRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -22,6 +23,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -63,6 +65,9 @@ class ProxyControllerTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private AuditRepository auditRepository;
 
     @AfterEach
     void resetWireMock() {
@@ -185,6 +190,34 @@ class ProxyControllerTest {
 
         wireMock.verify(postRequestedFor(urlEqualTo("/run"))
                 .withHeader("X-Agora-Agent-Instance", equalTo("ceo-email-agent")));
+    }
+
+    @Test
+    void admin_proxy_access_is_visible_to_instance_owner() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/inbox"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"messages\":[]}")));
+
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .header("X-Agora-Agent-Instance", "default-email-agent"))
+                .andExpect(status().isOk());
+
+        assertThat(auditRepository.findAll()).anyMatch(event ->
+                "admin_mailbox_access".equals(event.getAction())
+                        && "/agent-instances/default-email-agent".equals(event.getPath())
+                        && "admin".equals(event.getUsername())
+                        && Integer.valueOf(200).equals(event.getUpstreamStatus()));
+
+        mockMvc.perform(get("/agent-instances/default-email-agent/admin-access")
+                        .header("Authorization", "Bearer " + ownerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].username").value("admin"))
+                .andExpect(jsonPath("$[0].method").value("GET"))
+                .andExpect(jsonPath("$[0].upstream_status").value(200))
+                .andExpect(jsonPath("$[0].outcome").value("GET /api/agent/inbox"));
     }
 
     @Test

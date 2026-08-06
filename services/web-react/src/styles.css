@@ -1168,6 +1168,38 @@ pre {
 
 .audit-toolbar input { flex: 1 1 260px; }
 
+.instance-admin-access-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding-top: 10px;
+  border-top: 1px solid var(--outline);
+}
+
+.instance-admin-access-row > span {
+  color: var(--muted);
+  font: 500 12px/18px var(--font-mono);
+  text-transform: uppercase;
+}
+
+.admin-access-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.admin-access-chip {
+  gap: 5px;
+  border-color: color-mix(in srgb, var(--tertiary) 48%, var(--outline));
+  background: color-mix(in srgb, var(--tertiary) 12%, var(--surface));
+}
+
+.admin-access-chip .material-symbols-outlined {
+  font-size: 16px;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--outline);
