@@ -25,7 +25,7 @@ def test_benign_email_tags_untrusted():
 
 
 def test_injection_tags_hostile(fake_quarantine):
-    fake_quarantine(injection=True, sanitized="[REDACTED]")
+    fake_quarantine(injection=True)
 
     r = client.post(
         "/sanitize",
