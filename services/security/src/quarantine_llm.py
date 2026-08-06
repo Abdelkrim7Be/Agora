@@ -38,6 +38,8 @@ class ToollessQuarantineClient:
 
 def quarantine_model_kwargs() -> dict[str, Any]:
     kwargs: dict[str, Any] = {"temperature": 0.0}
+    if settings.sanitize_max_tokens > 0:
+        kwargs["max_tokens"] = settings.sanitize_max_tokens
     if settings.sanitize_endpoint:
         kwargs["base_url"] = settings.sanitize_endpoint
         kwargs["api_key"] = os.getenv("OPENAI_API_KEY") or "ollama-local"

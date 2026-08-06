@@ -20,6 +20,12 @@ class Settings:
     # Local-first: quarantine classifier runs on Ollama via the OpenAI-compatible
     # endpoint. Clear SECURITY_SANITIZE_ENDPOINT to use a hosted provider model.
     sanitize_model: str = os.getenv("SECURITY_SANITIZE_MODEL", "openai:qwen2.5:3b-8k")
+    # Ceiling on the classifier's reply. Its output is a small structured verdict,
+    # so a few hundred tokens is generous — but the call had no cap at all, and a
+    # reasoning-style model answered a one-line classification with thousands of
+    # tokens of deliberation, holding the single inference slot for minutes while
+    # every other request in the platform queued behind it.
+    sanitize_max_tokens: int = int(os.getenv("SECURITY_SANITIZE_MAX_TOKENS", "512"))
     sanitize_endpoint: str = os.getenv("SECURITY_SANITIZE_ENDPOINT", "http://localhost:11434/v1")
     sanitize_always_llm: bool = os.getenv("SECURITY_SANITIZE_ALWAYS_LLM", "false").lower() == "true"
     sanitize_max_chars: int = int(os.getenv("SECURITY_SANITIZE_MAX_CHARS", "6000"))
