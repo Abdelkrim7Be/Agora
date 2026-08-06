@@ -61,7 +61,8 @@ services:
   # pending-approval runs in the same Postgres the API serves the UI from.
   poller:
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: unless-stopped
     mem_limit: 2g
@@ -134,7 +135,8 @@ services:
   worker:
     profiles: ["job-queue"]
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: unless-stopped
     mem_limit: 2g
