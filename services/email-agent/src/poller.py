@@ -82,7 +82,7 @@ from src.automation import (
     record_digest_item,
     workflow_sla_snapshot,
 )
-from src.config import load_config, settings
+from src.config import load_config, settings, validate_model_redaction
 from src.runtime_settings import load_runtime_settings
 from src.memory import ORIGIN_LEARNED, namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
@@ -1193,6 +1193,7 @@ async def sweep_active_instances_once(
 
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
+    validate_model_redaction()
     validate_token_security()
     # With push webhooks on, polling is only a safety net — run it slowly.
     interval_minutes = (

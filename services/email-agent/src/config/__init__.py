@@ -17,6 +17,9 @@ def _env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).lower() == "true"
 
 
+LOCAL_LLM_PROFILES = frozenset({"local", "local-host", "local-docker", "safe"})
+
+
 def _parse_user_map() -> dict[str, str]:
     """Map an external identity (e.g. a Gmail address) to the platform user id.
 
@@ -226,6 +229,22 @@ class Settings:
 
 
 settings = Settings()
+
+
+def active_llm_profile_name(config: Settings | None = None) -> str:
+    config = config or settings
+    return (os.getenv("AGENT_LLM_PROFILE", config.llm_profile).strip() or "local").lower()
+
+
+def validate_model_redaction(config: Settings | None = None) -> None:
+    config = config or settings
+    profile = active_llm_profile_name(config)
+    if profile in LOCAL_LLM_PROFILES or config.redact_for_model:
+        return
+    raise RuntimeError(
+        "AGENT_REDACT_FOR_MODEL=false is not allowed with hosted LLM profile "
+        f"'{profile}'. Use a local profile or enable model redaction."
+    )
 
 
 # --- Behavior config (config.yaml) — separate concern from Settings above. ---

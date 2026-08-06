@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-from src.config import settings
+from src.config import settings, validate_model_redaction
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
 from src.trace import list_traces, setup_trace_store
 from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, record_dead_letter, setup_dlq
@@ -221,6 +221,7 @@ async def _watch_renewal_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_model_redaction()
     validate_token_security()
     upgrade_to_head()
     validate_runtime_role()
