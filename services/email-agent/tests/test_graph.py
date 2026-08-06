@@ -541,3 +541,39 @@ def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, 
     request = result["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "write_email"
     assert request["action_request"]["args"]["subject"] == "Re: Quick question about the API"
+
+
+def test_triage_cache_never_stores_or_replays_ignore(monkeypatch):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cache = {}
+    calls = []
+
+    class _CountingRouter:
+        def invoke(self, _messages, config=None):
+            calls.append(config)
+            return SimpleNamespace(classification="ignore", category=None)
+
+    monkeypatch.setattr(g, "llm_router", _CountingRouter())
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g.settings, "triage_cache_ttl_seconds", 60)
+    monkeypatch.setattr(g, "cache_get_json", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        g,
+        "cache_set_json",
+        lambda key, value, ttl_seconds: cache.setdefault(key, value) is value,
+    )
+
+    email = {
+        "author": "Someone <someone@example.com>",
+        "to": "Me <me@example.com>",
+        "subject": "Ambiguous 123",
+        "email_thread": "Hard to tell whether this matters.",
+    }
+
+    assert email_assistant.invoke({"email_input": email}, _cfg())["classification_decision"] == "ignore"
+    assert email_assistant.invoke({"email_input": email}, _cfg())["classification_decision"] == "ignore"
+
+    assert cache == {}
+    assert len(calls) == 2

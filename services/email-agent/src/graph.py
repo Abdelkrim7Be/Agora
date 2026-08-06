@@ -1771,9 +1771,15 @@ def _triage_cache_key(
     return f"agora:triage:{digest}"
 
 
-def _triage_cacheable(state: State, attachments: list, category_update: dict) -> bool:
+TRIAGE_CACHEABLE_DECISIONS = frozenset({"respond", "notify"})
+
+
+def _triage_cacheable(
+    state: State, attachments: list, category_update: dict, classification: str
+) -> bool:
     return (
         settings.triage_cache_ttl_seconds > 0
+        and classification in TRIAGE_CACHEABLE_DECISIONS
         and not attachments
         and not state["email_input"].get("security")
         and not category_update
@@ -1888,7 +1894,8 @@ def triage_router(
         category_section=category_section,
     )
     cached = cache_get_json(cache_key)
-    if isinstance(cached, dict) and cached.get("classification") in {"respond", "ignore", "notify"}:
+    # "ignore" is never cached: a stale one drops real mail silently for a whole TTL.
+    if isinstance(cached, dict) and cached.get("classification") in TRIAGE_CACHEABLE_DECISIONS:
         return _route_triage_decision(
             state,
             classification=str(cached["classification"]),
@@ -1932,7 +1939,7 @@ def triage_router(
         if policy_command is not None:
             return policy_command
 
-    if _triage_cacheable(state, atts, category_update):
+    if _triage_cacheable(state, atts, category_update, classification):
         cache_set_json(
             cache_key,
             {"classification": classification},
