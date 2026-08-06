@@ -21,6 +21,9 @@ import AgentTypesPage from './pages/platform/AgentTypesPage';
 import HealthPage from './pages/platform/HealthPage';
 import AuditPage from './pages/platform/AuditPage';
 import UsersPage from './pages/platform/UsersPage';
+// Prototype only: same page rebuilt on Tailwind, reachable at /team-next for
+// side-by-side comparison. Delete this and its route to drop the experiment.
+import UsersPageNext from './pages/platform/UsersPageNext';
 import AccountPage from './pages/platform/AccountPage';
 import ValidationPage from './pages/workspace/ValidationPage';
 import InboxPage from './pages/workspace/InboxPage';
@@ -131,6 +134,7 @@ export default function App() {
                         <Route path="system-health" element={<HealthPage />} />
                         <Route path="access-log" element={<AuditPage />} />
                         <Route path="team" element={<UsersPage />} />
+                        <Route path="team-next" element={<UsersPageNext />} />
                         <Route path="account" element={<AccountPage />} />
                       </Route>
 
