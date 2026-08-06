@@ -44,6 +44,8 @@ def test_usage_callback_records_usage_metadata(monkeypatch, tmp_path):
 
 def test_compute_cost_known_and_unknown_models():
     assert compute_cost("llama-3.3-70b-versatile", 1_000_000, 1_000_000) == 1.33
+    assert compute_cost("mistral/mistral-small-latest", 1_000_000, 1_000_000) == 0.75
+    assert compute_cost("mistral/mistral-large-latest", 1_000_000, 1_000_000) == 2.0
     assert compute_cost("unknown-model", 1_000_000, 1_000_000) == 0.0
 
 
