@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from src.config import AgentConfig, load_config
+from src.config import validate_model_redaction
 from src.prompts import agent_system_prompt, triage_system_prompt
 
 
@@ -165,6 +167,28 @@ def test_platform_settings_default_to_single_user_dev():
     assert settings.contacts_path == "contacts.yaml"
     assert settings.llm_streaming_enabled is True
     assert settings.polling_fallback_enabled is True
+
+
+def test_model_redaction_can_be_disabled_for_local_profiles(monkeypatch):
+    monkeypatch.delenv("AGENT_LLM_PROFILE", raising=False)
+    config = SimpleNamespace(llm_profile="local", redact_for_model=False)
+
+    validate_model_redaction(config)
+
+
+def test_model_redaction_is_required_for_hosted_profiles(monkeypatch):
+    monkeypatch.delenv("AGENT_LLM_PROFILE", raising=False)
+    config = SimpleNamespace(llm_profile="prod", redact_for_model=False)
+
+    with pytest.raises(RuntimeError, match="AGENT_REDACT_FOR_MODEL=false is not allowed"):
+        validate_model_redaction(config)
+
+
+def test_model_redaction_accepts_hosted_profile_when_enabled(monkeypatch):
+    monkeypatch.delenv("AGENT_LLM_PROFILE", raising=False)
+    config = SimpleNamespace(llm_profile="dev", redact_for_model=True)
+
+    validate_model_redaction(config)
 
 
 def test_dlq_settings_default_to_local_backend():
