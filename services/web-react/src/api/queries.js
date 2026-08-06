@@ -1248,14 +1248,14 @@ export function useDismissCategoryProposal() {
 
 // --- Junk gate ---
 
-export function useJunkQuery() {
+export function useJunkQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
     queryKey: ['junk', instanceId],
     queryFn: () => api('/api/agent/junk'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -1281,14 +1281,14 @@ export function useJunkSuggestionsQuery(enabled = false) {
   });
 }
 
-export function useStarterRulesQuery() {
+export function useStarterRulesQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
     queryKey: ['starter-rules', instanceId],
     queryFn: () => api('/api/agent/rules/starter'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -1318,14 +1318,14 @@ export function useRulesQuery() {
   });
 }
 
-export function useRuleSuggestionsQuery() {
+export function useRuleSuggestionsQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
     queryKey: ['rule-suggestions', instanceId],
     queryFn: () => api('/api/agent/rules/suggestions'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
