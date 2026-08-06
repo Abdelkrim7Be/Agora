@@ -96,7 +96,7 @@ services:
       # Local-first quarantine classifier (Ollama, OpenAI-compatible endpoint).
       # Must match the email-agent's model: a second resident model does not fit
       # beside it on a small GPU, and the two evict each other on every call.
-      SECURITY_SANITIZE_MODEL: ${SECURITY_SANITIZE_MODEL:-openai:qwen3:4b-8k}
+      SECURITY_SANITIZE_MODEL: ${SECURITY_SANITIZE_MODEL:-openai:qwen3:4b-4k}
       SECURITY_SANITIZE_ENDPOINT: ${SECURITY_SANITIZE_ENDPOINT:-http://ollama:11434/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-ollama-local}
       SECURITY_SECRET_MANAGER_BACKEND: ${SECURITY_SECRET_MANAGER_BACKEND:-disabled}

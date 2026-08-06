@@ -19,6 +19,10 @@ class Settings:
 
     # Local-first: quarantine classifier runs on Ollama via the OpenAI-compatible
     # endpoint. Clear SECURITY_SANITIZE_ENDPOINT to use a hosted provider model.
+    # Fallback only — every deployment sets SECURITY_SANITIZE_MODEL explicitly to
+    # whatever the agent runs, so the two share one resident model. Left on the
+    # small local model because this default is what an unconfigured run (and the
+    # test suite) reaches for.
     sanitize_model: str = os.getenv("SECURITY_SANITIZE_MODEL", "openai:qwen2.5:3b-8k")
     # Ceiling on the classifier's reply. Its output is a small structured verdict,
     # so a few hundred tokens is generous — but the call had no cap at all, and a
@@ -29,11 +33,12 @@ class Settings:
     sanitize_endpoint: str = os.getenv("SECURITY_SANITIZE_ENDPOINT", "http://localhost:11434/v1")
     sanitize_always_llm: bool = os.getenv("SECURITY_SANITIZE_ALWAYS_LLM", "false").lower() == "true"
     sanitize_max_chars: int = int(os.getenv("SECURITY_SANITIZE_MAX_CHARS", "6000"))
-    sanitize_timeout: float | None = (
-        float(os.getenv("SECURITY_SANITIZE_TIMEOUT"))
-        if os.getenv("SECURITY_SANITIZE_TIMEOUT")
-        else None
-    )
+    # Default 60s rather than None. Unbounded, a classifier that stops producing
+    # tokens holds the request — and the single inference slot behind it — for as
+    # long as the model keeps going, which is how one message stalled the whole
+    # platform. The sanitize path already degrades safely on error, so a timeout
+    # is just another unavailable classifier.
+    sanitize_timeout: float | None = float(os.getenv("SECURITY_SANITIZE_TIMEOUT", "60"))
     # Same quarantine LLM as /sanitize, reused for the /audit-output escalation path.
     output_audit_always_llm: bool = os.getenv("SECURITY_OUTPUT_AUDIT_ALWAYS_LLM", "false").lower() == "true"
 
