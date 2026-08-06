@@ -88,12 +88,13 @@ export default function RulesPage() {
     enabled: true, allowedSenders: '', allowedDomains: '', blockedSenders: '', blockedDomains: '',
     gmailCategories: true, bulkHeaders: true, senderHeuristics: true,
   });
+  const [loadSecondaryRulesData, setLoadSecondaryRulesData] = useState(false);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
   const query = useRulesQuery();
-  const junkQuery = useJunkQuery();
-  const suggestionsQuery = useRuleSuggestionsQuery();
+  const junkQuery = useJunkQuery(loadSecondaryRulesData);
+  const suggestionsQuery = useRuleSuggestionsQuery(loadSecondaryRulesData);
   const saveYaml = useSaveRulesYaml();
   const saveRule = useSaveRule();
   const deleteRule = useDeleteRule();
@@ -107,6 +108,12 @@ export default function RulesPage() {
   const parsed = query.data?.parsed;
   const rules = parsed?.rules || [];
   const suggestions = suggestionsQuery.data?.suggestions || [];
+
+  useEffect(() => {
+    if (loadSecondaryRulesData || (!query.data && !query.error)) return undefined;
+    const timer = setTimeout(() => setLoadSecondaryRulesData(true), 750);
+    return () => clearTimeout(timer);
+  }, [loadSecondaryRulesData, query.data, query.error]);
 
   useEffect(() => {
     if (!query.data) return;
@@ -252,7 +259,7 @@ export default function RulesPage() {
     }
   };
 
-  const starterQuery = useStarterRulesQuery();
+  const starterQuery = useStarterRulesQuery(loadSecondaryRulesData);
   const applyStarter = useApplyStarterRules();
   const [starterPicks, setStarterPicks] = useState([]);
 
