@@ -248,6 +248,26 @@ def validate_model_redaction(config: Settings | None = None) -> None:
     )
 
 
+def validate_gmail_webhook_config(config: Settings | None = None) -> None:
+    config = config or settings
+    if not config.gmail_webhook_enabled:
+        return
+    missing = []
+    if not config.gmail_webhook_topic.strip():
+        missing.append("GMAIL_WEBHOOK_TOPIC")
+    if not config.gmail_webhook_secret.strip():
+        missing.append("GMAIL_WEBHOOK_SECRET")
+    if missing:
+        raise RuntimeError(
+            "Gmail webhooks are enabled but required settings are missing: "
+            + ", ".join(missing)
+        )
+    if not config.polling_fallback_enabled:
+        raise RuntimeError(
+            "GMAIL_POLLING_FALLBACK_ENABLED must stay true while Gmail webhooks are enabled."
+        )
+
+
 # --- Behavior config (config.yaml) — separate concern from Settings above. ---
 # Settings = secrets & infra from .env (never committed).
 # AgentConfig = behavior & persona from config.yaml (committed, customizable).
