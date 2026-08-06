@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.config import AgentConfig, load_config
-from src.config import validate_model_redaction
+from src.config import validate_gmail_webhook_config, validate_model_redaction
 from src.prompts import agent_system_prompt, triage_system_prompt
 
 
@@ -189,6 +189,41 @@ def test_model_redaction_accepts_hosted_profile_when_enabled(monkeypatch):
     config = SimpleNamespace(llm_profile="dev", redact_for_model=True)
 
     validate_model_redaction(config)
+
+
+def test_gmail_webhook_requires_topic_and_secret():
+    config = SimpleNamespace(
+        gmail_webhook_enabled=True,
+        gmail_webhook_topic="",
+        gmail_webhook_secret="",
+        polling_fallback_enabled=True,
+    )
+
+    with pytest.raises(RuntimeError, match="GMAIL_WEBHOOK_TOPIC, GMAIL_WEBHOOK_SECRET"):
+        validate_gmail_webhook_config(config)
+
+
+def test_gmail_webhook_keeps_polling_fallback_enabled():
+    config = SimpleNamespace(
+        gmail_webhook_enabled=True,
+        gmail_webhook_topic="projects/acme/topics/gmail-push",
+        gmail_webhook_secret="secret",
+        polling_fallback_enabled=False,
+    )
+
+    with pytest.raises(RuntimeError, match="GMAIL_POLLING_FALLBACK_ENABLED"):
+        validate_gmail_webhook_config(config)
+
+
+def test_gmail_webhook_accepts_complete_push_config():
+    config = SimpleNamespace(
+        gmail_webhook_enabled=True,
+        gmail_webhook_topic="projects/acme/topics/gmail-push",
+        gmail_webhook_secret="secret",
+        polling_fallback_enabled=True,
+    )
+
+    validate_gmail_webhook_config(config)
 
 
 def test_dlq_settings_default_to_local_backend():
