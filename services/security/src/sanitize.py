@@ -138,13 +138,18 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
                 {"role": "system", "content": SANITIZE_SYSTEM_PROMPT},
                 {"role": "user", "content": _wrap(req)},
             ])
+            # A model can miscount offsets and still judge correctly: keep the
+            # verdict, drop only the redaction.
+            llm_injection = verdict.injection
+            llm_spam = verdict.spam
+            llm_reasons = verdict.reasons
             spans = _validated_spans(req.content, verdict.spans)
             if spans is None:
+                if verdict.spans:
+                    llm_reasons = [*llm_reasons, "unusable_redaction_spans"]
+                # Content stays raw, so it must not be treated as cleaned.
                 unavailable = True
             else:
-                llm_injection = verdict.injection
-                llm_spam = verdict.spam
-                llm_reasons = verdict.reasons
                 cleaned = _apply_spans(req.content, spans)
         except Exception:
             # Fail safe: preserve the trust verdict and never hard-fail the request.
