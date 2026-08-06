@@ -80,9 +80,24 @@ public class GatewayProperties {
          * so this has to follow the deployment's inference speed.
          */
         private int responseTimeoutSeconds = 150;
+        /**
+         * How long a per-instance summary may be reused, in seconds.
+         *
+         * Each summary costs three upstream calls and the listing builds one per
+         * instance, so without this the landing page is O(instances x 3) round
+         * trips every view. These are dashboard counters, not decisions. Set 0 to
+         * disable — which is what the tests do, so a cached figure from one case
+         * can never be served to the next.
+         */
+        private int summaryCacheSeconds = 15;
 
         public String getEmailAgentUrl() { return emailAgentUrl; }
         public void setEmailAgentUrl(String emailAgentUrl) { this.emailAgentUrl = emailAgentUrl; }
+
+        public int getSummaryCacheSeconds() { return summaryCacheSeconds; }
+        public void setSummaryCacheSeconds(int summaryCacheSeconds) {
+            this.summaryCacheSeconds = summaryCacheSeconds;
+        }
 
         public int getResponseTimeoutSeconds() { return responseTimeoutSeconds; }
         public void setResponseTimeoutSeconds(int responseTimeoutSeconds) {
