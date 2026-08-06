@@ -139,3 +139,51 @@ def test_a_zero_ttl_disables_caching(gmail_calls, monkeypatch):
         client.get("/inbox?limit=25")
 
     assert len(gmail_calls) == 2
+
+
+def test_an_expired_listing_is_served_immediately_instead_of_blocking(monkeypatch):
+    """Past its TTL the cached listing is stale, not wrong. Blocking the view on a
+    live Gmail round trip to confirm that is what made opening Messages feel like
+    the app had hung — especially as the poller invalidates the cache each cycle."""
+    import time as _time
+    from src import api
+
+    key = ("someone", "an-instance", "inbox", 25)
+    monkeypatch.setattr(api, "_INBOX_CACHE", {})
+    monkeypatch.setattr(api, "_INBOX_CACHE_TTL_SECONDS", 60.0)
+    monkeypatch.setattr(api, "_INBOX_STALE_SECONDS", 900.0)
+    # No shared backend in this test: exercise the local half.
+    monkeypatch.setattr(api, "cache_get_json", lambda _key: None)
+    monkeypatch.setattr(api, "cache_set_json", lambda *a, **k: False)
+
+    api._inbox_cache_put(key, [{"id": "m1"}])
+
+    fresh, stale = api._inbox_cache_get(key)
+    assert fresh == [{"id": "m1"}] and stale is False
+
+    # Age it past the TTL but inside the stale window.
+    stored_at, messages = api._INBOX_CACHE[key]
+    api._INBOX_CACHE[key] = (stored_at - 120, messages)
+    served, stale = api._inbox_cache_get(key)
+    assert served == [{"id": "m1"}]
+    assert stale is True, "an expired-but-recent listing must still be served"
+
+    # Past the stale window it is dropped and the caller must fetch.
+    api._INBOX_CACHE[key] = (_time.time() - 5000, messages)
+    assert api._inbox_cache_get(key) == (None, False)
+
+
+def test_only_one_background_refresh_runs_per_listing(monkeypatch):
+    from src import api
+
+    key = ("someone", "an-instance", "inbox", 25)
+    monkeypatch.setattr(api, "_INBOX_REFRESHING", set())
+    scheduled = []
+    monkeypatch.setattr(api.asyncio, "create_task", lambda coro: scheduled.append(coro) or coro.close())
+
+    api._schedule_inbox_refresh(key, "inbox", 25)
+    api._schedule_inbox_refresh(key, "inbox", 25)
+
+    # The second visit while a refresh is in flight must not queue another
+    # Gmail round trip behind the first.
+    assert len(scheduled) == 1

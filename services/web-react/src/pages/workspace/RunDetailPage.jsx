@@ -31,12 +31,21 @@ export default function RunDetailPage() {
         <div className="detail-panel card">
           <div className="card-header">
             <div>
-              <h2>{detail.email?.subject || 'Exécution sans objet'}</h2>
+              {/* A run stopped by the junk gate never reached the graph, so it has
+                  no email state — the registry still knows who wrote and about what. */}
+              <h2>{detail.email?.subject || detail.subject || 'Exécution sans objet'}</h2>
               <div className="meta">
-                <span>{detail.email?.author || 'Expéditeur inconnu'}</span>
+                <span>{detail.email?.author || detail.author || 'Expéditeur inconnu'}</span>
                 <span className="status-pill warn">{statusLabelFr(detail.status)}</span>
                 <span>{statusLabelFr(detail.classification || 'unclassified')}</span>
+                {detail.category_display_name ? <span>{detail.category_display_name}</span> : null}
               </div>
+              {detail.junk_reason ? (
+                <p className="review-reason">
+                  <strong>Filtré automatiquement :</strong> {detail.junk_reason}. L’agent n’a pas
+                  été sollicité pour ce message.
+                </p>
+              ) : null}
             </div>
             <span className="badge">{detail.run_id}</span>
           </div>

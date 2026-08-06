@@ -3734,7 +3734,15 @@ async def delete_memory(request: Request) -> dict:
 # mailbox drops the entry so the next read is authoritative.
 _INBOX_CACHE: dict[tuple, tuple[float, list[dict]]] = {}
 _INBOX_CACHE_TTL_SECONDS = float(os.getenv("AGENT_INBOX_CACHE_TTL_SECONDS", "60"))
+# How long an expired listing may still be shown while a fresh one is fetched.
+# Past the TTL the entry is stale, not wrong: the messages are still the ones in
+# the mailbox, only the "is there anything newer" answer has aged. Blocking the
+# view on a live Gmail round trip to find out is what made opening Messages feel
+# like the app had hung — and the poller invalidates this cache every cycle, so
+# that round trip was landing on ordinary visits, not rare ones.
+_INBOX_STALE_SECONDS = float(os.getenv("AGENT_INBOX_STALE_SECONDS", "900"))
 _INBOX_CACHE_LOCK = threading.Lock()
+_INBOX_REFRESHING: set[tuple] = set()
 
 
 def _inbox_cache_key(key: tuple) -> str:
@@ -3746,28 +3754,32 @@ def _inbox_cache_prefix(user_id: str | None, agent_instance_id: str | None) -> s
     return f"agora:inbox:{user_id}:{agent_instance_id}:"
 
 
-def _inbox_cache_get(key: tuple) -> list[dict] | None:
+def _inbox_cache_get(key: tuple) -> tuple[list[dict] | None, bool]:
+    """Return (messages, is_stale). Stale means "show this now, refresh behind"."""
     if _INBOX_CACHE_TTL_SECONDS <= 0:
-        return None
+        return None, False
     # Shared first: the poller mutates the mailbox in its own process, and only a
     # shared entry can be invalidated by whichever process did the mutating.
     shared = cache_get_json(_inbox_cache_key(key))
     if shared is not None:
-        return shared
+        return shared, False
     with _INBOX_CACHE_LOCK:
         entry = _INBOX_CACHE.get(key)
         if entry is None:
-            return None
+            return None, False
         stored_at, messages = entry
-        if (time.time() - stored_at) > _INBOX_CACHE_TTL_SECONDS:
+        age = time.time() - stored_at
+        if age > _INBOX_STALE_SECONDS:
             _INBOX_CACHE.pop(key, None)
-            return None
-        return messages
+            return None, False
+        return messages, age > _INBOX_CACHE_TTL_SECONDS
 
 
 def _inbox_cache_put(key: tuple, messages: list[dict]) -> None:
     if _INBOX_CACHE_TTL_SECONDS <= 0:
         return
+    # The shared copy expires at the TTL; the local one is kept for the whole
+    # stale window so an expired entry is still there to serve immediately.
     cache_set_json(_inbox_cache_key(key), messages, _INBOX_CACHE_TTL_SECONDS)
     with _INBOX_CACHE_LOCK:
         _INBOX_CACHE[key] = (time.time(), [dict(message) for message in messages])
@@ -3785,6 +3797,53 @@ def _inbox_cache_clear(user_id: str | None = None, agent_instance_id: str | None
             return
         for key in [k for k in _INBOX_CACHE if k[0] == user_id and k[1] == agent_instance_id]:
             _INBOX_CACHE.pop(key, None)
+
+
+def _sent_row(item: dict) -> dict:
+    """One row of the sent mailbox, shaped like an inbox row so the view is shared."""
+    return {
+        "id": item.get("id"),
+        "thread_id": item.get("thread_id"),
+        "from": item.get("to", ""),
+        "to": item.get("to", ""),
+        "subject": item.get("subject", ""),
+        "snippet": item.get("body", "")[:240],
+        "date": item.get("date", ""),
+        "unread": False,
+        "mailbox": "sent",
+    }
+
+
+def _schedule_inbox_refresh(cache_key: tuple, mailbox: str, limit: int) -> None:
+    """Re-read the mailbox behind a stale response, once per key at a time."""
+    with _INBOX_CACHE_LOCK:
+        if cache_key in _INBOX_REFRESHING:
+            return
+        _INBOX_REFRESHING.add(cache_key)
+
+    user_id, instance_id, _, _ = cache_key
+
+    async def refresh() -> None:
+        try:
+            with user_context(user_id), agent_instance_context(instance_id):
+                provider = get_provider()
+                if mailbox == "sent":
+                    fresh = await asyncio.to_thread(provider.fetch_sent, limit)
+                    messages = [_sent_row(item) for item in fresh if item.get("id")]
+                else:
+                    messages = await asyncio.to_thread(provider.list_inbox, limit)
+                    for message in messages:
+                        message["mailbox"] = "inbox"
+                _inbox_cache_put(cache_key, messages)
+        except Exception as exc:
+            # A failed refresh leaves the stale entry in place, which is the
+            # whole point: the view keeps working while the mailbox is away.
+            logger.warning("background inbox refresh failed for %s: %s", instance_id, exc)
+        finally:
+            with _INBOX_CACHE_LOCK:
+                _INBOX_REFRESHING.discard(cache_key)
+
+    asyncio.create_task(refresh())
 
 
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
@@ -3840,29 +3899,19 @@ async def inbox(
     user_id = current_user_id()
     user_dept = _request_user_dept(request)
     cache_key = (user_id, current_agent_instance_id(), mailbox, limit)
-    cached = None if refresh else _inbox_cache_get(cache_key)
+    cached, is_stale = (None, False) if refresh else _inbox_cache_get(cache_key)
     if cached is not None:
         messages = [dict(message) for message in cached]
+        if is_stale:
+            # Hand back what we have and go find out what changed, rather than
+            # making the person wait on Google to be told mostly the same thing.
+            _schedule_inbox_refresh(cache_key, mailbox, limit)
     else:
         try:
             provider = get_provider()
             if mailbox == "sent":
                 sent = await asyncio.to_thread(provider.fetch_sent, limit)
-                messages = [
-                    {
-                        "id": item.get("id"),
-                        "thread_id": item.get("thread_id"),
-                        "from": item.get("to", ""),
-                        "to": item.get("to", ""),
-                        "subject": item.get("subject", ""),
-                        "snippet": item.get("body", "")[:240],
-                        "date": item.get("date", ""),
-                        "unread": False,
-                        "mailbox": "sent",
-                    }
-                    for item in sent
-                    if item.get("id")
-                ]
+                messages = [_sent_row(item) for item in sent if item.get("id")]
             else:
                 messages = await asyncio.to_thread(provider.list_inbox, limit)
                 for message in messages:
@@ -4045,14 +4094,26 @@ async def get_run(request: Request, run_id: str) -> RunResponse:
 
 @app.get("/run/{run_id}/detail")
 async def get_run_detail(request: Request, run_id: str) -> dict:
+    """Read-only view of one run.
+
+    Deliberately does not require graph state. Plenty of runs never have any:
+    a message stopped by the junk gate is filed straight into the registry
+    without ever reaching the graph, so demanding a checkpoint here answered
+    "this run has expired" for runs that had simply never needed one. What the
+    registry knows — sender, subject, verdict, why it was gated — is the whole
+    point of the page, and it is always there.
+    """
     graph = request.app.state.graph
-    config = await _require_run(graph, run_id)
-    state = await graph.aget_state(config)
-    detail = _run_detail(state.values, run_id)
-    detail["trace"] = list_traces(run_id=run_id, agent_instance_id=current_agent_instance_id(), limit=500)
     record = get_run_record(
         run_id, user_id=None, agent_instance_id=current_agent_instance_id()
     )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+
+    state = await graph.aget_state(_thread_config(run_id))
+    detail = _run_detail(state.values, run_id) if state.values else {"run_id": run_id, "messages": []}
+    detail["has_graph_state"] = bool(state.values)
+    detail["trace"] = list_traces(run_id=run_id, agent_instance_id=current_agent_instance_id(), limit=500)
     _require_dept_access(request, record)
     if record is not None:
         record = _annotate_run_record(record)
@@ -4072,6 +4133,10 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
             "overdue_by_seconds": record.get("overdue_by_seconds"),
             "escalated_at": record.get("escalated_at"),
             "escalation_target": record.get("escalation_target"),
+            "subject": record.get("subject"),
+            "author": record.get("author"),
+            "junk_reason": record.get("junk_reason"),
+            "decision": record.get("decision"),
         })
     return detail
 
