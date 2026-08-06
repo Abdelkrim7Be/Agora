@@ -28,6 +28,16 @@ DEFAULT_COSTS_PATH = SERVICE_ROOT / "logs" / "llm_costs.jsonl"
 PRICES: dict[str, dict[str, float]] = {
     "groq:llama-3.3-70b-versatile": {"in": 0.54, "out": 0.79},
     "llama-3.3-70b-versatile": {"in": 0.54, "out": 0.79},
+    # Mistral API public list prices per million tokens, checked 2026-08-06.
+    # Override in costs.yaml if the provider price or accounting currency changes.
+    "mistral/mistral-small-latest": {"in": 0.15, "out": 0.60},
+    "mistral/mistral-small-2603": {"in": 0.15, "out": 0.60},
+    "mistral-small-latest": {"in": 0.15, "out": 0.60},
+    "mistral-small-2603": {"in": 0.15, "out": 0.60},
+    "mistral/mistral-large-latest": {"in": 0.50, "out": 1.50},
+    "mistral/mistral-large-2512": {"in": 0.50, "out": 1.50},
+    "mistral-large-latest": {"in": 0.50, "out": 1.50},
+    "mistral-large-2512": {"in": 0.50, "out": 1.50},
     # Local Ollama models: estimated compute cost (electricity/amortization),
     # not a provider invoice — keeps the cost dashboard meaningful locally.
     # Every locally served model needs a row here: an unpriced one silently

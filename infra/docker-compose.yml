@@ -178,6 +178,7 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY}
     volumes:
       - ./litellm.config.yaml:/app/config.yaml:ro
     networks:
