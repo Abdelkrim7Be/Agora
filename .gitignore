@@ -70,6 +70,7 @@ htmlcov/
 
 # Planning docs (local only)
 services/saas-hardening.md
+docs/plans/
 
 # Local planning docs
 RAPPORT_AVANCEMENT.md
