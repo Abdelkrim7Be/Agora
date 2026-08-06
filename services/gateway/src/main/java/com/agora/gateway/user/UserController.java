@@ -56,14 +56,17 @@ public class UserController {
             boolean enabled,
             boolean pendingInvitation,
             boolean invitationExpired,
-            Instant invitationExpiresAt
+            Instant invitationExpiresAt,
+            boolean mfaEnabled,
+            String displayName
     ) {
         static UserResponse from(AppUser u, UserInvitation invitation) {
             Instant now = Instant.now();
             boolean pending = invitation != null && invitation.isUsable(now);
             boolean expired = invitation != null && !invitation.isConsumed() && invitation.isExpired(now);
             return new UserResponse(u.getId(), u.getUsername(), u.getEmail(), u.getRole(), u.getDepartment(),
-                    u.isEnabled(), pending, expired, invitation != null ? invitation.getExpiresAt() : null);
+                    u.isEnabled(), pending, expired, invitation != null ? invitation.getExpiresAt() : null,
+                    u.isMfaEnabled(), u.getDisplayName());
         }
     }
 
@@ -220,6 +223,27 @@ public class UserController {
             return "password must be at least 12 characters";
         }
         return null;
+    }
+
+    /**
+     * Clear an account's second factor.
+     *
+     * Every other MFA route is self-service — you prove possession of the device
+     * to change anything about it. That leaves nobody able to help someone who
+     * lost the device, so the account was locked out permanently. This is the
+     * recovery path, and it is why it is administrator-only and audited: it
+     * removes a security control from someone else's account.
+     */
+    @PostMapping("/{id}/mfa/reset")
+    public ResponseEntity<?> resetMfa(@PathVariable Long id, Authentication auth) {
+        return users.findById(id).map(u -> {
+            u.setMfaEnabled(false);
+            u.setMfaSecret(null);
+            u.getMfaRecoveryCodeHashes().clear();
+            users.save(u);
+            audit(auth, "reset_user_mfa", "/users/" + id + "/mfa/reset", "success");
+            return ResponseEntity.ok(Map.of("status", "reset"));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PostMapping("/{id}/disable")

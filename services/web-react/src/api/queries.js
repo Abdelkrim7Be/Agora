@@ -222,6 +222,15 @@ export function useChangeMyPassword() {
   });
 }
 
+export function useResetUserMfa() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/mfa/reset`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
 export function useSetUserPassword() {
   const { api } = useApi();
   return useMutation({
