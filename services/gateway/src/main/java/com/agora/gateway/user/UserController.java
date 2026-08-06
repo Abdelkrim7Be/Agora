@@ -80,7 +80,10 @@ public class UserController {
             String department
     ) {}
 
-    public record UpdateUserRequest(@NotBlank String role, String department) {}
+    public record UpdateUserRequest(@NotBlank String role, String department, String email) {}
+
+    /** Admin setting someone else's password: no current password, they do not have it. */
+    public record SetPasswordRequest(@NotBlank String password) {}
 
     @GetMapping
     public List<UserResponse> list() {
@@ -180,10 +183,43 @@ public class UserController {
         return users.findById(id).map(u -> {
             u.setRole(role);
             u.setDepartment(req.department());
+            if (req.email() != null) {
+                u.setEmail(req.email().isBlank() ? null : req.email().strip());
+            }
             users.save(u);
             audit(auth, "update_user", "/users/" + id, "success");
             return ResponseEntity.ok(UserResponse.from(u, currentInvitation(u)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Set another account's password.
+     *
+     * Kept separate from the profile update so it never rides along with a role
+     * change by accident, and so the audit trail records the two as different
+     * actions. The new password is never echoed back or logged.
+     */
+    @PutMapping("/{id}/password")
+    public ResponseEntity<?> setPassword(@PathVariable Long id,
+                                         @Valid @RequestBody SetPasswordRequest req,
+                                         Authentication auth) {
+        String rejection = rejectWeakPassword(req.password());
+        if (rejection != null) {
+            return ResponseEntity.badRequest().body(Map.of("error", rejection));
+        }
+        return users.findById(id).map(u -> {
+            u.setPasswordHash(passwordEncoder.encode(req.password()));
+            users.save(u);
+            audit(auth, "set_user_password", "/users/" + id + "/password", "success");
+            return ResponseEntity.ok(Map.of("status", "updated"));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    static String rejectWeakPassword(String password) {
+        if (password == null || password.strip().length() < 12) {
+            return "password must be at least 12 characters";
+        }
+        return null;
     }
 
     @PostMapping("/{id}/disable")

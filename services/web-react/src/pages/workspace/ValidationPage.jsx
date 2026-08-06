@@ -394,6 +394,19 @@ export default function ValidationPage() {
         </select>
         <input aria-label="Recherche expéditeur ou sujet" placeholder="Rechercher" value={search} onChange={(event) => setSearch(event.target.value)} />
         <input aria-label="Depuis le" type="date" value={since} onChange={(event) => setSince(event.target.value)} />
+        {canApprove && category && runs.length ? (
+          <button
+            className="primary"
+            type="button"
+            title={`Approuver et envoyer les ${runs.length} validation(s) de ce cas métier`}
+            onClick={() => handleBulk('approve', runs.map((run) => run.run_id))}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">done_all</span>
+            <span>
+              Approuver tout « {availableCategories.find((c) => c.name === category)?.display_name || category} » ({runs.length})
+            </span>
+          </button>
+        ) : null}
         <span className="counter">{runs.length} en attente</span>
         <span className="kbd-legend" title="Raccourcis clavier disponibles">Clavier disponible</span>
         <span className="toolbar-spacer"></span>

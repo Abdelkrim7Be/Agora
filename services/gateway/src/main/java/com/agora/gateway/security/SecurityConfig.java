@@ -62,6 +62,13 @@ public class SecurityConfig {
                 // Both legs are throttled globally in InvitationController.
                 .requestMatchers(HttpMethod.GET, "/auth/invite/*").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/invite/*").permitAll()
+                // Every signed-in account may read and edit its own profile and rotate
+                // its own password. The account is taken from the token, never from
+                // the request, so there is no id to swap for someone else's.
+                .requestMatchers(HttpMethod.GET, "/me").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/me").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/me/password").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/users/*/password").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/users").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/users/*").hasRole("ADMIN")

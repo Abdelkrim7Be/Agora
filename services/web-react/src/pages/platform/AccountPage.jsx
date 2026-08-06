@@ -4,6 +4,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { currentUsername } from '../../utils/jwt';
+import { useBusy } from '../../contexts/BusyContext';
+import { useMyProfileQuery, useUpdateMyProfile, useChangeMyPassword } from '../../api/queries';
 
 function profileStorageKey(username) {
   return `agora.profile.${username || 'anonymous'}`;
@@ -55,7 +57,22 @@ export default function AccountPage() {
   const [profile, setProfileState] = useState(() => loadProfile(username));
   const [displayName, setDisplayName] = useState(profile.displayName || '');
   const [title, setTitle] = useState(profile.title || '');
+  const [email, setEmail] = useState('');
+  const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
   const fileInputRef = useRef(null);
+  const { runBusy } = useBusy();
+  const meQuery = useMyProfileQuery();
+  const updateMe = useUpdateMyProfile();
+  const changePassword = useChangeMyPassword();
+
+  // The display name and e-mail live on the account, not in this browser: they
+  // used to be localStorage-only, so they vanished on another machine and
+  // nobody else ever saw them.
+  useEffect(() => {
+    if (!meQuery.data) return;
+    setEmail(meQuery.data.email || '');
+    if (meQuery.data.displayName) setDisplayName(meQuery.data.displayName);
+  }, [meQuery.data]);
 
   useEffect(() => {
     setStatus('Compte chargé.', 'ok');
@@ -91,9 +108,41 @@ export default function AccountPage() {
     setStatus('Photo de profil retirée.', 'ok');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    // The photo and job title stay local (the account has no column for them);
+    // the name and address are the account's own and go to the server.
     updateProfile({ displayName: displayName.trim(), title: title.trim() });
-    setStatus('Profil enregistré.', 'ok');
+    try {
+      await runBusy('Enregistrement du profil', () => updateMe.mutateAsync({
+        displayName: displayName.trim(),
+        email: email.trim(),
+      }));
+      setStatus('Profil enregistré.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible d’enregistrer le profil : ${error.message}`, 'error');
+    }
+  };
+
+  const handlePasswordChange = async (event) => {
+    event.preventDefault();
+    if (passwords.next !== passwords.confirm) {
+      setStatus('Les deux nouveaux mots de passe ne correspondent pas.', 'error');
+      return;
+    }
+    if (passwords.next.length < 12) {
+      setStatus('Le nouveau mot de passe doit faire au moins 12 caractères.', 'error');
+      return;
+    }
+    try {
+      await runBusy('Changement du mot de passe', () => changePassword.mutateAsync({
+        currentPassword: passwords.current,
+        newPassword: passwords.next,
+      }));
+      setPasswords({ current: '', next: '', confirm: '' });
+      setStatus('Mot de passe modifié. Il servira à votre prochaine connexion.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible de changer le mot de passe : ${error.message}`, 'error');
+    }
   };
 
   return (
@@ -128,6 +177,9 @@ export default function AccountPage() {
           <label>Fonction
             <input value={title} placeholder="ex. Responsable RH" maxLength={60} onChange={(event) => setTitle(event.target.value)} />
           </label>
+          <label>Adresse e-mail
+            <input type="email" value={email} placeholder="vous@exemple.com" onChange={(event) => setEmail(event.target.value)} />
+          </label>
           <button type="button" className="primary" onClick={handleSave}>Enregistrer le profil</button>
         </div>
         <div className="summary-grid">
@@ -140,6 +192,48 @@ export default function AccountPage() {
           <div><span>Statut de l’instance</span><strong>{String(currentInstance?.status || 'active').toLowerCase()}</strong></div>
           <div><span>Instances visibles</span><strong>{activeCount} actives / {inactiveCount} inactives</strong></div>
         </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h2>Mot de passe</h2>
+            <div className="meta"><span>Au moins 12 caractères. Vous restez connecté après le changement.</span></div>
+          </div>
+        </div>
+        <form className="profile-form" onSubmit={handlePasswordChange}>
+          <label>Mot de passe actuel
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={passwords.current}
+              onChange={(event) => setPasswords({ ...passwords, current: event.target.value })}
+              required
+            />
+          </label>
+          <label>Nouveau mot de passe
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={passwords.next}
+              onChange={(event) => setPasswords({ ...passwords, next: event.target.value })}
+              required
+            />
+          </label>
+          <label>Confirmer le nouveau mot de passe
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={passwords.confirm}
+              onChange={(event) => setPasswords({ ...passwords, confirm: event.target.value })}
+              required
+            />
+          </label>
+          <button type="submit" className="primary">
+            <span className="material-symbols-outlined" aria-hidden="true">key</span>
+            <span>Changer le mot de passe</span>
+          </button>
+        </form>
       </div>
     </>
   );

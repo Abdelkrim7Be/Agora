@@ -5,6 +5,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { useDialog } from '../../contexts/DialogContext';
 import { currentUsername } from '../../utils/jwt';
 import { agentTypeLabel, formatDateTimeFr, roleLabelFr } from '../../utils/format';
 import {
@@ -13,6 +14,7 @@ import {
   useSetUserEnabled,
   useInviteUser,
   useUpdateUser,
+  useSetUserPassword,
   useAgentInstancesQuery,
   useAgentTypesQuery,
   useInstanceGrantsQuery,
@@ -30,11 +32,13 @@ function onboardingState(user) {
 export default function UsersPage() {
   const { setStatus } = useStatus();
   const { token } = useAuth();
+  const { promptDialog } = useDialog();
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
   const inviteUser = useInviteUser();
   const updateUser = useUpdateUser();
+  const setUserPassword = useSetUserPassword();
   const instancesQuery = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const grantsQuery = useInstanceGrantsQuery(instancesQuery.data || [], true);
@@ -79,6 +83,7 @@ export default function UsersPage() {
   const editFormFor = (user) => editForms[user.id] || {
     role: user.role || 'viewer',
     department: user.department || '',
+    email: user.email || '',
   };
 
   const setEditForm = (user, patch) => {
@@ -121,6 +126,30 @@ export default function UsersPage() {
     setStatus('Lien d’invitation copié.', 'ok');
   };
 
+  // An administrator resets a password without knowing the old one — that is the
+  // point of a reset. It is deliberately a separate action from the role/e-mail
+  // save so it can never ride along with an unrelated edit.
+  const handleSetPassword = async (user) => {
+    const password = await promptDialog({
+      title: `Définir le mot de passe de ${user.username}`,
+      message: 'Au moins 12 caractères. Communiquez-le par un canal sûr — il ne sera plus affiché ensuite.',
+      placeholder: 'Nouveau mot de passe',
+      confirmLabel: 'Définir',
+      required: true,
+    });
+    if (!password) return;
+    if (password.length < 12) {
+      setStatus('Le mot de passe doit faire au moins 12 caractères.', 'error');
+      return;
+    }
+    try {
+      await setUserPassword.mutateAsync({ id: user.id, password });
+      setStatus(`Mot de passe de ${user.username} défini.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de définir le mot de passe : ${error.message}`, 'error');
+    }
+  };
+
   const handleToggle = async (user) => {
     const enabling = !user.enabled;
     if (!enabling && user.username === username) {
@@ -138,7 +167,12 @@ export default function UsersPage() {
   const handleUpdateUser = async (user) => {
     const edit = editFormFor(user);
     try {
-      await updateUser.mutateAsync({ id: user.id, role: edit.role, department: edit.department });
+      await updateUser.mutateAsync({
+        id: user.id,
+        role: edit.role,
+        department: edit.department,
+        email: edit.email,
+      });
       setStatus(`Accès de ${user.username} mis à jour.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de mettre à jour ${user.username} : ${error.message}`, 'error');
@@ -206,7 +240,15 @@ export default function UsersPage() {
                 return (
                   <tr key={user.id}>
                     <td>{user.username}</td>
-                    <td>{user.email || '—'}</td>
+                    <td>
+                      <input
+                        type="email"
+                        value={edit.email}
+                        placeholder="aucune adresse"
+                        aria-label={`Adresse e-mail de ${user.username}`}
+                        onChange={(event) => setEditForm(user, { email: event.target.value })}
+                      />
+                    </td>
                     <td>
                       <select value={edit.role} onChange={(event) => setEditForm(user, { role: event.target.value })}>
                         <option value="viewer">lecteur</option>
@@ -232,6 +274,9 @@ export default function UsersPage() {
                       </button>
                       <button type="button" onClick={() => handleInvite(user)}>
                         Inviter
+                      </button>
+                      <button type="button" onClick={() => handleSetPassword(user)}>
+                        Mot de passe
                       </button>
                       <button
                         type="button"
