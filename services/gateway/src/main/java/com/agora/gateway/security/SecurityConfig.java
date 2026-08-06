@@ -229,6 +229,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/agent/retention/settings").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/retention/dry-run").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/retention/run").hasAnyRole("OWNER", "ADMIN")
+                // Right-to-erasure, same reach as retention: irreversible, so the
+                // dry-run is listed alongside it rather than as a read-only route.
+                .requestMatchers(HttpMethod.POST, "/api/agent/gdpr/erase/dry-run").hasAnyRole("OWNER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/agent/gdpr/erase").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/claim").hasAnyRole("OWNER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/inbox/*/assign").hasAnyRole("OWNER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/run/**").hasAnyRole("OWNER", "VIEWER", "ADMIN")
