@@ -1,0 +1,11 @@
+# Non-thinking base: qwen3:4b emits a <think> block of hundreds to thousands of
+# tokens before answering, which on this GPU costs minutes per call.
+FROM qwen3:4b-instruct
+
+# 4096, not 8192. The KV cache is allocated for the full context whether or not
+# it is used: at 8k it took 1152 MiB of a 4 GB card and pushed 12 of the model's
+# 37 layers onto the CPU. Measured against the recorded traffic, the largest
+# prompt this agent has ever built is 2207 tokens (p95 2203), and the drafting
+# role is capped at 1100 completion tokens — so 4096 still leaves ~1.9k of
+# headroom over the worst case seen, while freeing ~576 MiB for more layers.
+PARAMETER num_ctx 4096

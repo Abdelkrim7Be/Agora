@@ -107,3 +107,61 @@ def test_summarize_filters_by_user_and_agent_instance(tmp_path):
         }
     }
     assert summary["by_node"]["triage"]["calls"] == 1
+
+
+def test_a_locally_served_model_is_priced_not_free(tmp_path):
+    """An unpriced model books at zero, which reads as "the work was free" on the
+    costs page. Every model the platform actually runs needs a row."""
+    from src.cost_tracker import compute_cost
+
+    assert compute_cost("qwen3:4b-4k", 1_000_000, 0) > 0
+    assert compute_cost("qwen3:4b-8k", 0, 1_000_000) > 0
+
+
+def test_the_summary_names_models_it_could_not_price(tmp_path, monkeypatch):
+    from src import cost_tracker
+
+    path = tmp_path / "costs.jsonl"
+    monkeypatch.setattr(cost_tracker.settings, "cost_backend", "json")
+    cost_tracker.record_cost({
+        "node": "llm_call", "model": "some-model-nobody-priced",
+        "input_tokens": 100, "output_tokens": 10, "cost_eur": 0.0,
+    }, path=path)
+
+    summary = cost_tracker.summarize("month", path=path, user_id=None, agent_instance_id=None)
+
+    assert "some-model-nobody-priced" in summary["unpriced_models"]
+
+
+def test_quarantine_usage_reported_by_the_security_service_is_recorded(tmp_path, monkeypatch):
+    """The security service runs a model on every inbound message and keeps no
+    ledger of its own; its tokens have to land in the same place as the agent's."""
+    from src import cost_tracker, security_client
+
+    path = tmp_path / "costs.jsonl"
+    monkeypatch.setattr(cost_tracker.settings, "cost_backend", "json")
+    monkeypatch.setattr(cost_tracker.settings, "costs_path", str(path))
+
+    security_client._record_quarantine_usage({
+        "model": "qwen3:4b-4k", "input_tokens": 900, "output_tokens": 40,
+    })
+
+    entries = cost_tracker.list_costs(path=path, user_id=None, agent_instance_id=None)
+    quarantine = [e for e in entries if e["node"] == "quarantine"]
+    assert len(quarantine) == 1
+    assert quarantine[0]["total_tokens"] == 940
+    assert quarantine[0]["cost_eur"] > 0
+
+
+def test_a_sanitize_verdict_without_usage_records_nothing(tmp_path, monkeypatch):
+    from src import cost_tracker, security_client
+
+    path = tmp_path / "costs.jsonl"
+    monkeypatch.setattr(cost_tracker.settings, "cost_backend", "json")
+    monkeypatch.setattr(cost_tracker.settings, "costs_path", str(path))
+
+    # The common case: heuristics settled it and no model ran.
+    security_client._record_quarantine_usage(None)
+    security_client._record_quarantine_usage({"model": "x", "input_tokens": 0, "output_tokens": 0})
+
+    assert cost_tracker.list_costs(path=path, user_id=None, agent_instance_id=None) == []

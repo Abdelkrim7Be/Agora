@@ -3,23 +3,23 @@ temperature: 0.0
 # Bounded replies so a draft takes seconds, not minutes.
 max_tokens: 700
 timeout: 300
-# qwen3:4b-8k for every role: single resident model on the 4GB GPU (no VRAM
+# qwen3:4b-4k for every role: single resident model on the 4GB GPU (no VRAM
 # swap between calls), and a clear quality jump over qwen2.5:3b for French
 # drafting and instruction-following on retouches.
 roles:
-  triage: "openai:qwen3:4b-8k"
+  triage: "openai:qwen3:4b-4k"
   # Same model as every other role on purpose. Pointing the classifier at a
   # second model made Ollama hold two of them on a 4GB card: each alternating
   # call logged "predicted to exceed available memory, evicting" and reloaded
   # the other one, which is how a 2-second rewrite became a 12-minute request.
-  quarantine: "openai:qwen3:4b-8k"
+  quarantine: "openai:qwen3:4b-4k"
   # Draft role: slightly creative. qwen3's structured (JSON) drafts need more
   # completion room than qwen2.5 — a 550 cap truncated the JSON mid-draft and
   # every redraft failed to parse.
   draft:
-    model: "openai:qwen3:4b-8k"
+    model: "openai:qwen3:4b-4k"
     temperature: 0.3
     max_tokens: 1100
-  reason: "openai:qwen3:4b-8k"
-  memory_style: "openai:qwen3:4b-8k"
+  reason: "openai:qwen3:4b-4k"
+  memory_style: "openai:qwen3:4b-4k"
 fallbacks: {}

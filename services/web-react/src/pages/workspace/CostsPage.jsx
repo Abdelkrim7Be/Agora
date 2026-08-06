@@ -50,6 +50,7 @@ export default function CostsPage() {
     setStatus(`Impossible de charger les coûts : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const unpriced = summary?.unpriced_models || [];
   const entryPager = usePagination(entries, COST_PAGE_SIZE);
 
   useEffect(() => {
@@ -76,7 +77,15 @@ export default function CostsPage() {
       </div>
       <div className="cost-summary-grid">
         <div><strong>{currentModel}</strong><span>Modèle actuel</span></div>
-        <div><strong>{formatCost(totals.cost_eur)}</strong><span>Dépense totale</span></div>
+        <div>
+          <strong>{formatCost(totals.cost_eur)}</strong>
+          <span>Dépense totale</span>
+          <small className="metric-hint">
+            {unpriced.length
+              ? `Estimation incomplète : aucun tarif pour ${unpriced.join(', ')}`
+              : 'Modèles locaux : coût de calcul estimé, pas une facture fournisseur.'}
+          </small>
+        </div>
         <div><strong>{formatCount(totals.calls)}</strong><span>Appels LLM</span></div>
         <div><strong>{formatCount(totals.input_tokens)}</strong><span>Tokens entrée</span></div>
         <div><strong>{formatCount(totals.output_tokens)}</strong><span>Tokens sortie</span></div>

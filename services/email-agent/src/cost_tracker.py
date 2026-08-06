@@ -30,8 +30,16 @@ PRICES: dict[str, dict[str, float]] = {
     "llama-3.3-70b-versatile": {"in": 0.54, "out": 0.79},
     # Local Ollama models: estimated compute cost (electricity/amortization),
     # not a provider invoice — keeps the cost dashboard meaningful locally.
+    # Every locally served model needs a row here: an unpriced one silently
+    # books at zero, which is how the costs page read "EUR 0.000000" while the
+    # GPU was busy for minutes at a time.
     "qwen2.5:3b-8k": {"in": 0.02, "out": 0.06},
     "qwen2.5:3b": {"in": 0.02, "out": 0.06},
+    # 4B params against 3B: proportionally more compute per token.
+    "qwen3:4b-4k": {"in": 0.03, "out": 0.08},
+    "qwen3:4b-8k": {"in": 0.03, "out": 0.08},
+    "qwen3:4b-instruct": {"in": 0.03, "out": 0.08},
+    "qwen3:4b": {"in": 0.03, "out": 0.08},
 }
 
 DEFAULT_UNKNOWN_MODEL_PRICE = {"in": 0.0, "out": 0.0}
@@ -306,6 +314,15 @@ def summarize(
     def rounded(rows: dict[str, dict]) -> dict[str, dict]:
         return {k: {**v, "cost_eur": round(v["cost_eur"], 8)} for k, v in rows.items()}
 
+    # A model with no price row books at zero, and a zero total is
+    # indistinguishable from "nothing ran". Name them so the view can say the
+    # estimate is incomplete rather than implying the work was free.
+    prices = _load_prices()
+    unpriced = sorted(
+        model for model in by_model
+        if model not in prices and model.split(":", 1)[-1] not in prices
+    )
+
     return {
         "period": period,
         "user_id": normalize_user_id(user_id),
@@ -313,6 +330,7 @@ def summarize(
         "totals": {**totals, "cost_eur": round(totals["cost_eur"], 8)},
         "by_model": rounded(dict(by_model)),
         "by_node": rounded(dict(by_node)),
+        "unpriced_models": unpriced,
     }
 
 

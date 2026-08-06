@@ -55,6 +55,10 @@ class SanitizeResponse(BaseModel):
     # hosted model and restores the values in whatever comes back.
     redacted_text: str = ""
     redaction_map: dict[str, str] = Field(default_factory=dict)
+    # Tokens this request spent on the quarantine model, so the caller can book
+    # them against the same budget as its own calls. None when no model ran
+    # (the heuristics settled it, which is the common case).
+    usage: dict | None = None
 
 
 class AuditOutputRequest(BaseModel):

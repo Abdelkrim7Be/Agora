@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 async def classify_content(content: str, known_internal: bool = False) -> dict:
@@ -34,6 +38,36 @@ async def classify_content(content: str, known_internal: bool = False) -> dict:
         }
 
 
+def _record_quarantine_usage(usage: dict | None, node: str = "quarantine") -> None:
+    """Book the security service's model call against the platform's LLM budget.
+
+    That service runs a model on every inbound message but keeps no cost store of
+    its own, so its tokens were missing from the costs view entirely — and it was
+    the heavier of the two consumers. It reports what it spent; this side, which
+    owns the ledger, writes it down. Never raises: accounting must not be able to
+    fail a security decision.
+    """
+    if not usage:
+        return
+    try:
+        from src.cost_tracker import compute_cost, record_cost
+
+        model = str(usage.get("model") or "unknown")
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        if not input_tokens and not output_tokens:
+            return
+        record_cost({
+            "node": node,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_eur": compute_cost(model, input_tokens, output_tokens),
+        })
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("could not record quarantine model usage: %s", exc)
+
+
 async def sanitize_email(sender: str, subject: str, content: str) -> dict:
     """POST untrusted email content to the security service /sanitize endpoint.
 
@@ -47,7 +81,9 @@ async def sanitize_email(sender: str, subject: str, content: str) -> dict:
         async with httpx.AsyncClient(timeout=settings.security_timeout) as client:
             resp = await client.post(f"{settings.security_url}/sanitize", json=payload)
             resp.raise_for_status()
-            return resp.json()
+            verdict = resp.json()
+            _record_quarantine_usage(verdict.get("usage"))
+            return verdict
     except Exception:
         return {
             "classification": "suspicious",

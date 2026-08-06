@@ -5,6 +5,7 @@ import re
 from src import heuristics
 from src.classify import classify_source
 from src.config import settings
+from src.usage import UsageCollector
 from src.models import (
     ClassifySourceRequest,
     SanitizeRequest,
@@ -99,11 +100,14 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
     llm_spam = False
     llm_reasons: list[str] = []
     cleaned = req.content
+    # Every model call this service makes is billed to the same platform budget
+    # as the agent's own; the collector is what lets the caller record it.
+    usage = UsageCollector()
 
     if run_llm:
         try:
             llm = quarantine_llm if quarantine_llm is not None else _get_quarantine_llm()
-            verdict = llm.invoke([
+            verdict = usage.invoke(llm, [
                 {"role": "system", "content": SANITIZE_SYSTEM_PROMPT},
                 {"role": "user", "content": _wrap(req)},
             ])
@@ -153,4 +157,5 @@ def sanitize(req: SanitizeRequest) -> SanitizeResponse:
         fields=fields,
         redacted_text=redaction.text if redaction else cleaned,
         redaction_map=redaction.mapping if redaction else {},
+        usage=usage.as_dict() if usage.recorded_anything else None,
     )
