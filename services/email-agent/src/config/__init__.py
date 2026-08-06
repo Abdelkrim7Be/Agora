@@ -52,6 +52,7 @@ class Settings:
     )
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
     llm_streaming_enabled: bool = _env_bool("AGENT_LLM_STREAMING_ENABLED", "true")
+    llm_prompt_cache_enabled: bool = _env_bool("AGENT_LLM_PROMPT_CACHE_ENABLED", "true")
     roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")
     contacts_path: str = os.getenv("AGENT_CONTACTS_PATH", "contacts.yaml")
     gmail_credentials_path: str = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")

@@ -38,6 +38,14 @@ PRICES: dict[str, dict[str, float]] = {
     "mistral/mistral-large-2512": {"in": 0.50, "out": 1.50},
     "mistral-large-latest": {"in": 0.50, "out": 1.50},
     "mistral-large-2512": {"in": 0.50, "out": 1.50},
+    # Prod LiteLLM logical routes. These keep costs nonzero even when the
+    # OpenAI-compatible client reports the proxy model name rather than the
+    # underlying Mistral model id.
+    "agora-triage": {"in": 0.15, "out": 0.60},
+    "agora-quarantine": {"in": 0.15, "out": 0.60},
+    "agora-memory-style": {"in": 0.15, "out": 0.60},
+    "agora-draft": {"in": 0.50, "out": 1.50},
+    "agora-reason": {"in": 0.50, "out": 1.50},
     # Local Ollama models: estimated compute cost (electricity/amortization),
     # not a provider invoice — keeps the cost dashboard meaningful locally.
     # Every locally served model needs a row here: an unpriced one silently
@@ -474,15 +482,35 @@ def _message_from_response(response) -> Any:
     return None
 
 
-def _usage_from_response(response) -> tuple[int, int]:
+def _cached_input_tokens(response) -> int:
+    message = _message_from_response(response)
+    usage = getattr(message, "usage_metadata", None) or {}
+    details = usage.get("input_token_details") if isinstance(usage, dict) else None
+    if isinstance(details, dict):
+        for key in ("cached_tokens", "cache_read", "cache_read_tokens"):
+            if details.get(key):
+                return int(details[key])
+    token_usage = (getattr(response, "llm_output", None) or {}).get("token_usage") or {}
+    prompt_details = token_usage.get("prompt_tokens_details") or token_usage.get("input_tokens_details") or {}
+    if isinstance(prompt_details, dict):
+        return int(prompt_details.get("cached_tokens") or prompt_details.get("cache_read") or 0)
+    return 0
+
+
+def _usage_from_response(response) -> tuple[int, int, int]:
     message = _message_from_response(response)
     usage = getattr(message, "usage_metadata", None) or {}
     if usage:
-        return int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
+        return (
+            int(usage.get("input_tokens") or 0),
+            int(usage.get("output_tokens") or 0),
+            _cached_input_tokens(response),
+        )
     token_usage = (getattr(response, "llm_output", None) or {}).get("token_usage") or {}
     return (
         int(token_usage.get("input_tokens") or token_usage.get("prompt_tokens") or 0),
         int(token_usage.get("output_tokens") or token_usage.get("completion_tokens") or 0),
+        _cached_input_tokens(response),
     )
 
 
@@ -499,7 +527,13 @@ def _model_from_response(response) -> str:
     )
 
 
-def compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+def compute_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cached_input_tokens: int = 0,
+) -> float:
     prices = _load_prices()
     price = prices.get(model)
     if price is None and ":" in model:
@@ -507,8 +541,13 @@ def compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     if price is None:
         logger.warning("No pricing configured for model '%s'; defaulting to zero cost.", model)
         price = DEFAULT_UNKNOWN_MODEL_PRICE
+    cached_input_tokens = max(0, min(int(cached_input_tokens or 0), int(input_tokens or 0)))
+    billable_input_tokens = int(input_tokens or 0) - cached_input_tokens
+    normalized_model = model.lower().split(":", 1)[-1]
+    cached_multiplier = 0.1 if "mistral" in normalized_model or normalized_model.startswith("agora-") else 1.0
     return round(
-        (input_tokens / 1_000_000) * float(price.get("in") or 0.0)
+        (billable_input_tokens / 1_000_000) * float(price.get("in") or 0.0)
+        + (cached_input_tokens / 1_000_000) * float(price.get("in") or 0.0) * cached_multiplier
         + (output_tokens / 1_000_000) * float(price.get("out") or 0.0),
         8,
     )
@@ -533,7 +572,7 @@ class UsageCallback(BaseCallbackHandler):
     def on_llm_end(self, response, **kwargs) -> None:
         if not settings.cost_tracking_enabled:
             return
-        input_tokens, output_tokens = _usage_from_response(response)
+        input_tokens, output_tokens, cached_input_tokens = _usage_from_response(response)
         if input_tokens == 0 and output_tokens == 0:
             return
         metadata = kwargs.get("metadata") or {}
@@ -549,7 +588,12 @@ class UsageCallback(BaseCallbackHandler):
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
-            "cost_eur": compute_cost(model, input_tokens, output_tokens),
+            "cost_eur": compute_cost(
+                model,
+                input_tokens,
+                output_tokens,
+                cached_input_tokens=cached_input_tokens,
+            ),
         })
 
 
