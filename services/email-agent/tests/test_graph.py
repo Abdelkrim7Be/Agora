@@ -38,6 +38,14 @@ def test_recovers_groq_failed_write_email_tool_call():
     }
 
 
+def test_prompt_memory_is_bounded(monkeypatch):
+    import src.graph as g
+
+    monkeypatch.setattr(g.settings, "memory_prompt_max_chars", 10)
+
+    assert g._prompt_memory("1234567890abcdef") == "1234567890\n[truncated]"
+
+
 def test_respond_email_routes_to_agent(fake_llms, respond_email):
     """A 'respond' classification hands off to the response agent."""
     fake_llms(

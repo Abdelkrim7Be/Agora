@@ -708,6 +708,13 @@ def _trim_history(messages: list) -> list:
     return head + tail
 
 
+def _prompt_memory(content: str) -> str:
+    limit = settings.memory_prompt_max_chars
+    if limit <= 0 or len(content) <= limit:
+        return content
+    return content[:limit].rstrip() + "\n[truncated]"
+
+
 def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
     try:
         return llm_obj.invoke(messages, config=invoke_config)
@@ -719,15 +726,19 @@ def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
 
 def llm_call(state: State, store: BaseStore, config=None):
     """LLM decides which tool to call to handle the email."""
-    response_prefs = get_memory(
-        store,
-        namespace("response_preferences"),
-        agent_config.agent.response_preferences,
+    response_prefs = _prompt_memory(
+        get_memory(
+            store,
+            namespace("response_preferences"),
+            agent_config.agent.response_preferences,
+        )
     )
-    writing_style = get_memory(
-        store,
-        namespace("writing_style"),
-        agent_config.agent.writing_style_default,
+    writing_style = _prompt_memory(
+        get_memory(
+            store,
+            namespace("writing_style"),
+            agent_config.agent.writing_style_default,
+        )
     )
     
     reply_language = "Veuillez rédiger la réponse en français (fr-FR)."
@@ -1598,15 +1609,19 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
     # server-side draft so a retouche never resets hand edits.
     previous = {**previous, **{k: v for k, v in baseline.items() if isinstance(v, str) and v.strip()}}
     feedback = state.get("redraft_feedback") or _feedback_from_messages(state["messages"])
-    response_prefs = get_memory(
-        store,
-        namespace("response_preferences"),
-        agent_config.agent.response_preferences,
+    response_prefs = _prompt_memory(
+        get_memory(
+            store,
+            namespace("response_preferences"),
+            agent_config.agent.response_preferences,
+        )
     )
-    writing_style = get_memory(
-        store,
-        namespace("writing_style"),
-        agent_config.agent.writing_style_default,
+    writing_style = _prompt_memory(
+        get_memory(
+            store,
+            namespace("writing_style"),
+            agent_config.agent.writing_style_default,
+        )
     )
     run_id = _run_id_from_config(config)
 
@@ -1830,10 +1845,12 @@ def triage_router(
     atts = state["email_input"].get("attachments") or []
     att_str = format_attachments(atts)
 
-    triage_instructions = get_memory(
-        store,
-        namespace("triage_preferences"),
-        agent_config.agent.triage_instructions,
+    triage_instructions = _prompt_memory(
+        get_memory(
+            store,
+            namespace("triage_preferences"),
+            agent_config.agent.triage_instructions,
+        )
     )
 
     # Build optional category section for B4 LLM fallback tagging.
