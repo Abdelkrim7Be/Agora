@@ -186,7 +186,8 @@ services:
 
   email-agent-migrate:
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: "no"
     environment:
@@ -203,7 +204,8 @@ services:
 
   email-agent:
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: unless-stopped
     mem_limit: 2g
