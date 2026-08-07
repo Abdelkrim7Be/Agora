@@ -153,20 +153,24 @@ export default function NotificationsPage() {
             <button className="ghost" type="button" aria-label="Actualiser" onClick={() => query.refetch()}>
               <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
             </button>
+            <span className="toolbar-spacer" />
+            {notifications.length ? (
+              <button className="ghost" type="button" onClick={toggleAll}>
+                {allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}
+              </button>
+            ) : null}
           </div>
         </div>
-        {notifications.length ? (
+        {/* The bulk row used to sit here permanently, carrying "select all" and a
+            sentence explaining that nothing was selected — a second full-width
+            band of chrome that was inert on almost every visit. Selecting all
+            moved up into the toolbar; the row now appears only when there is a
+            selection to act on. */}
+        {selectedNotifications.length ? (
           <div className="bulk-bar notifications-bulk-bar">
-            <button type="button" onClick={toggleAll}>
-              {allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}
-            </button>
-            {selectedNotifications.length ? (
-              <>
-                <span>{selectedNotifications.length} sélectionnée(s)</span>
-                <button type="button" onClick={handleBulkRead}>Marquer comme lues</button>
-                <button className="danger" type="button" onClick={handleBulkDelete}>Supprimer</button>
-              </>
-            ) : <span>Sélectionnez des notifications pour agir en lot.</span>}
+            <span>{selectedNotifications.length} sélectionnée(s)</span>
+            <button type="button" onClick={handleBulkRead}>Marquer comme lues</button>
+            <button className="danger" type="button" onClick={handleBulkDelete}>Supprimer</button>
           </div>
         ) : null}
         {query.error ? (

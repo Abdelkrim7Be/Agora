@@ -186,7 +186,7 @@ export default function ValidationCard({
             title="Vous devenez la personne responsable de cette validation"
             onClick={() => onDecision('claim')}
           >
-            <span className="material-symbols-outlined" aria-hidden="true">how_to_reg</span><span>M’assigner</span>
+            <span className="material-symbols-outlined" aria-hidden="true">how_to_reg</span><span>Je m’en occupe</span>
           </button>
           <button
             className="ghost"
@@ -195,7 +195,7 @@ export default function ValidationCard({
             title="Confier cette validation à quelqu’un d’autre"
             onClick={() => onDecision('assign')}
           >
-            <span className="material-symbols-outlined" aria-hidden="true">person_add</span><span>Assigner à…</span>
+            <span className="material-symbols-outlined" aria-hidden="true">person_add</span><span>Confier à…</span>
           </button>
           <button className="danger" type="button" disabled={busy} onClick={() => onDecision('ignore')}>
             <span className="material-symbols-outlined" aria-hidden="true">block</span><span>Ignorer</span>

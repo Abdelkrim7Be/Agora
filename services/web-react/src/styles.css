@@ -3329,8 +3329,25 @@ body.workspace-mode #workspace-sidebar-context { display: grid; }
 .persona-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
+  align-items: start;
 }
+
+/* Every label above its control, always.
+   Only `.persona-card label` carried this, so the same grid used elsewhere
+   rendered its labels inline — a short one like "Ton" sat beside its field
+   while "Salutation habituelle" sat above it, in the same row. */
+.persona-grid > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.persona-grid > label > input,
+.persona-grid > label > select,
+.persona-grid > label > textarea { color: var(--text); }
 
 .persona-card label,
 .chips-field {
