@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClientException;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,6 +23,7 @@ import java.util.UUID;
 public class AgentRegistryService {
 
     private static final long HEALTH_CACHE_TTL_SECONDS = 5;
+    private static final int SUPPORTED_CONTRACT_VERSION = 1;
     private static final int SELF_SERVICE_EMAIL_INSTANCE_LIMIT = 5;
     private static final String EMAIL_AGENT_TYPE = "email-agent";
 
@@ -50,6 +52,20 @@ public class AgentRegistryService {
 
     private record HealthCacheEntry(String health, Instant expiresAt) {}
 
+    /**
+     * The agent's own declaration of what it is, briefly cached.
+     *
+     * A manifest changes when a container is redeployed, so a short TTL is enough
+     * and it keeps a listing from paying one extra round trip per instance. When
+     * the agent is unreachable or answers with a contract version we do not know,
+     * the configured {@code agent-types} entry is served unchanged — an agent that
+     * is down must not blank out the settings navigation.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, ManifestCacheEntry> manifestCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record ManifestCacheEntry(GatewayProperties.AgentType type, Instant expiresAt) {}
+
     public AgentRegistryService(GatewayProperties props, AgentInstanceRepository instances,
                                 AgentInstanceGrantRepository grants, RestClient.Builder builder,
                                 ObjectMapper objectMapper) {
@@ -66,6 +82,76 @@ public class AgentRegistryService {
 
     public Optional<GatewayProperties.AgentType> findType(String id) {
         return props.getAgentTypes().stream().filter(t -> t.getId().equals(id)).findFirst();
+    }
+
+    /**
+     * The configured type overlaid with what the agent says about itself.
+     *
+     * Callers that route or authorize must keep using {@link #findType} — this is
+     * for description only (what the type is called, what it can do, which
+     * settings sections exist).
+     */
+    public GatewayProperties.AgentType describedType(GatewayProperties.AgentType type) {
+        int ttl = props.getUpstream().getManifestCacheSeconds();
+        ManifestCacheEntry cached = manifestCache.get(type.getId());
+        if (ttl > 0 && cached != null && cached.expiresAt().isAfter(Instant.now())) {
+            return cached.type();
+        }
+        GatewayProperties.AgentType resolved = fetchManifest(type).orElse(type);
+        if (ttl > 0) {
+            manifestCache.put(type.getId(),
+                    new ManifestCacheEntry(resolved, Instant.now().plusSeconds(ttl)));
+        }
+        return resolved;
+    }
+
+    private Optional<GatewayProperties.AgentType> fetchManifest(GatewayProperties.AgentType type) {
+        if (type.getManifestPath() == null || type.getManifestPath().isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            String body = restClient.get()
+                    .uri(URI.create(upstreamBase(type) + type.getManifestPath()))
+                    .retrieve()
+                    .body(String.class);
+            JsonNode manifest = objectMapper.readTree(body == null ? "{}" : body);
+            if (manifest.path("contract_version").asInt(0) != SUPPORTED_CONTRACT_VERSION) {
+                // A newer agent than this gateway. Falling back is the safe answer:
+                // rendering half a schema we do not understand is worse than the
+                // configured one we do.
+                return Optional.empty();
+            }
+            // The manifest declares the type it *is*; it cannot rename itself into
+            // another registered type and inherit that type's routing.
+            if (!type.getId().equals(manifest.path("id").asText(""))) {
+                return Optional.empty();
+            }
+            List<String> capabilities = new ArrayList<>();
+            manifest.path("capabilities").forEach(node -> capabilities.add(node.asText()));
+            List<GatewayProperties.SettingSection> sections = new ArrayList<>();
+            for (JsonNode node : manifest.path("settings_schema")) {
+                String key = node.path("key").asText("");
+                String path = node.path("path").asText("");
+                // A settings path is rendered as a workspace link. Anything that is
+                // not a plain relative path could point the UI off-origin.
+                if (key.isBlank() || !path.startsWith("/") || path.startsWith("//")) {
+                    continue;
+                }
+                sections.add(new GatewayProperties.SettingSection(key,
+                        node.path("label").asText(key),
+                        node.path("description").asText(""),
+                        path));
+            }
+            return Optional.of(type.withManifest(
+                    manifest.path("display_name").asText(""),
+                    manifest.path("description").asText(""),
+                    capabilities,
+                    sections));
+        } catch (UnknownAgentTypeException | RestClientException ex) {
+            return Optional.empty();
+        } catch (Exception ex) {
+            return Optional.empty();
+        }
     }
 
     /** Fresh probe on every call — /agents keeps its live health semantics. */

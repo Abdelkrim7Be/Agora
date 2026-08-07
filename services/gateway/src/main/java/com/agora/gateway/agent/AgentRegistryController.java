@@ -43,7 +43,7 @@ public class AgentRegistryController {
     @GetMapping("/agents")
     public List<AgentTypeResponse> agents() {
         return service.agentTypes().stream()
-                .map(type -> AgentTypeResponse.from(type, service.serviceHealth(type)))
+                .map(type -> AgentTypeResponse.from(service.describedType(type), service.serviceHealth(type)))
                 .toList();
     }
 

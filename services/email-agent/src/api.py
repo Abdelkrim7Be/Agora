@@ -31,6 +31,7 @@ from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summar
 from src.trace import list_traces, setup_trace_store
 from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, record_dead_letter, setup_dlq
 from src.metrics import render_metrics
+from src.manifest import build_manifest
 from src.categories import (
     CategoriesConfig,
     Category,
@@ -1192,6 +1193,16 @@ async def gmail_webhook(request: Request, body: GmailWebhookInput) -> dict:
 async def health() -> dict:
     components = await aggregate_health()
     return {"status": "ok", "storage_backend": settings.storage_backend, **components}
+
+
+@app.get("/manifest")
+async def manifest() -> dict:
+    """Agent self-description, read by the gateway's agent registry.
+
+    Unauthenticated and tenant-free on purpose: it describes the agent type, so
+    there is nothing here that belongs to a user. See `src/manifest.py`.
+    """
+    return build_manifest()
 
 
 

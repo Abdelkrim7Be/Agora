@@ -90,9 +90,22 @@ public class GatewayProperties {
          * can never be served to the next.
          */
         private int summaryCacheSeconds = 15;
+        /**
+         * How long an agent's self-declared manifest may be reused, in seconds.
+         *
+         * A manifest only changes when a container is redeployed, so this is
+         * generous. Set 0 to disable — the tests do, so one case's manifest can
+         * never be served to the next.
+         */
+        private int manifestCacheSeconds = 60;
 
         public String getEmailAgentUrl() { return emailAgentUrl; }
         public void setEmailAgentUrl(String emailAgentUrl) { this.emailAgentUrl = emailAgentUrl; }
+
+        public int getManifestCacheSeconds() { return manifestCacheSeconds; }
+        public void setManifestCacheSeconds(int manifestCacheSeconds) {
+            this.manifestCacheSeconds = manifestCacheSeconds;
+        }
 
         public int getSummaryCacheSeconds() { return summaryCacheSeconds; }
         public void setSummaryCacheSeconds(int summaryCacheSeconds) {
@@ -112,9 +125,39 @@ public class GatewayProperties {
         private List<String> capabilities = new ArrayList<>();
         private String basePath = "";
         private String healthPath = "/health";
+        private String manifestPath = "/manifest";
         private List<SettingSection> settingsSchema = new ArrayList<>();
         private String color = "";
         private String icon = "";
+
+        /**
+         * A copy carrying the agent's own declaration where the agent owns the field.
+         *
+         * Routing ({@code basePath}, {@code healthPath}, {@code manifestPath}) and the
+         * palette are NOT taken from the manifest: an agent that could name its own
+         * proxy prefix could claim another agent's traffic.
+         */
+        public AgentType withManifest(String displayName, String description,
+                                      List<String> capabilities, List<SettingSection> settingsSchema) {
+            AgentType merged = new AgentType();
+            merged.id = this.id;
+            merged.basePath = this.basePath;
+            merged.healthPath = this.healthPath;
+            merged.manifestPath = this.manifestPath;
+            merged.color = this.color;
+            merged.icon = this.icon;
+            merged.displayName = isBlank(displayName) ? this.displayName : displayName;
+            merged.description = isBlank(description) ? this.description : description;
+            merged.capabilities = (capabilities == null || capabilities.isEmpty())
+                    ? this.capabilities : capabilities;
+            merged.settingsSchema = (settingsSchema == null || settingsSchema.isEmpty())
+                    ? this.settingsSchema : settingsSchema;
+            return merged;
+        }
+
+        private static boolean isBlank(String value) {
+            return value == null || value.isBlank();
+        }
 
         public static AgentType defaultEmailAgent() {
             AgentType type = new AgentType();
@@ -153,6 +196,9 @@ public class GatewayProperties {
 
         public String getHealthPath() { return healthPath; }
         public void setHealthPath(String healthPath) { this.healthPath = healthPath; }
+
+        public String getManifestPath() { return manifestPath; }
+        public void setManifestPath(String manifestPath) { this.manifestPath = manifestPath; }
 
         public List<SettingSection> getSettingsSchema() { return settingsSchema; }
         public void setSettingsSchema(List<SettingSection> settingsSchema) {
