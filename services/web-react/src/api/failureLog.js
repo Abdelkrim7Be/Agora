@@ -68,6 +68,22 @@ export function clearFailure(queryKey) {
   emit();
 }
 
+/**
+ * Drop failures recorded against an instance we are no longer looking at.
+ *
+ * Query keys carry the instance id, so switching instance — or correcting a
+ * stale one — starts a *new* key. The retry that succeeds clears its own key
+ * and leaves the old entry stranded in the banner with no way to remove it.
+ */
+export function clearFailuresForInstance(instanceId) {
+  if (!instanceId) return;
+  const needle = JSON.stringify(instanceId);
+  const remaining = failures.filter((entry) => !entry.id.includes(needle));
+  if (remaining.length === failures.length) return;
+  failures = remaining;
+  emit();
+}
+
 export function clearAllFailures() {
   if (failures.length === 0) return;
   failures = [];
