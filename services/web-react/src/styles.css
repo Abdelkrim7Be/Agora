@@ -5536,3 +5536,48 @@ button.primary.is-pending::after { color: var(--primary-text); }
 /* Destinataire d'un brouillon : modifiable par un humain, jamais par le modèle. */
 .recipient-input { width: 100%; }
 .action-row > small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+/* Guide : sommaire à gauche, contenu à droite. Le sommaire colle en haut pour
+   rester atteignable au milieu d'une longue lecture. */
+.guide-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.guide-layout > .page-heading { grid-column: 1 / -1; }
+
+.guide-contents {
+  position: sticky;
+  top: var(--space-4);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.guide-contents ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.guide-contents a {
+  display: block;
+  padding: 5px 8px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.guide-contents a:hover { background: var(--surface-low); color: var(--text); }
+
+.guide-section { scroll-margin-top: var(--space-4); }
+
+@media (max-width: 900px) {
+  .guide-layout { grid-template-columns: minmax(0, 1fr); }
+  .guide-contents { position: static; }
+}
