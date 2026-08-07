@@ -102,3 +102,55 @@ def test_optional_timestamps_preserve_a_real_value():
     entry = _normalize_entry({"message_id": "m1", "requeued_at": when, "resolved_at": "2026-08-02T09:00:00+00:00"})
     assert entry["requeued_at"] == "2026-08-01T12:30:00+00:00"
     assert entry["resolved_at"] == "2026-08-02T09:00:00+00:00"
+
+
+def test_a_failed_decision_is_recorded_in_the_dlq(monkeypatch, tmp_path):
+    """The failure queue only ever heard from the poller.
+
+    Approvals, rejections and redrafts run through the API, so when one failed
+    the operator saw the action break in front of them and the failure page say
+    "no DLQ entries". Nothing anywhere recorded it.
+    """
+    from src import api
+
+    recorded = []
+    monkeypatch.setattr(api, "record_dead_letter", lambda entry: recorded.append(entry))
+
+    api._record_decision_failure(
+        "run-77",
+        "approve",
+        RuntimeError("upstream exploded"),
+        {"email_id": "msg-77"},
+    )
+
+    assert len(recorded) == 1
+    entry = recorded[0]
+    assert entry["message_id"] == "msg-77"
+    assert entry["reason"] == "decision_failed:approve"
+    assert "upstream exploded" in entry["error"]
+    assert entry["payload"]["run_id"] == "run-77"
+
+
+def test_recording_a_decision_failure_never_raises(monkeypatch):
+    # A DLQ write that throws must not turn one failure into a different one.
+    from src import api
+
+    def _explode(_entry):
+        raise RuntimeError("dlq backend down")
+
+    monkeypatch.setattr(api, "record_dead_letter", _explode)
+
+    api._record_decision_failure("run-78", "reject", ValueError("boom"), None)
+
+
+def test_a_decision_failure_without_a_run_record_still_files_something(monkeypatch):
+    # No record means no Gmail id; the run id is the only handle left, and an
+    # entry keyed on it beats no entry at all.
+    from src import api
+
+    recorded = []
+    monkeypatch.setattr(api, "record_dead_letter", lambda entry: recorded.append(entry))
+
+    api._record_decision_failure("run-79", "regenerate draft", RuntimeError("x"), None)
+
+    assert recorded[0]["message_id"] == "run-79"

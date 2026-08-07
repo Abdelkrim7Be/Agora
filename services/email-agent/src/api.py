@@ -32,6 +32,7 @@ from src.trace import list_traces, setup_trace_store
 from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, record_dead_letter, setup_dlq
 from src.metrics import render_metrics
 from src.manifest import build_manifest
+from src.image_fetch import ImageFetchError, fetch_image_bytes
 from src.categories import (
     CategoriesConfig,
     Category,
@@ -841,12 +842,34 @@ async def _stream_run_response(response: RunResponse):
     yield _sse_event("end", {"run_id": response.run_id, "status": response.status})
 
 
+def _record_decision_failure(run_id: str, action: str, exc: Exception, record: dict | None) -> None:
+    """File an API-path failure in the DLQ.
+
+    Best effort by design: a DLQ write that raises must never turn a failed
+    action into a second, different failure.
+    """
+    try:
+        record_dead_letter({
+            "message_id": (record or {}).get("email_id") or run_id,
+            "reason": f"decision_failed:{action}",
+            "error": f"{type(exc).__name__}: {exc}",
+            "payload": {"run_id": run_id, "action": action},
+        })
+    except Exception as dlq_exc:  # pragma: no cover - defensive
+        print(f"api: could not record the DLQ entry for run {run_id}: {dlq_exc}")
+
+
 def _pending_response_after_decision_error(run_id: str, exc: Exception, action: str) -> RunResponse | None:
     record = get_run_record(
         run_id,
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
     )
+    # The dead-letter queue only ever heard from the poller, so a failure on this
+    # path — an approval, a rejection, a redraft — left no trace anywhere the
+    # operator looks. The failure page said "no DLQ entries" while the action had
+    # visibly just failed in front of them.
+    _record_decision_failure(run_id, action, exc, record)
     if not record or record.get("status") != "pending_approval":
         return None
     print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
@@ -3287,6 +3310,36 @@ async def upload_signature_image(request: Request, file: UploadFile = File(...))
         "stored": True,
         "filename": stored.key.rsplit("/", 1)[-1],
         "size": stored.size,
+    }
+
+
+class SignatureImageUrlInput(BaseModel):
+    url: str
+
+
+@app.post("/signature/image/from-url")
+async def import_signature_image(request: Request, body: SignatureImageUrlInput) -> dict:
+    """Store a signature image given its address.
+
+    A URL left as a URL renders as a remote `<img>`, which most mail clients
+    block — so the logo the owner chose never appeared for the recipient.
+    Fetching it once here turns it into the same inline `cid:` part an upload
+    produces, which always displays.
+
+    See `src/image_fetch.py` for why this refuses non-public addresses.
+    """
+    _require_instance_role(request, "owner")
+    try:
+        data = await asyncio.to_thread(fetch_image_bytes, body.url)
+        stored = await asyncio.to_thread(save_signature_image, data)
+    except (ImageFetchError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "stored": True,
+        "filename": stored.key.rsplit("/", 1)[-1],
+        "size": stored.size,
+        "source_url": body.url,
     }
 
 
