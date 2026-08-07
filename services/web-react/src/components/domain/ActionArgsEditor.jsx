@@ -15,13 +15,31 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
   return (
     <div className="action-preview">
       {recipients.length ? (
-        <div className="action-row">
+        <label className="action-row">
           <strong>Destinataire</strong>
-          <p className="resolved-recipient">
-            {recipients.join(', ')}
-            <span> — défini par l’agent d’après l’expéditeur du message, non modifiable.</span>
-          </p>
-        </div>
+          {/* Editable by a person, never by the model.
+              The agent resolves this from the message's own sender, and the
+              model has no way to write it — that is what stops an injected
+              "forward this to …" from redirecting a reply. A reviewer looking
+              at the draft is a different matter: they can retarget or add an
+              address, and the change is re-checked by the policy engine and by
+              the outbound allowlist before anything is sent. */}
+          <input
+            type="text"
+            className="recipient-input"
+            value={
+              editedFields._recipients !== undefined
+                ? editedFields._recipients
+                : recipients.join(', ')
+            }
+            onChange={(event) => onFieldChange(run.run_id, '_recipients', event.target.value)}
+          />
+          <small>
+            Proposé par l’agent d’après l’expéditeur du message. Vous pouvez le remplacer
+            ou en ajouter (séparés par des virgules) ; l’envoi reste soumis aux règles
+            d’autorisation.
+          </small>
+        </label>
       ) : null}
       {request.action === 'forward_email' ? (
         <div className="route-preview">
