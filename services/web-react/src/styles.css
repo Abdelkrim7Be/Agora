@@ -5581,3 +5581,33 @@ button.primary.is-pending::after { color: var(--primary-text); }
   .guide-layout { grid-template-columns: minmax(0, 1fr); }
   .guide-contents { position: static; }
 }
+
+/* Utilisateurs : la ligne se déplie sur le compte qu'on interroge. */
+.user-instance-row { display: grid; gap: var(--space-2); }
+
+.user-instance-summary {
+  width: 100%;
+  min-height: var(--control-height);
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: left;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  padding: var(--space-2) 0;
+  font-weight: 400;
+}
+
+.user-instance-summary:hover:not(:disabled) { background: none; }
+.user-instance-summary .material-symbols-outlined { font-size: 20px; color: var(--muted); }
+.user-instance-identity { display: grid; gap: 2px; min-width: 0; }
+.user-instance-identity > span { font-size: 13px; color: var(--muted); }
+
+.user-instance-row.is-open .user-instance-pills {
+  padding: 0 0 var(--space-2) 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

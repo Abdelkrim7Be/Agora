@@ -37,6 +37,7 @@ export default function UsersPage() {
   const { token } = useAuth();
   const { promptDialog, confirmDialog } = useDialog();
   const navigate = useNavigate();
+  const [openUser, setOpenUser] = useState(null);
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
@@ -477,12 +478,34 @@ export default function UsersPage() {
           {users.map((user) => {
             const userInstances = instancesForUser(user);
             return (
-              <div className="user-instance-row" key={user.id}>
-                <div>
-                  <strong>{user.username}</strong>
-                  <span>{roleLabelFr(user.role)} · {user.department || 'sans département'}</span>
-                </div>
-                <div className="user-instance-pills">
+              <div
+                className={'user-instance-row' + (openUser === user.id ? ' is-open' : '')}
+                key={user.id}
+              >
+                {/* Every account used to spill its whole access list along the
+                    right edge, so a dozen users produced a wall of chips and no
+                    row could be read. The list is the summary now; the accesses
+                    open on the account you actually asked about. */}
+                <button
+                  type="button"
+                  className="user-instance-summary"
+                  aria-expanded={openUser === user.id}
+                  onClick={() => setOpenUser(openUser === user.id ? null : user.id)}
+                >
+                  <span className="material-symbols-outlined" aria-hidden="true">
+                    {openUser === user.id ? 'expand_more' : 'chevron_right'}
+                  </span>
+                  <span className="user-instance-identity">
+                    <strong>{user.displayName || user.username}</strong>
+                    <span>{roleLabelFr(user.role)} · {user.department || 'sans département'}</span>
+                  </span>
+                  <span className="counter">
+                    {userInstances.length
+                      ? `${userInstances.length} instance${userInstances.length > 1 ? 's' : ''}`
+                      : 'aucune instance'}
+                  </span>
+                </button>
+                <div className="user-instance-pills" hidden={openUser !== user.id}>
                   {userInstances.length ? userInstances.map((instance) => (
                     <span
                       className={`mini-chip grant-chip${String(instance.status || 'active').toLowerCase() === 'active' ? '' : ' suspended'}`}
