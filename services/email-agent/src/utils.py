@@ -2,14 +2,42 @@ from __future__ import annotations
 
 from typing import Any, List
 
+from src.config import settings
+
+
+def clamp_email_body(email_thread: str) -> str:
+    """Cap the body that goes into a prompt.
+
+    `format_thread` bounds a Gmail-fetched *thread* (N messages x per-message
+    truncation), but three paths reach a model without passing through it: a
+    single message with no thread, the manual `/run` API where the body is a free
+    string from the client, and the poller appending extracted attachment text —
+    capped per PDF, uncapped in aggregate.
+
+    So the body was the one unbounded input on the hot path, and it is paid twice
+    per email: once at triage, once at drafting. Keeping the head is deliberate —
+    the ask in a business email is at the top, and quoted history at the bottom is
+    what a long body is usually made of.
+
+    This only shapes the prompt. The run record and the UI keep the full text;
+    truncating at ingestion would lose it.
+    """
+    limit = settings.email_body_max_chars
+    if limit <= 0 or len(email_thread) <= limit:
+        return email_thread
+    return email_thread[:limit].rstrip() + "\n\n…[message tronqué]"
+
 
 def parse_email(email_input: dict) -> tuple[str, str, str, str]:
-    """Parse an email input dictionary into (author, to, subject, email_thread)."""
+    """Parse an email input dictionary into (author, to, subject, email_thread).
+
+    Every caller of this builds a prompt, which is why the body cap lives here.
+    """
     return (
         email_input["author"],
         email_input["to"],
         email_input["subject"],
-        email_input["email_thread"],
+        clamp_email_body(email_input["email_thread"]),
     )
 
 

@@ -96,6 +96,12 @@ class Settings:
     memory_prompt_max_chars: int = int(os.getenv("AGENT_MEMORY_PROMPT_MAX_CHARS", "3000"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
+    # Ceiling on the body that reaches a model, applied at prompt-build time.
+    # ~12k chars is roughly 3k tokens, above the largest real prompt measured
+    # (2 207 tokens) and below anything that threatens the context window. The
+    # body is paid twice per email — triage, then drafting — so this is the only
+    # unbounded input on the hot path. 0 disables the cap.
+    email_body_max_chars: int = int(os.getenv("AGENT_EMAIL_BODY_MAX_CHARS", "12000"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
     default_send_mode: str = os.getenv("AGENT_DEFAULT_SEND_MODE", "simulation").strip().lower()
     # Hard cap on who the agent may ever send real mail to, enforced at the Gmail
