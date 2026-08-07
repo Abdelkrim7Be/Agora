@@ -67,7 +67,7 @@ export default function DlqPage() {
                 <tr><td colSpan={6} className="empty-cell">Aucune entrée DLQ.</td></tr>
               ) : pager.visible.map((entry) => (
                 <tr key={entry.entry_id}>
-                  <td>{entry.timestamp || '—'}</td>
+                  <td>{entry.timestamp || 'n/d'}</td>
                   <td>{entry.message_id || entry.entry_id || ''}</td>
                   <td>{entry.reason || ''}</td>
                   <td>{entry.error || ''}</td>

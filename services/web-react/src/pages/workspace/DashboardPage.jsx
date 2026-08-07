@@ -75,7 +75,7 @@ export default function DashboardPage() {
           <h2 className="section-title">Volume traité</h2>
           <VerticalBarChart points={summary?.volume_timeline || []} emptyLabel="Aucune donnée pour cette période." />
         </Card>
-        <Card className="dashboard-chart-card dashboard-focus-card">
+        <Card className="dashboard-chart-card">
           <h2 className="section-title">Cas métier les plus actifs</h2>
           <HorizontalBarChart rows={summary?.top_categories || []} emptyLabel="Aucune donnée pour cette période." />
         </Card>

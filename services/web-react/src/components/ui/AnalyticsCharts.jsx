@@ -65,7 +65,7 @@ export function VerticalBarChart({ points, emptyLabel }) {
                   y={y}
                   width={barWidth}
                   height={Math.max(barHeight, 3)}
-                  rx="5"
+                  rx="3"
                   fill={isLatest ? 'var(--primary)' : 'color-mix(in srgb, var(--primary) 62%, transparent)'}
                 />
                 <text x={x + barWidth / 2} y={Math.max(y - 6, 12)} textAnchor="middle" fontSize="11" fill="var(--text)">
@@ -118,8 +118,8 @@ export function HorizontalBarChart({ rows, emptyLabel }) {
             <text x="8" y={y + 15} fontSize="12" fill="var(--text)">
               {label.length > 26 ? `${label.slice(0, 25)}…` : label}
             </text>
-            <rect x={left} y={y + 2} width={barWidth} height="14" rx="7" fill="var(--surface-high)" />
-            <rect x={left} y={y + 2} width={widthPx} height="14" rx="7" fill="var(--primary)" />
+            <rect x={left} y={y + 2} width={barWidth} height="14" rx="4" fill="var(--surface-high)" />
+            <rect x={left} y={y + 2} width={widthPx} height="14" rx="4" fill="var(--primary)" />
             <text x={width - 8} y={y + 13} textAnchor="end" fontSize="12" fill="var(--text)">{value}</text>
             <text x="8" y={y + 27} fontSize="10" fill="var(--muted)">{share} %</text>
           </g>
