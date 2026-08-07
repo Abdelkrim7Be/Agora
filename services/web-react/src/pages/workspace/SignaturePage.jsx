@@ -49,7 +49,7 @@ function structuredLines(config) {
 }
 
 export default function SignaturePage() {
-  const { instanceId, hasRole } = useInstance();
+  const { instanceId, currentInstance, hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { apiBlob } = useApi();
   const canManage = hasRole('owner');
@@ -158,7 +158,7 @@ export default function SignaturePage() {
             <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer la signature</span>
           </button>
         )}
-        <span className="counter">{instanceId}</span>
+        <span className="counter">{currentInstance?.display_name || instanceId}</span>
       </div>
       <div className="editor-grid signature-grid">
         <form className="card editor-card" onSubmit={(e) => e.preventDefault()}>

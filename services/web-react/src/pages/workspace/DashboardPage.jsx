@@ -35,6 +35,14 @@ export default function DashboardPage() {
   const workflows = summary?.by_workflow || [];
   const depts = summary?.dept_load || [];
 
+  // A freshly onboarded mailbox renders four zeros, which reads as a measured
+  // result rather than "nothing has run yet". Only say so once the request has
+  // actually succeeded — during a load or a failure, zero means neither.
+  const nothingProcessedYet = query.isSuccess
+    && !totals.emails_handled
+    && !totals.pending
+    && workflows.length === 0;
+
   return (
     <>
       <PageHeading view="analytics" />
@@ -67,9 +75,18 @@ export default function DashboardPage() {
           </div>
         <div><strong>{formatCountFr(totals.pending)}</strong><span>En attente</span></div>
       </div>
-      <div className="notice dashboard-notice">
-        Ce tableau de bord mesure l’activité de l’agent sélectionné. Les e-mails sortants restent bloqués tant qu’une validation humaine est requise.
-      </div>
+      {nothingProcessedYet ? (
+        <div className="notice dashboard-notice">
+          <strong>Aucun e-mail traité pour l’instant.</strong> Les compteurs ci-dessus sont à zéro parce que
+          l’agent n’a encore rien traité sur cette période, pas parce qu’une mesure vaut zéro. Il analyse la
+          boîte à chaque relève ; les premiers chiffres apparaîtront après le prochain message reçu.
+          Élargissez la période pour voir une activité plus ancienne.
+        </div>
+      ) : (
+        <div className="notice dashboard-notice">
+          Ce tableau de bord mesure l’activité de l’agent sélectionné. Les e-mails sortants restent bloqués tant qu’une validation humaine est requise.
+        </div>
+      )}
       <div className="cost-layout dashboard-chart-layout">
         <Card className="dashboard-chart-card">
           <h2 className="section-title">Volume traité</h2>

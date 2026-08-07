@@ -25,7 +25,7 @@ function costRows(rows, emptyLabel, firstColumn) {
 }
 
 export default function CostsPage() {
-  const { instanceId } = useInstance();
+  const { instanceId, currentInstance } = useInstance();
   const { setStatus } = useStatus();
   const [period, setPeriod] = useState('session');
   const announcedInitialLoad = useRef(false);
@@ -73,7 +73,7 @@ export default function CostsPage() {
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les coûts</span>
         </button>
-        <span className="counter">{summary?.agent_instance_id || instanceId}</span>
+        <span className="counter">{currentInstance?.display_name || summary?.agent_instance_id || instanceId}</span>
       </div>
       <div className="cost-summary-grid">
         <div><strong>{currentModel}</strong><span>Modèle actuel</span></div>

@@ -8,8 +8,8 @@ import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { BusyProvider } from './contexts/BusyContext';
 import { RequireGlobalRole } from './components/layout/RequireGlobalRole';
-import { QueryClient, QueryCache, QueryClientProvider } from '@tanstack/react-query';
-import { recordFailure, clearFailure } from './api/failureLog';
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query';
+import { recordFailure, clearFailure, recordActionFailure, clearActionFailure } from './api/failureLog';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import PlatformLayout from './components/layout/PlatformLayout';
 import WorkspaceLayout from './components/layout/WorkspaceLayout';
@@ -52,6 +52,12 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error, query) => recordFailure(query.queryKey, error),
     onSuccess: (_data, query) => clearFailure(query.queryKey),
+  }),
+  // Reads reported their failures and writes did not, so a button the server
+  // declines did nothing visible at all — same as a broken one.
+  mutationCache: new MutationCache({
+    onError: (error) => recordActionFailure(error),
+    onSuccess: () => clearActionFailure(),
   }),
   defaultOptions: {
     queries: {

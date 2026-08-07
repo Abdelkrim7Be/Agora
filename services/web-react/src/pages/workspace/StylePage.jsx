@@ -93,7 +93,7 @@ const ORIGIN_LABELS = {
 };
 
 export default function StylePage() {
-  const { instanceId } = useInstance();
+  const { instanceId, currentInstance } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog } = useDialog();
 
@@ -197,7 +197,7 @@ export default function StylePage() {
         <button className="danger" type="button" onClick={handleClear}>
           <span className="material-symbols-outlined" aria-hidden="true">delete_forever</span><span>Supprimer le style appris</span>
         </button>
-        <span className="counter">{instanceId}</span>
+        <span className="counter">{currentInstance?.display_name || instanceId}</span>
         <span className="counter">{learningEnabled ? 'apprentissage actif' : 'apprentissage désactivé'}</span>
         <span className="counter">{ORIGIN_LABELS[origin] || 'provenance inconnue'}</span>
       </div>
