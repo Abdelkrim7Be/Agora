@@ -1105,6 +1105,29 @@ def _category_for_run(state: State):
     return next((c for c in cfg.categories if c.name == name), None)
 
 
+def _off_workflow_action(category, name: str) -> str | None:
+    """Reason to refuse `name`, or None when the workflow allows it.
+
+    CaMeL step #2: control flow must not depend on untrusted mail. A run that
+    matched a workflow executes only the tools that workflow opens — the model
+    fills in content for an action already decided, it does not choose the
+    action after reading the message.
+
+    Runs that matched no workflow are not constrained here: there is no declared
+    intent to enforce, and the tool-level default in `security/policy.yaml`
+    remains what governs them.
+    """
+    if category is None:
+        return None
+    allowed = category.actions()
+    if name in allowed:
+        return None
+    return (
+        f"workflow '{category.name}' does not perform '{name}'"
+        f" (allowed: {', '.join(allowed) if allowed else 'none'})"
+    )
+
+
 def _effective_recipients(name: str, args: dict, state: State) -> list[str]:
     """Every address this tool call will actually reach.
 
@@ -1278,6 +1301,16 @@ def tool_node(state: State, store: BaseStore, config=None):
         # authorization, before the approval preview, before execution. Doing it
         # anywhere later risks a placeholder reaching a recipient.
         args = _restore_redactions(args, state)
+
+        # The workflow decides which tool may act, not the model that just read
+        # the message. Checked before authorization so an off-workflow call is
+        # never even submitted as a candidate action: an injection that steered
+        # a "draft a reply" workflow into forwarding or trashing would otherwise
+        # get every downstream check asked about the tool it chose.
+        blocked_action = _off_workflow_action(category_obj, name)
+        if blocked_action is not None:
+            result.append(_blocked_tool_message(name, blocked_action, tool_call["id"]))
+            continue
 
         authorization_decision = "hitl" if name in approval_set else "allow"
         arg_trust = _derive_arg_trust(args, state["email_input"].get("security"))

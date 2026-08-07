@@ -1765,6 +1765,10 @@ class CategoryUpdateInput(BaseModel):
     template: str | None = None
     require_approval: bool = False
     external_send_allowed: bool = True
+    # Which tools this workflow may execute. None keeps the policy's own action
+    # set; a list replaces it. Narrows only — it cannot grant a tool that
+    # security/policy.yaml denies.
+    allowed_actions: list[str] | None = None
 
 
 class CategoryProposalActionInput(BaseModel):
@@ -1955,6 +1959,7 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
             cat.route_to = body.route_to
             cat.require_approval = body.require_approval
             cat.external_send_allowed = body.external_send_allowed
+            cat.allowed_actions = body.allowed_actions
             if body.instructions:
                 cat.instructions = CategoryInstructions(**body.instructions)
             else:
