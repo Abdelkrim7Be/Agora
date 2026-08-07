@@ -36,6 +36,7 @@ from src.outbound_guard import email_addresses, enforce_outbound_allowlist
 from src.outlook_oauth import GRAPH_BASE, refresh_access_token
 from src.send_mode import effective_dry_run
 from src.state import EmailInput
+from src.utils import THREAD_BLOCK_SEPARATOR
 
 # Gmail label ids that the rest of the codebase treats as mailbox state rather
 # than user-visible labels.
@@ -359,7 +360,7 @@ class OutlookProvider:
             if len(body) > max_chars_per_message:
                 body = body[:max_chars_per_message] + "\n…[truncated]"
             blocks.append(f"From: {author}\nDate: {date}\n\n{body}")
-        return "\n\n---\n\n".join(blocks)
+        return THREAD_BLOCK_SEPARATOR.join(blocks)
 
     def fetch_sender_correspondence(
         self,

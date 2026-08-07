@@ -20,6 +20,7 @@ from src.outbound_guard import (  # noqa: F401 — OutboundRecipientBlocked re-e
 from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
+from src.utils import THREAD_BLOCK_SEPARATOR
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
 # `gmail.modify` covers everything this agent does: read, send, drafts, labels,
@@ -957,7 +958,7 @@ def format_thread(
         if len(body) > max_chars_per_message:
             body = body[:max_chars_per_message] + "\n…[truncated]"
         blocks.append(f"From: {author}\nDate: {date}\n\n{body}")
-    return "\n\n---\n\n".join(blocks)
+    return THREAD_BLOCK_SEPARATOR.join(blocks)
 
 
 def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = None) -> EmailInput:
