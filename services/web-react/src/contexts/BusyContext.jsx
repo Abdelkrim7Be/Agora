@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useIsMutating } from '@tanstack/react-query';
 
 const BusyContext = createContext(null);
@@ -20,6 +20,14 @@ const VISIBLE_AFTER_MS = 700;
 export function BusyProvider({ children }) {
   const [label, setLabel] = useState('');
   const [autoLabel, setAutoLabel] = useState('');
+  // How many progress bars are currently reporting on their own work.
+  //
+  // The overlay exists for actions with nothing else to show. When a page
+  // already draws a progress bar — style learning, mailbox analysis, junk
+  // scanning — the overlay covered the very bar the person was watching, and
+  // for a process that runs for a minute that is the worst possible thing to
+  // put on screen. A visible bar therefore suppresses it.
+  const [progressHolds, setProgressHolds] = useState(0);
   // Nested/parallel calls share one overlay; only the last one out clears it.
   const depth = useRef(0);
 
@@ -50,11 +58,27 @@ export function BusyProvider({ children }) {
     }
   }, []);
 
+  /**
+   * Called by a progress bar while it is on screen. Returns the release.
+   *
+   * Counted rather than boolean so two bars on one page cannot have the first
+   * one to finish re-enable the overlay under the second.
+   */
+  const holdOverlay = useCallback(() => {
+    setProgressHolds((count) => count + 1);
+    return () => setProgressHolds((count) => Math.max(0, count - 1));
+  }, []);
+
   // An explicit label always wins: "Envoi en cours" tells you more than "Traitement".
-  const shown = label || autoLabel;
+  const shown = progressHolds > 0 ? '' : (label || autoLabel);
+
+  const value = useMemo(
+    () => ({ runBusy, holdOverlay, busy: Boolean(shown) }),
+    [runBusy, holdOverlay, shown],
+  );
 
   return (
-    <BusyContext.Provider value={{ runBusy, busy: Boolean(shown) }}>
+    <BusyContext.Provider value={value}>
       {children}
       {shown ? (
         <div className="busy-overlay" role="alertdialog" aria-live="assertive" aria-busy="true" aria-label={shown}>

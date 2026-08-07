@@ -77,7 +77,7 @@ export default function HealthPage() {
                 />
               );
             })}
-            <MetricTile label="Dernier sondage" value={lastPoll} />
+            <MetricTile label="Dernier sondage" value={lastPoll} size="sm" />
             <MetricTile label="File d'attente" value={String(data.queue_depth ?? 0)} />
             {budget.budget ? (
               <MetricTile
@@ -94,7 +94,7 @@ export default function HealthPage() {
               hint={notifyEnabled
                 ? 'Relance des validateurs, escalade SLA et alertes techniques par e-mail.'
                 : 'Le centre de notifications reste actif ; seuls les envois par e-mail sont coupés.'}
-              value={<span className={`status-pill ${notifyEnabled ? 'ok' : 'warn'}`}>{notifyEnabled ? 'Activées' : 'Désactivées'}</span>}
+              value={<span className={`status-pill ${notifyEnabled ? 'ok' : 'warn'}`}>{notifyEnabled ? 'Activé' : 'Désactivé'}</span>}
             />
           </div>
         )}
