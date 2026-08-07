@@ -440,9 +440,11 @@ button.ghost {
 }
 
 .icon-button {
-  width: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  /* Followed the control scale instead of a hardcoded 44: a square action next
+     to a 38px field was visibly taller than everything around it. */
+  width: var(--control-height);
+  min-width: var(--control-height);
+  min-height: var(--control-height);
   padding: 0;
 }
 
