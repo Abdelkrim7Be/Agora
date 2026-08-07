@@ -58,6 +58,10 @@ gateway:
         - cost_observability
       base-path: /api/agent
       health-path: /health
+      manifest-path: /manifest
+      # Everything below is the offline fallback. The agent declares the same
+      # fields at `manifest-path` and that declaration wins; this is what the
+      # platform shows when the service is down or speaks a newer contract.
       settings-schema:
         - key: persona
           label: Persona
