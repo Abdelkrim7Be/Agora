@@ -294,9 +294,20 @@ class AgentBehavior(BaseModel):
 
 
 class StyleLearningConfig(BaseModel):
-    """Opt-in style learning from the selected mailbox's sent mail."""
+    """Style learning from the selected mailbox's sent mail.
 
-    enabled: bool = False
+    On by default. It was opt-in, which meant the `learn_style` setup step was
+    skipped on every new instance — so an agent started writing in a generic
+    register and the owner had to discover the feature and press a button to get
+    their own voice. Learning it while the mailbox is being connected is the
+    only moment where it costs nothing extra: the sent samples are already being
+    read for the setup wizard.
+
+    What it costs when on: one model call over `max_samples` sent messages at
+    instance setup. Only the distilled profile is kept, never the raw mail.
+    """
+
+    enabled: bool = True
     max_samples: int = Field(default=8, ge=1, le=50)
 
 
