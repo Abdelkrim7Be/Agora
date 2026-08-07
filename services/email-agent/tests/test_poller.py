@@ -1535,3 +1535,79 @@ def test_security_hold_retry_is_per_message_not_per_run_row():
     assert set(newest) == {"m1", "m2"}
     # The most recent row wins, so the backoff sees the latest attempt.
     assert newest["m1"]["updated_at"] == "2026-08-01T10:29:00+00:00"
+
+
+async def test_pending_approvals_do_not_eat_the_history_window(
+    mocked_gmail, fake_llms, monkeypatch, provider
+):
+    """A mailbox full of pending approvals must still take new mail.
+
+    Approvals keep their UNREAD flag until a person acts, so they come back in
+    every history window. They used to be filtered out only *after* the window
+    had been cut to `max_results`, and history.list returns oldest-first — so
+    they consumed the whole budget, were discarded, and nothing was processed.
+    A truncated window deliberately keeps the old baseline, so the next cycle
+    asked for the identical window. Nothing drained it, and every message that
+    arrived afterwards was invisible for good.
+    """
+    set_unread, _marked = mocked_gmail
+    fresh = _raw_message("m_fresh", "Nouveau devis", "bonjour")
+    set_unread([fresh])
+    provider.get_message = lambda msg_id, resource=None: fresh
+
+    # Four stuck approvals ahead of the new mail, with a window of three.
+    stuck = [{"id": f"m_pending_{i}"} for i in range(4)]
+    monkeypatch.setattr(
+        poller,
+        "_messages_awaiting_approval",
+        lambda: {ref["id"] for ref in stuck},
+    )
+    monkeypatch.setattr(poller, "get_last_history_id", lambda: "100")
+    provider.fetch_changes_since = lambda start_history_id, resource=None: [
+        *stuck,
+        {"id": "m_fresh"},
+    ]
+    provider.current_sync_cursor = lambda resource=None: "200"
+
+    advanced: list[str] = []
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: advanced.append(hid))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), provider=provider, max_results=3)
+
+    assert [o[0] for o in outcomes] == ["m_fresh"]
+    # The window was not truncated once the stuck ones were removed, so the
+    # baseline advances and the mailbox keeps moving.
+    assert advanced == ["200"]
+
+
+async def test_duplicate_history_records_do_not_eat_the_window(
+    mocked_gmail, fake_llms, monkeypatch, provider
+):
+    """history.list reports one record per change, not per message.
+
+    A message that was delivered and then labelled appears twice. Deduplicating
+    after the cut let those copies spend the budget that new mail needed.
+    """
+    set_unread, _marked = mocked_gmail
+    fresh = _raw_message("m_fresh", "Nouveau devis", "bonjour")
+    set_unread([fresh])
+    provider.get_message = lambda msg_id, resource=None: fresh
+
+    monkeypatch.setattr(poller, "_messages_awaiting_approval", lambda: set())
+    monkeypatch.setattr(poller, "get_last_history_id", lambda: "100")
+    provider.fetch_changes_since = lambda start_history_id, resource=None: [
+        {"id": "m_fresh"},
+        {"id": "m_fresh"},
+        {"id": "m_fresh"},
+    ]
+    provider.current_sync_cursor = lambda resource=None: "200"
+
+    advanced: list[str] = []
+    monkeypatch.setattr(poller, "set_last_history_id", lambda hid: advanced.append(hid))
+    fake_llms(classification="ignore")
+
+    outcomes = await poller.poll_once(_graph(), provider=provider, max_results=2)
+
+    assert [o[0] for o in outcomes] == ["m_fresh"]
+    assert advanced == ["200"]

@@ -822,10 +822,37 @@ async def _discover_unread_refs(
     """
     refs: list[dict] | None = None
     truncated = False
+
+    # Mail already parked on a human keeps its UNREAD flag on purpose, so it
+    # reappears in every window forever. It has to be dropped BEFORE the window
+    # is truncated, not after.
+    #
+    # It used to be filtered further down, once the batch had already been cut
+    # to `max_results`. history.list returns changes oldest-first, so a mailbox
+    # holding twenty pending approvals spent its entire window budget on them,
+    # discarded them, processed nothing — and because a truncated window
+    # deliberately does not advance the baseline, asked for the exact same
+    # window again next cycle. Nothing ever drained it: a pending approval only
+    # clears when a person acts, and until then every message that arrived
+    # afterwards was invisible. The mailbox stopped taking new mail for good,
+    # while the poller looked busy.
+    awaiting_human = _messages_awaiting_approval()
+
+    def _ready(items: list[dict]) -> list[dict]:
+        # Deduplicated, minus anything already waiting on a person.
+        unique = _unique_refs(items)
+        if not awaiting_human:
+            return unique
+        return [ref for ref in unique if ref["id"] not in awaiting_human]
+
     baseline = get_last_history_id()
     if baseline:
         try:
-            history_refs = provider.fetch_changes_since(baseline)
+            # history.list reports one record per change, so the same message
+            # shows up several times in a window where it was e.g. delivered and
+            # then labelled. Deduplicating before the cut also stops those
+            # duplicates from eating the budget.
+            history_refs = _ready(provider.fetch_changes_since(baseline))
             truncated = len(history_refs) > max_results
             refs = history_refs[:max_results]
         except Exception as exc:
@@ -837,7 +864,7 @@ async def _discover_unread_refs(
     except Exception:
         next_baseline = ""
     if refs is None:
-        refs = provider.fetch_unread(max_results)
+        refs = _ready(provider.fetch_unread(max_results))
     elif not refs:
         # An empty history window means "nothing changed since the baseline",
         # which is not the same as "nothing is waiting". Anything that became
@@ -846,21 +873,7 @@ async def _discover_unread_refs(
         # diff forever after. This mailbox sat on unread mail for hours that way.
         # A full unread list is one call, and the run registry dedups whatever it
         # returns, so reconcile whenever the incremental path comes back empty.
-        refs = provider.fetch_unread(max_results)
-
-    # history.list reports one record per change, so the same message shows up
-    # several times in a window where it was e.g. delivered and then labelled.
-    refs = _unique_refs(refs)
-
-    # Mail already waiting on a human keeps its UNREAD flag on purpose, so every
-    # cycle rediscovers it forever. _process_message_locked would return it
-    # untouched anyway, but only after the batch below has fetched its full body:
-    # a mailbox holding twenty pending approvals re-downloaded twenty messages a
-    # minute, indefinitely, against the same Gmail quota that sends draw on.
-    # Drop them here instead, where it costs one registry read for the batch.
-    awaiting_human = _messages_awaiting_approval()
-    if awaiting_human:
-        refs = [ref for ref in refs if ref["id"] not in awaiting_human]
+        refs = _ready(provider.fetch_unread(max_results))
 
     # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
     # round-trip per 50 instead of one per message. Failure falls back to the
