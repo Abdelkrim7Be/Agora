@@ -44,7 +44,7 @@ export default function HealthPage() {
 
   const budget = data?.gmail_budget || {};
   const budgetPct = Number(budget.pct || 0);
-  const lastPoll = data?.poller?.last_poll_at ? formatDateTimeFr(data.poller.last_poll_at) : '—';
+  const lastPoll = data?.poller?.last_poll_at ? formatDateTimeFr(data.poller.last_poll_at) : 'n/d';
   const notifyEnabled = Boolean(data?.notifications?.enabled);
 
   return (

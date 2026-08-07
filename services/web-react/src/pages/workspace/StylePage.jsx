@@ -212,7 +212,7 @@ export default function StylePage() {
             <label><span>Formule de clôture</span><input placeholder="Cordialement, Karim" value={fields.signoff} onChange={(e) => setFields({ ...fields, signoff: e.target.value })} /></label>
             <label><span>Longueur type</span>
               <select value={fields.length} onChange={(e) => setFields({ ...fields, length: e.target.value })}>
-                <option value="">—</option>
+                <option value="">Aucun</option>
                 <option value="courte">Courte</option>
                 <option value="moyenne">Moyenne</option>
                 <option value="détaillée">Détaillée</option>

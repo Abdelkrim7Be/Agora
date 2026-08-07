@@ -138,12 +138,14 @@ export function formatCountFr(value, digits = 0) {
 }
 
 export function formatPercentFr(value) {
-  if (value === null || value === undefined) return '—';
+  // "n/d" (non disponible) says the value has not been computed yet. A bare dash
+  // reads as a broken cell.
+  if (value === null || value === undefined) return 'n/d';
   return `${Number(value).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} %`;
 }
 
 export function formatDurationFr(seconds) {
-  if (seconds === null || seconds === undefined) return '—';
+  if (seconds === null || seconds === undefined) return 'n/d';
   const totalMinutes = Math.max(0, Math.round(Number(seconds) / 60));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;

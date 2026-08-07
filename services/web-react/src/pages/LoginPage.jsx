@@ -67,7 +67,6 @@ export default function LoginPage() {
             />
           </label>
           <button className="primary" type="submit" disabled={submitting}>
-            <span className="material-symbols-outlined" aria-hidden="true">login</span>
             <span>Accéder à la plateforme</span>
           </button>
         </form>
@@ -82,11 +81,11 @@ export default function LoginPage() {
           <span className="eyebrow">Agora Consulting · agents métiers supervisés</span>
           <h2>Des agents IA utiles, mais jamais hors contrôle.</h2>
           <p>Centralisez les validations, la synchronisation des boîtes mail, les règles métier et les journaux d’audit dans une interface pensée pour les équipes clientes.</p>
-          <div className="login-proof-grid">
-            <div><strong>Supervision</strong><span>Chaque action sensible passe par une validation claire.</span></div>
-            <div><strong>Traçabilité</strong><span>Les accès et décisions restent consultables.</span></div>
-            <div><strong>Connecteurs</strong><span>Boîtes mail, cas métier et routage dans un seul espace.</span></div>
-          </div>
+          <ol className="login-proof-rail">
+            <li><strong>Supervision</strong><span>Chaque action sensible passe par une validation claire.</span></li>
+            <li><strong>Traçabilité</strong><span>Les accès et décisions restent consultables.</span></li>
+            <li><strong>Connecteurs</strong><span>Boîtes mail, cas métier et routage dans un seul espace.</span></li>
+          </ol>
         </div>
       </aside>
     </div>
