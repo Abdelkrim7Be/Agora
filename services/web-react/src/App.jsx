@@ -160,6 +160,10 @@ export default function App() {
                         <Route path="run/:runId" element={<RunDetailPage />} />
                         <Route path="gmail" element={<GmailPage />} />
                         <Route path="config" element={<PersonaPage />} />
+                        {/* The name the agent declares for this section in its
+                            manifest. `config` predates the contract and is kept
+                            so existing links and bookmarks still resolve. */}
+                        <Route path="persona" element={<PersonaPage />} />
                         <Route path="style" element={<StylePage />} />
                         <Route path="signature" element={<SignaturePage />} />
                         <Route path="categories" element={<CategoriesPage />} />
