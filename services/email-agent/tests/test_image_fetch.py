@@ -63,18 +63,21 @@ def test_a_host_with_one_public_and_one_private_address_is_refused(monkeypatch):
         fetch_image_bytes("https://mixed.example/logo.png")
 
 
-def test_redirects_are_not_followed(monkeypatch):
+def test_a_redirect_to_an_internal_address_is_refused(monkeypatch):
     """A redirect is how a public URL reaches an internal address after the check."""
     import src.image_fetch as mod
 
+    # Host-aware: the first hop is genuinely public, the destination is not.
+    # A stub that answered "public" for everything would never exercise the
+    # per-hop check this test exists for.
     monkeypatch.setattr(
         mod.socket, "getaddrinfo",
-        lambda host, port: [(2, 1, 6, "", ("93.184.216.34", 0))],
+        lambda host, port: [(2, 1, 6, "", (host if host[0].isdigit() else "93.184.216.34", 0))],
     )
 
     class _Redirect:
         status_code = 302
-        headers = {"location": "http://169.254.169.254/"}
+        headers = {"location": "https://169.254.169.254/"}
         content = b""
 
     class _Client:
@@ -82,11 +85,11 @@ def test_redirects_are_not_followed(monkeypatch):
             assert kw.get("follow_redirects") is False
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def get(self, url): return _Redirect()
+        def get(self, url, headers=None): return _Redirect()
 
     monkeypatch.setattr(mod.httpx, "Client", _Client)
 
-    with pytest.raises(ImageFetchError, match="redirection"):
+    with pytest.raises(ImageFetchError, match="interne"):
         fetch_image_bytes("https://example.com/logo.png")
 
 
@@ -107,7 +110,7 @@ def test_an_oversized_image_is_refused(monkeypatch):
         def __init__(self, *a, **kw): pass
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def get(self, url): return _Big()
+        def get(self, url, headers=None): return _Big()
 
     monkeypatch.setattr(mod.httpx, "Client", _Client)
 
@@ -132,7 +135,7 @@ def test_a_public_image_comes_back(monkeypatch):
         def __init__(self, *a, **kw): pass
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def get(self, url): return _Ok()
+        def get(self, url, headers=None): return _Ok()
 
     monkeypatch.setattr(mod.httpx, "Client", _Client)
 

@@ -10,14 +10,15 @@ Doing it server-side means the server makes a request to an address a user
 supplies, which is a server-side request forgery primitive: without the checks
 below, `http://169.254.169.254/…` or `http://postgres:5432/` would be fetched
 from *inside* the private network by a component that is allowed to be there.
-Hence: https only, public addresses only, no redirects, hard size and time caps.
+Hence: https only, public addresses only, every redirect hop re-checked, and
+hard size and time caps.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -26,6 +27,8 @@ import httpx
 # bytes actually read.
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 FETCH_TIMEOUT_SECONDS = 10.0
+# Enough for the usual CDN hop or two, few enough that a redirect loop ends.
+MAX_REDIRECTS = 3
 
 
 class ImageFetchError(ValueError):
@@ -58,8 +61,8 @@ def _is_public_address(host: str) -> bool:
     return bool(infos)
 
 
-def fetch_image_bytes(url: str) -> bytes:
-    """Download `url` and return its bytes, or raise ImageFetchError."""
+def _check_target(url: str) -> None:
+    """Refuse anything we are not willing to connect to."""
     parsed = urlparse((url or "").strip())
 
     # https only. Plain http would let a network position downgrade the picture
@@ -73,18 +76,46 @@ def fetch_image_bytes(url: str) -> bytes:
             "cette adresse pointe vers le réseau interne ; seules les adresses publiques sont acceptées"
         )
 
+
+def fetch_image_bytes(url: str) -> bytes:
+    """Download `url` and return its bytes, or raise ImageFetchError."""
+    _check_target(url)
+
     try:
-        # follow_redirects stays off on purpose: a redirect is how a public URL
-        # sends the request to an internal address after the check has passed.
+        # Redirects are followed by hand, not by httpx, because each hop has to
+        # be re-checked: a public URL that 302s to 169.254.169.254 is precisely
+        # how the address check gets bypassed. Refusing them outright was safe
+        # but unusable — most CDN-hosted logos redirect at least once.
         with httpx.Client(timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=False) as client:
-            response = client.get(url)
+            headers = {
+                # Several CDNs (Wikimedia among them) answer 403 to a client
+                # that does not identify itself, so the fetch failed on exactly
+                # the kind of public image this feature is for. Identifying the
+                # product is also the honest thing to do when fetching someone
+                # else's asset.
+                "User-Agent": "AgoraSignatureFetch/1.0 (+https://agora.example)",
+                "Accept": "image/*",
+            }
+            target = url
+            for _hop in range(MAX_REDIRECTS + 1):
+                response = client.get(target, headers=headers)
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = response.headers.get("location")
+                if not location:
+                    raise ImageFetchError("redirection sans destination")
+                # Relative Location headers are legal, so resolve before checking.
+                target = urljoin(target, location)
+                _check_target(target)
+            else:
+                raise ImageFetchError("trop de redirections")
     except httpx.HTTPError as exc:
         raise ImageFetchError(f"téléchargement impossible : {exc}") from exc
 
     if response.status_code >= 400:
         raise ImageFetchError(f"le serveur a répondu {response.status_code}")
     if response.status_code >= 300:
-        raise ImageFetchError("les redirections ne sont pas suivies ; donnez l'adresse finale de l'image")
+        raise ImageFetchError("trop de redirections")
 
     declared = response.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > MAX_IMAGE_BYTES:
