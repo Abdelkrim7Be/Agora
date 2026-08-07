@@ -230,8 +230,41 @@ public class ProxyController {
         return "write";
     }
 
+    /**
+     * Read-only status endpoints the web client polls on a timer.
+     *
+     * The audit trail exists to answer "who did what, and who saw whose mail".
+     * These answer neither: a health blob, aggregate counters, a connection badge,
+     * setup progress, an unread count. None of them names a message, a run or a
+     * correspondent. They were nonetheless writing a row every few seconds per
+     * open tab, which pushed real actions off the first page of the trail within
+     * about two minutes and made it useless for the thing it is for.
+     *
+     * Anything that discloses a record stays audited: {@code GET /run/{id}},
+     * {@code /inbox}, {@code /drafts}, {@code /messages}, {@code /contacts}, and
+     * every write. Admin mailbox access is recorded separately and is not
+     * affected by this list.
+     */
+    private static final Set<String> POLLED_STATUS_PATHS = Set.of(
+            "/api/agent/runs",
+            "/api/agent/health",
+            "/api/agent/analytics",
+            "/api/agent/metrics",
+            "/api/agent/sync/status",
+            "/api/agent/instance-setup",
+            "/api/agent/events",
+            "/api/agent/notifications",
+            "/api/agent/notifications/unread-count"
+    );
+
     private boolean shouldRecordForwardedAudit(HttpServletRequest request, String downstreamPath) {
-        return !("GET".equals(request.getMethod()) && "/api/agent/runs".equals(downstreamPath));
+        if (!"GET".equals(request.getMethod())) {
+            return true;
+        }
+        // Match on the path only: a query string carries filters, never authority.
+        int queryStart = downstreamPath.indexOf('?');
+        String path = queryStart >= 0 ? downstreamPath.substring(0, queryStart) : downstreamPath;
+        return !POLLED_STATUS_PATHS.contains(path);
     }
 
     private boolean shouldRecordAdminMailboxAccess(HttpServletRequest request, String downstreamPath) {

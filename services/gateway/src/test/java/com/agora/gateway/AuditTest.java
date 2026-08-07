@@ -169,6 +169,68 @@ class AuditTest {
                 "forwarded".equals(e.getOutcome()) && "/api/agent/runs".equals(e.getPath()));
     }
 
+    @Test
+    void polled_status_endpoints_are_not_written_to_audit() throws Exception {
+        // These are what the open tabs hit on a timer. A row each pushed real
+        // actions off the first page of the trail in about two minutes.
+        String[] polled = {
+                "/health", "/analytics", "/sync/status",
+                "/instance-setup", "/notifications/unread-count",
+        };
+        for (String path : polled) {
+            wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo(path))
+                    .willReturn(aResponse()
+                            .withStatus(200)
+                            .withHeader("Content-Type", "application/json")
+                            .withBody("{}")));
+        }
+
+        String token = login("owner", "ownerpass");
+        for (String path : polled) {
+            mockMvc.perform(get("/api/agent" + path)
+                            .header("Authorization", "Bearer " + token))
+                    .andExpect(status().isOk());
+        }
+
+        assertThat(auditRepository.findAll()).noneMatch(e -> "forwarded".equals(e.getOutcome()));
+    }
+
+    @Test
+    void reading_one_run_is_still_written_to_audit() throws Exception {
+        // The counterpart: anything that discloses a record must survive the
+        // polling exclusion, or quieting the trail would also blind it.
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/run/run-42"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_id\":\"run-42\"}")));
+
+        mockMvc.perform(get("/api/agent/run/run-42")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk());
+
+        assertThat(auditRepository.findAll()).anyMatch(e ->
+                "forwarded".equals(e.getOutcome()) && "/api/agent/run/run-42".equals(e.getPath()));
+    }
+
+    @Test
+    void reading_the_inbox_is_still_written_to_audit() throws Exception {
+        // The exclusion matches whole paths, not prefixes. /inbox lists real
+        // senders, subjects and snippets — the disclosure the trail is for.
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"messages\":[]}")));
+
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk());
+
+        assertThat(auditRepository.findAll()).anyMatch(e ->
+                "forwarded".equals(e.getOutcome()) && "/api/agent/inbox".equals(e.getPath()));
+    }
+
 
     @Test
     void login_failure_writes_row() throws Exception {
