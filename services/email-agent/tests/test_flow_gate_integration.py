@@ -236,3 +236,78 @@ def test_restore_is_a_noop_without_a_redaction_map():
 
     args = {"content": "Reference [IBAN_1] inconnue"}
     assert g._restore_redactions(args, {"email_input": {}}) == args
+
+
+# --- a person may redirect a draft; the model may not ------------------------
+
+def test_reviewer_recipients_replace_the_resolved_destination():
+    """The approval screen shows the destination; changing it is how you redirect."""
+    import src.graph as g
+
+    assert g._reviewer_recipients({"_recipients": ["hr@company.example"]}, ["client@x.test"]) == [
+        "hr@company.example"
+    ]
+
+
+def test_an_unchanged_preview_is_not_treated_as_a_change():
+    # The preview always carries the key, so "same as resolved" has to mean
+    # "leave the trusted context alone" — not "the reviewer chose this".
+    import src.graph as g
+
+    assert g._reviewer_recipients({"_recipients": ["client@x.test"]}, ["client@x.test"]) is None
+
+
+def test_absent_or_empty_recipients_leave_the_context_in_charge():
+    import src.graph as g
+
+    assert g._reviewer_recipients({"content": "bonjour"}, ["client@x.test"]) is None
+    assert g._reviewer_recipients({"_recipients": []}, ["client@x.test"]) is None
+    assert g._reviewer_recipients({"_recipients": [""]}, ["client@x.test"]) is None
+
+
+def test_reviewer_recipients_are_normalised_and_deduplicated():
+    import src.graph as g
+
+    chosen = g._reviewer_recipients(
+        {"_recipients": ["Ops <ops@company.example>", "ops@company.example", "hr@company.example"]},
+        ["client@x.test"],
+    )
+
+    assert chosen == ["ops@company.example", "hr@company.example"]
+
+
+def test_the_preview_key_never_reaches_the_tool(monkeypatch):
+    """`_recipients` is a preview field, not a tool argument.
+
+    Letting it through would put an address in the model's own argument record,
+    which is exactly the shape CaMeL step #1 removed.
+    """
+    import src.graph as g
+    from langchain_core.messages import AIMessage
+    from langgraph.store.memory import InMemoryStore
+
+    seen = {}
+    monkeypatch.setitem(
+        g.tools_by_name_map,
+        "write_email",
+        type("Fake", (), {"invoke": staticmethod(lambda args: seen.update(args) or "sent")})(),
+    )
+    monkeypatch.setattr(g, "interrupt", lambda _req: [{"type": "edit", "args": {
+        "subject": "Re: devis", "content": "bonjour", "_recipients": ["ops@company.example"],
+    }}])
+
+    state = {
+        "email_input": {
+            "author": "client@x.test", "to": "me@company.example",
+            "subject": "devis", "email_thread": "bonjour", "email_id": "m1",
+        },
+        "messages": [AIMessage(content="", tool_calls=[{
+            "name": "write_email",
+            "args": {"subject": "Re: devis", "content": "bonjour"},
+            "id": "call-1", "type": "tool_call",
+        }])],
+    }
+
+    g.tool_node(state, InMemoryStore(), config={"configurable": {"thread_id": "run-rcpt"}})
+
+    assert "_recipients" not in seen
