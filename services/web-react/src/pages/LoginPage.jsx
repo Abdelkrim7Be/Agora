@@ -12,6 +12,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState({ message: '', kind: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSending, setForgotSending] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -28,6 +32,24 @@ export default function LoginPage() {
       setStatus({ message: `Échec de connexion : ${error.message}`, kind: 'error' });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleForgot = async (event) => {
+    event.preventDefault();
+    setForgotSending(true);
+    try {
+      await api('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotEmail.trim() }),
+      });
+    } catch (_error) {
+      // Swallowed on purpose. The endpoint answers the same way whatever the
+      // address, and reporting a failure here would hand back the one signal it
+      // exists to withhold: whether that address has an account.
+    } finally {
+      setForgotSending(false);
+      setForgotSent(true);
     }
   };
 
@@ -67,9 +89,44 @@ export default function LoginPage() {
             />
           </label>
           <button className="primary" type="submit" disabled={submitting}>
-            <span>Accéder à la plateforme</span>
+            <span>{submitting ? 'Connexion…' : 'Accéder à la plateforme'}</span>
           </button>
         </form>
+        {forgotOpen ? (
+          <form className="login-forgot" onSubmit={handleForgot}>
+            {forgotSent ? (
+              <p className="login-forgot-done" role="status">
+                Si un compte existe pour cette adresse, un lien de réinitialisation vient
+                d’être envoyé. Il expire et ne sert qu’une fois.
+              </p>
+            ) : (
+              <>
+                <label>
+                  <span>Adresse e-mail du compte</span>
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    placeholder="vous@exemple.com"
+                    value={forgotEmail}
+                    onChange={(event) => setForgotEmail(event.target.value)}
+                    required
+                  />
+                </label>
+                <button type="submit" disabled={forgotSending}>
+                  <span>{forgotSending ? 'Envoi…' : 'Envoyer le lien'}</span>
+                </button>
+              </>
+            )}
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="login-forgot-toggle"
+            onClick={() => setForgotOpen(true)}
+          >
+            Mot de passe oublié ?
+          </button>
+        )}
         <div className="login-trust-row" aria-label="Garanties de sécurité">
           <span>Validation humaine</span>
           <span>Audit activé</span>

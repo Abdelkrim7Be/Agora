@@ -45,13 +45,35 @@ public class UserInvitation {
     /** Set exactly once, in the same transaction as the password write. */
     private Instant consumedAt;
 
+    /**
+     * What this token is for: {@link #PURPOSE_INVITE} or {@link #PURPOSE_RESET}.
+     *
+     * They differ in one consequence. Redeeming an invitation enables the
+     * account — an invited account is disabled until its password is set, so
+     * leaving it disabled would make the link look broken. A password reset must
+     * NOT enable anything: an account disabled between the moment the link was
+     * sent and the moment it is used would otherwise be brought back by the very
+     * person who was locked out.
+     *
+     * Null on rows written before this column existed; those are all invitations.
+     */
+    private String purpose;
+
     public UserInvitation() {}
 
+    public static final String PURPOSE_INVITE = "invite";
+    public static final String PURPOSE_RESET = "reset";
+
     public UserInvitation(Long userId, String tokenHash, Instant expiresAt, String createdBy) {
+        this(userId, tokenHash, expiresAt, createdBy, PURPOSE_INVITE);
+    }
+
+    public UserInvitation(Long userId, String tokenHash, Instant expiresAt, String createdBy, String purpose) {
         this.userId = userId;
         this.tokenHash = tokenHash;
         this.expiresAt = expiresAt;
         this.createdBy = createdBy;
+        this.purpose = purpose;
     }
 
     @PrePersist
@@ -72,5 +94,9 @@ public class UserInvitation {
     public String getCreatedBy() { return createdBy; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getConsumedAt() { return consumedAt; }
+    public String getPurpose() { return purpose; }
+
+    /** Rows predating this column carry no purpose and are all invitations. */
+    public boolean isReset() { return PURPOSE_RESET.equals(purpose); }
     public void setConsumedAt(Instant consumedAt) { this.consumedAt = consumedAt; }
 }

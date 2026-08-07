@@ -62,6 +62,10 @@ public class SecurityConfig {
                 // Both legs are throttled globally in InvitationController.
                 .requestMatchers(HttpMethod.GET, "/auth/invite/*").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/invite/*").permitAll()
+                // Someone who forgot their password has no token to present. The
+                // endpoint answers identically whatever the address, and never
+                // returns the link — see PasswordResetController.
+                .requestMatchers(HttpMethod.POST, "/auth/forgot-password").permitAll()
                 // Every signed-in account may read and edit its own profile and rotate
                 // its own password. The account is taken from the token, never from
                 // the request, so there is no id to swap for someone else's.

@@ -5195,3 +5195,86 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   text-transform: uppercase;
   letter-spacing: .08em;
 }
+
+/* Force du mot de passe — indicateur, pas règle de validation.
+   Le serveur n'impose que la longueur (12) ; ceci guide avant de valider.
+   Reprend les trois couleurs de verdict : rouille, laiton, vert. */
+.password-strength {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.password-strength-track {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.password-strength-step {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface-highest);
+  transition: background 120ms ease;
+}
+
+.password-strength-step.is-faible { background: var(--danger); }
+.password-strength-step.is-moyen  { background: var(--tertiary); }
+.password-strength-step.is-fort   { background: var(--primary); }
+
+.password-strength-label {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: var(--tracking-label, .02em);
+}
+
+.password-strength-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+/* Le formulaire de mot de passe est une grille de colonnes égales alignées sur
+   leur bas ; la jauge pousse sa colonne plus haut que les autres. L'aligner en
+   haut garde les trois champs sur la même ligne. */
+.profile-form.password-form { align-items: start; }
+.profile-form.password-form > button { margin-top: 22px; }
+
+/* Mot de passe oublié — replié par défaut : c'est le chemin rare, et il ne doit
+   pas concurrencer visuellement le formulaire de connexion. */
+.login-forgot-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-top: 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.login-forgot-toggle:hover { color: var(--text); }
+
+.login-forgot {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.login-forgot label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.login-forgot-done {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
