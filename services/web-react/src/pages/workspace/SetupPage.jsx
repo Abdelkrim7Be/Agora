@@ -157,7 +157,7 @@ export default function SetupPage() {
         <div className="card-header">
           <div>
             <h2>Configuration en cours</h2>
-            <div className="meta"><span>{instanceId}</span></div>
+            <div className="meta"><span>{currentInstance?.display_name || instanceId}</span></div>
           </div>
           <div className="toolbar">
             {setup?.status === 'not_started' && canManage ? (

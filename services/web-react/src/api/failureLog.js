@@ -31,6 +31,36 @@ export function recordFailure(queryKey, error) {
   emit();
 }
 
+/**
+ * A refused or failed *action*, as opposed to missing data.
+ *
+ * Reads had a banner and writes did not, so pressing a button a role is not
+ * allowed to press did nothing at all: no error, no change, no explanation. That
+ * is indistinguishable from a broken button, and it is why the console looked
+ * like it had dead controls rather than controls the server declines.
+ *
+ * All actions share one entry: only the most recent matters, and stacking them
+ * would bury the read failures the banner also carries.
+ */
+const ACTION_FAILURE_ID = '["__action__"]';
+
+export function recordActionFailure(error) {
+  const message = error?.message || 'Erreur inconnue';
+  const existing = failures.find((entry) => entry.id === ACTION_FAILURE_ID);
+  if (existing && existing.message === message) return;
+  failures = [
+    ...failures.filter((entry) => entry.id !== ACTION_FAILURE_ID),
+    { id: ACTION_FAILURE_ID, subject: 'action refusée', message },
+  ];
+  emit();
+}
+
+export function clearActionFailure() {
+  if (!failures.some((entry) => entry.id === ACTION_FAILURE_ID)) return;
+  failures = failures.filter((entry) => entry.id !== ACTION_FAILURE_ID);
+  emit();
+}
+
 export function clearFailure(queryKey) {
   const id = JSON.stringify(queryKey);
   if (!failures.some((entry) => entry.id === id)) return;
