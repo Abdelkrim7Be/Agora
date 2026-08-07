@@ -5532,3 +5532,7 @@ button.primary.is-pending::after { color: var(--primary-text); }
 
 .signature-url-row input { flex: 1 1 auto; }
 .signature-url-row button { flex: 0 0 auto; }
+
+/* Destinataire d'un brouillon : modifiable par un humain, jamais par le modèle. */
+.recipient-input { width: 100%; }
+.action-row > small { color: var(--muted); font-size: 12px; line-height: 1.4; }

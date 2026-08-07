@@ -1149,7 +1149,12 @@ def _reviewer_recipients(edited_args: dict, previous: list[str]) -> list[str] | 
     if not isinstance(edited_args, dict) or _REVIEWER_RECIPIENT_KEY not in edited_args:
         return None
     raw = edited_args.get(_REVIEWER_RECIPIENT_KEY)
-    values = raw if isinstance(raw, list) else [raw]
+    # The approval screen sends one comma-separated field, the REST API may send
+    # a list. Both mean the same thing.
+    if isinstance(raw, list):
+        values = raw
+    else:
+        values = str(raw or "").split(",")
     addresses = []
     for value in values:
         address = _email_addr(value)

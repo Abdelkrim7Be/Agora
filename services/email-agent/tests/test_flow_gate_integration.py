@@ -311,3 +311,14 @@ def test_the_preview_key_never_reaches_the_tool(monkeypatch):
     g.tool_node(state, InMemoryStore(), config={"configurable": {"thread_id": "run-rcpt"}})
 
     assert "_recipients" not in seen
+
+
+def test_a_comma_separated_field_is_split():
+    # The approval screen is one text input; the REST API sends a list. Both
+    # have to mean the same thing.
+    import src.graph as g
+
+    assert g._reviewer_recipients(
+        {"_recipients": "ops@company.example, hr@company.example"},
+        ["client@x.test"],
+    ) == ["ops@company.example", "hr@company.example"]
