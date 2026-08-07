@@ -68,6 +68,49 @@ public class InvitationMailer {
         }
     }
 
+    /**
+     * Password reset link.
+     *
+     * Separate wording from an invitation because the recipient already has an
+     * account: an "an access has been created for you" mail for a reset reads as
+     * a sign that someone else got in. It also says what to do if they did not
+     * ask, which is the only warning a person gets that someone is trying their
+     * address.
+     *
+     * @return true when the message was handed to the relay
+     */
+    public boolean sendPasswordReset(String to, String username, String resetLink) {
+        if (!smtpConfigured() || to == null || to.isBlank()) return false;
+
+        GatewayProperties.Smtp smtp = properties.getSmtp();
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(smtp.getFrom());
+        message.setTo(to);
+        message.setSubject("Réinitialisation de votre mot de passe Agora");
+        message.setText("""
+                Bonjour %s,
+
+                Une réinitialisation de mot de passe a été demandée pour votre compte.
+                Choisissez un nouveau mot de passe ici :
+
+                %s
+
+                Ce lien expire dans %d heures et ne peut être utilisé qu'une seule fois.
+
+                Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail :
+                votre mot de passe actuel reste valable et rien n'a changé.
+                """.formatted(username, resetLink, properties.getInviteExpiryHours()));
+
+        try {
+            sender(smtp).send(message);
+            return true;
+        } catch (Exception e) {
+            // Never log the link: it is a bearer credential for the account.
+            log.warn("password reset mail to {} could not be sent: {}", to, e.getMessage());
+            return false;
+        }
+    }
+
     private JavaMailSenderImpl sender(GatewayProperties.Smtp smtp) {
         JavaMailSenderImpl sender = new JavaMailSenderImpl();
         sender.setHost(smtp.getHost());

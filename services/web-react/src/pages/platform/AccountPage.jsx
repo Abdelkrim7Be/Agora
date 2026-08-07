@@ -6,6 +6,7 @@ import { useStatus } from '../../contexts/StatusContext';
 import { currentUsername } from '../../utils/jwt';
 import { useBusy } from '../../contexts/BusyContext';
 import { useMyProfileQuery, useUpdateMyProfile, useChangeMyPassword } from '../../api/queries';
+import { PasswordStrength } from '../../components/ui/PasswordStrength';
 
 function profileStorageKey(username) {
   return `agora.profile.${username || 'anonymous'}`;
@@ -59,6 +60,7 @@ export default function AccountPage() {
   const [title, setTitle] = useState(profile.title || '');
   const [email, setEmail] = useState('');
   const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
+  const [passwordDone, setPasswordDone] = useState(false);
   const fileInputRef = useRef(null);
   const { runBusy } = useBusy();
   const meQuery = useMyProfileQuery();
@@ -133,12 +135,14 @@ export default function AccountPage() {
       setStatus('Le nouveau mot de passe doit faire au moins 12 caractères.', 'error');
       return;
     }
+    setPasswordDone(false);
     try {
       await runBusy('Changement du mot de passe', () => changePassword.mutateAsync({
         currentPassword: passwords.current,
         newPassword: passwords.next,
       }));
       setPasswords({ current: '', next: '', confirm: '' });
+      setPasswordDone(true);
       setStatus('Mot de passe modifié. Il servira à votre prochaine connexion.', 'ok');
     } catch (error) {
       setStatus(`Impossible de changer le mot de passe : ${error.message}`, 'error');
@@ -201,7 +205,7 @@ export default function AccountPage() {
             <div className="meta"><span>Au moins 12 caractères. Vous restez connecté après le changement.</span></div>
           </div>
         </div>
-        <form className="profile-form" onSubmit={handlePasswordChange}>
+        <form className="profile-form password-form" onSubmit={handlePasswordChange}>
           <label>Mot de passe actuel
             <input
               type="password"
@@ -216,9 +220,14 @@ export default function AccountPage() {
               type="password"
               autoComplete="new-password"
               value={passwords.next}
-              onChange={(event) => setPasswords({ ...passwords, next: event.target.value })}
+              onChange={(event) => {
+                setPasswordDone(false);
+                setPasswords({ ...passwords, next: event.target.value });
+              }}
+              aria-describedby="new-password-strength"
               required
             />
+            <PasswordStrength id="new-password-strength" value={passwords.next} />
           </label>
           <label>Confirmer le nouveau mot de passe
             <input
@@ -229,11 +238,22 @@ export default function AccountPage() {
               required
             />
           </label>
-          <button type="submit" className="primary">
-            <span className="material-symbols-outlined" aria-hidden="true">key</span>
-            <span>Changer le mot de passe</span>
+          <button type="submit" className="primary" disabled={changePassword.isPending}>
+            <span
+              className={'material-symbols-outlined' + (changePassword.isPending ? ' spin' : '')}
+              aria-hidden="true"
+            >
+              {changePassword.isPending ? 'progress_activity' : 'key'}
+            </span>
+            <span>{changePassword.isPending ? 'Changement…' : 'Changer le mot de passe'}</span>
           </button>
         </form>
+        {passwordDone ? (
+          <div className="notice" role="status">
+            Mot de passe modifié. Votre session reste ouverte ; le nouveau mot de passe
+            servira à votre prochaine connexion.
+          </div>
+        ) : null}
       </div>
     </>
   );
