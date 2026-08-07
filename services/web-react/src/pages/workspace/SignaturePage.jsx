@@ -10,6 +10,7 @@ import {
   useSaveSignature,
   useUploadSignatureImage,
   useDeleteSignatureImage,
+  useImportSignatureImageFromUrl,
 } from '../../api/queries';
 
 // Mirrors SignatureConfig.image_width's default in the email-agent.
@@ -50,6 +51,7 @@ function structuredLines(config) {
 
 export default function SignaturePage() {
   const { instanceId, currentInstance, hasRole } = useInstance();
+  const importImage = useImportSignatureImageFromUrl();
   const { setStatus } = useStatus();
   const { apiBlob } = useApi();
   const canManage = hasRole('owner');
@@ -143,6 +145,19 @@ export default function SignaturePage() {
 
   const lines = structuredLines(form);
   const text = form.text.trim();
+  const handleImportImage = async () => {
+    try {
+      await runBusy('Import de l’image', () => importImage.mutateAsync(form.image_url.trim()));
+      // Stored as an inline part now, so the URL field has done its job and the
+      // preview must come from the stored copy, not from the remote address.
+      setForm((current) => ({ ...current, image_url: '' }));
+      await query.refetch();
+      setStatus('Image importée. Elle est désormais intégrée au message.', 'ok');
+    } catch (error) {
+      setStatus(`Import impossible : ${error.message}`, 'error');
+    }
+  };
+
   const previewImageUrl = imageObjectUrl || form.image_url.trim();
   const previewLines = lines.length ? [...lines, ...(text ? [text] : [])] : (text ? [text] : []);
 
@@ -217,7 +232,27 @@ export default function SignaturePage() {
               il faut une image source plus haute.
             </small>
           </label>
-          <label className="signature-url-fallback"><span>Ou URL d’image externe</span><input type="url" placeholder="https://exemple.com/signature.png" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} /></label>
+          <label className="signature-url-fallback">
+            <span>Ou URL d’image externe</span>
+            <div className="signature-url-row">
+              <input
+                type="url"
+                placeholder="https://exemple.com/signature.png"
+                value={form.image_url}
+                onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+              />
+              <button type="button" onClick={handleImportImage} disabled={!form.image_url.trim()}>
+                <span className="material-symbols-outlined" aria-hidden="true">download</span>
+                <span>Importer</span>
+              </button>
+            </div>
+            <small>
+              Une adresse laissée telle quelle part en image distante, que la plupart des
+              messageries bloquent par défaut. « Importer » récupère le fichier une fois et
+              l’intègre au message, comme un envoi depuis votre poste : il s’affiche alors
+              toujours.
+            </small>
+          </label>
         </form>
         <Card>
           <strong>Aperçu</strong>

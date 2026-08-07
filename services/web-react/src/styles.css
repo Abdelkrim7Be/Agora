@@ -5505,3 +5505,13 @@ button.primary.is-pending::after { color: var(--primary-text); }
 @media (prefers-reduced-motion: reduce) {
   button.is-pending::after { animation-duration: 2000ms; }
 }
+
+/* URL d'image de signature : le champ et son action sur la même ligne. */
+.signature-url-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.signature-url-row input { flex: 1 1 auto; }
+.signature-url-row button { flex: 0 0 auto; }
