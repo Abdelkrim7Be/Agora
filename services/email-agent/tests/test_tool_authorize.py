@@ -245,3 +245,37 @@ def test_a_denied_redraft_stops_instead_of_looping(monkeypatch, fake_llms, respo
     assert len(calls) == 2
     state = email_assistant.get_state(cfg)
     assert len(state.values["messages"]) < g._MAX_RUN_MESSAGES
+
+
+def test_a_revision_does_not_spend_a_second_send_slot(monkeypatch, fake_llms, respond_email):
+    """The reviewer asking for changes must not exhaust the run's send budget.
+
+    Slots are reserved at grant time, before approval, so the first (never sent)
+    draft already counted. A revision is the same logical send and is authorized
+    under the same action id, which the service treats as idempotent.
+    """
+    import src.graph as g
+
+    action_ids: list[str] = []
+    g._authorization_cache.clear()
+    monkeypatch.setattr(g.settings, "security_enabled", True)
+
+    def _fake_authorize(action: str, args: dict, run_id: str, action_id: str = "") -> dict:
+        action_ids.append(action_id)
+        return {"decision": "hitl", "reason": "needs approval"}
+
+    monkeypatch.setattr(g, "authorize_action", _fake_authorize)
+    monkeypatch.setattr(g, "audit_output", lambda *a, **k: {"flagged": False, "reasons": []})
+    fake_llms(
+        classification="respond",
+        tool_sequence=[ai_tool_call("write_email", DRAFT, "c1")],
+        redraft_sequence=[{"content": "Revision 1."}, {"content": "Revision 2."}],
+    )
+    cfg = _cfg("run-revision-slot")
+
+    email_assistant.invoke({"email_input": respond_email}, cfg)
+    email_assistant.invoke(Command(resume=[{"type": "response", "args": "make it english"}]), cfg)
+    email_assistant.invoke(Command(resume=[{"type": "response", "args": "shorter"}]), cfg)
+
+    assert len(action_ids) == 3
+    assert action_ids == ["c1", "c1", "c1"], action_ids

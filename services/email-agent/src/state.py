@@ -82,3 +82,7 @@ class State(MessagesState):
     # The draft as the user last saw (and possibly hand-edited) it; the redraft
     # node starts from this instead of the last server-generated draft.
     redraft_baseline: NotRequired[dict]
+    # Id of the first send-style action proposed in this run. A revision of the
+    # same draft is authorized under it so the run's send budget is spent once,
+    # not once per revision.
+    send_action_id: NotRequired[str]

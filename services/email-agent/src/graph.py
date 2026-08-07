@@ -935,6 +935,25 @@ def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
 SEND_TOOL_NAMES = {"write_email", "forward_email", "reply_all"}
 
 
+def _send_action_id(name: str, state: State, tool_call: dict) -> str:
+    """The id the security service counts a send against.
+
+    Rate-limit slots are reserved when an action is *granted*, before the human
+    has approved it, and released never. A draft the reviewer sent back for
+    changes had therefore already spent the run's send budget, so every revision
+    of it was refused for a send that never happened — the run could no longer
+    complete by any route.
+
+    A revision is the same logical send, so it reuses the first draft's id and the
+    service treats the check as idempotent. Content, recipients and caps are still
+    re-evaluated on every call; only the counter is not incremented twice. An
+    unrelated second send in the same run still gets its own id and its own slot.
+    """
+    if name not in SEND_TOOL_NAMES or not state.get("redraft_requested"):
+        return tool_call.get("id", "")
+    return state.get("send_action_id") or tool_call.get("id", "")
+
+
 def _restore_redactions(args: dict, state: State) -> dict:
     """Put redacted identifiers back into whatever the model produced.
 
@@ -1259,6 +1278,7 @@ def _authorize_tool_action(
     refresh: bool = False,
     arg_trust: dict | None = None,
     recipients: list[str] | None = None,
+    action_id: str | None = None,
 ) -> dict:
     key = _authorization_cache_key(run_id, name, tool_call)
     if refresh or key not in _authorization_cache:
@@ -1266,7 +1286,7 @@ def _authorize_tool_action(
             name,
             args,
             run_id,
-            tool_call.get("id", ""),
+            action_id or tool_call.get("id", ""),
             arg_trust,
             recipients,
         )
@@ -1305,6 +1325,8 @@ def tool_node(state: State, store: BaseStore, config=None):
     redraft_feedback = None
     redraft_baseline = None
     redraft_cleared = False
+    # The id the run's send budget is counted against; see _send_action_id.
+    first_send_action_id = None
     run_id = _run_id_from_config(config)
     category_obj = _category_for_run(state)
 
@@ -1357,6 +1379,9 @@ def tool_node(state: State, store: BaseStore, config=None):
         authorization_decision = "hitl" if name in approval_set else "allow"
         arg_trust = _derive_arg_trust(args, state["email_input"].get("security"))
         effective_recipients = _effective_recipients(name, args, state)
+        send_action_id = _send_action_id(name, state, tool_call)
+        if name in SEND_TOOL_NAMES and not state.get("send_action_id"):
+            first_send_action_id = first_send_action_id or send_action_id
 
         if settings.security_enabled:
             authz = _authorize_tool_action(
@@ -1366,6 +1391,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                 tool_call,
                 arg_trust=arg_trust,
                 recipients=effective_recipients,
+                action_id=send_action_id,
             )
             authorization_decision = authz["decision"]
             if authorization_decision == "deny":
@@ -1526,6 +1552,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                 refresh=True,
                 arg_trust=_derive_arg_trust(args, state["email_input"].get("security")),
                 recipients=_effective_recipients(name, args, state, reviewer_recipients),
+                action_id=send_action_id,
             )
             if authz["decision"] == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
@@ -1605,6 +1632,8 @@ def tool_node(state: State, store: BaseStore, config=None):
             sent = True
 
     update = {"messages": result}
+    if first_send_action_id:
+        update["send_action_id"] = first_send_action_id
     if redraft_requested:
         update["redraft_requested"] = True
         if redraft_feedback:
