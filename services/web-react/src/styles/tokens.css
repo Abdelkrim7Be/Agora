@@ -75,10 +75,26 @@
   --radius-pill: 999px;
   --radius: var(--radius-card);
 
-  /* One control height for the whole app. Inputs sat at 42px and buttons at
-     40px, so a field and the button beside it never lined up. */
-  --control-height: 44px;
-  --control-height-lg: 48px;
+  /* Three control heights, not one.
+     A single 44px height lined fields and buttons up, but it also made every
+     toolbar action as heavy as a form submit — a page with six refresh buttons
+     read as six decisions. Size carries rank now: `sm` for the actions that sit
+     above a table, the default for anything inside a form, `lg` for the one
+     button that commits the page.
+     Fields keep the default height so a field and the button beside it still
+     line up, which was the point of unifying them in the first place. */
+  --control-height-sm: 32px;
+  --control-height: 38px;
+  --control-height-lg: 44px;
+
+  /* Horizontal padding paired with each height. */
+  --control-pad-sm: 0 10px;
+  --control-pad: 0 14px;
+  --control-pad-lg: 0 20px;
+
+  /* Field padding stays vertical-symmetric: textareas grow, so they cannot
+     use a fixed height and need real padding. */
+  --field-pad: 8px 14px;
 
   /* --- spacing: 4px base ------------------------------------------------- */
   --space-1: 4px;

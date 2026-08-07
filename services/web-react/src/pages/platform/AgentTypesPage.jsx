@@ -61,6 +61,7 @@ export default function AgentTypesPage() {
           allTypes.map((type) => {
             const comingSoon = Boolean(type.comingSoon);
             const activeHealthy = !comingSoon && (type.health === 'healthy' || type.health === 'active' || !type.health);
+            const capabilities = type.capabilities || [];
             return (
               <Card
                 key={type.id}
@@ -83,12 +84,22 @@ export default function AgentTypesPage() {
                   <span className="material-symbols-outlined type-icon" aria-hidden="true">{type.icon || 'extension'}</span>
                 </div>
                 <p>{type.description || ''}</p>
-                <div className="chip-row">
-                  {(type.capabilities || []).map((capability) => <Badge key={capability}>{capabilityLabelFr(capability)}</Badge>)}
-                </div>
-                {type.settings_schema?.length ? (
+                {/* Five capability chips plus five settings chips turned the card
+                    into a wall of pills nobody read. Three name what the agent
+                    does; the rest is a count you can open the type to see. */}
+                {capabilities.length ? (
                   <div className="chip-row">
-                    {type.settings_schema.map((section) => <Badge key={section.key}>{section.label}</Badge>)}
+                    {capabilities.slice(0, 3).map((capability) => (
+                      <Badge key={capability}>{capabilityLabelFr(capability)}</Badge>
+                    ))}
+                    {capabilities.length > 3 ? (
+                      <span className="chip-more">+{capabilities.length - 3}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {type.settings_schema?.length ? (
+                  <div className="card-foot-meta">
+                    {type.settings_schema.length} section{type.settings_schema.length > 1 ? 's' : ''} de réglages
                   </div>
                 ) : null}
               </Card>

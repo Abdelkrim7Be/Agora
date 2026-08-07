@@ -7,6 +7,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { BusyProvider } from './contexts/BusyContext';
+import { ToastProvider } from './contexts/ToastContext';
 import { RequireGlobalRole } from './components/layout/RequireGlobalRole';
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query';
 import { recordFailure, clearFailure, recordActionFailure, clearActionFailure } from './api/failureLog';
@@ -113,6 +114,7 @@ export default function App() {
             <ThemeProvider>
               <StatusProvider>
                 <DialogProvider>
+                  <ToastProvider>
                   <BusyProvider>
                   <SessionBodyClass />
                   <BrowserRouter>
@@ -177,6 +179,7 @@ export default function App() {
                     </ErrorBoundary>
                   </BrowserRouter>
                   </BusyProvider>
+                  </ToastProvider>
                 </DialogProvider>
               </StatusProvider>
             </ThemeProvider>

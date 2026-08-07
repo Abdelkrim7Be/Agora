@@ -258,7 +258,13 @@ export function useUpdateMyProfile() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body) => api('/me', { method: 'PUT', body: JSON.stringify(body) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['me'] });
+      // The team page renders the same display name from its own cached list.
+      // Invalidating only ['me'] left it showing the old value until a hard
+      // reload, which looks exactly like a save that did not save.
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
   });
 }
 

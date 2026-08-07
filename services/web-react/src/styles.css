@@ -335,7 +335,7 @@ input, textarea, select {
   border-radius: var(--radius-control);
   background: var(--field-bg);
   color: var(--text);
-  padding: 11px 16px;
+  padding: var(--field-pad);
   outline: none;
   transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
 }
@@ -402,8 +402,9 @@ button {
   border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--text);
-  padding: 10px 16px;
+  padding: var(--control-pad);
   font-weight: 600;
+  font-size: 14px;
   box-shadow: var(--shadow-subtle);
   transition: border-color .15s ease, background-color .15s ease;
 }
@@ -708,10 +709,14 @@ p {
   margin-bottom: var(--space-5);
 }
 
+/* Label pinned to the top, value centred in what is left.
+   `space-between` pushed the value to the bottom edge, so a lone number sat in
+   the corner of its card instead of reading as the card's subject. */
 .metric {
   min-height: 100px;
   display: grid;
-  align-content: space-between;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-2);
   border: 1px solid var(--outline);
   border-radius: var(--radius-card);
   background: var(--surface);
@@ -720,10 +725,23 @@ p {
 }
 
 .metric strong {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   color: var(--text);
   font: 650 27px/1.15 var(--font-display);
   letter-spacing: var(--tracking-heading);
 }
+
+/* Timestamps and sentences are not headline figures. At the display size a
+   date filled its card and out-shouted the numbers next to it. */
+.metric.metric-sm strong {
+  font: 500 14px/1.35 var(--font-body, inherit);
+  letter-spacing: normal;
+}
+
+.metric .metric-hint { text-align: center; }
 
 .view { display: none; }
 .view.active { display: block; }
@@ -5277,4 +5295,138 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   font-size: 13px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+/* ============================================================
+   Composants partagés — une seule définition par contrôle.
+   Voir components/ui/Button.jsx et Field.jsx.
+   ============================================================ */
+
+/* --- échelle de tailles ------------------------------------ */
+button.btn-sm,
+.icon-button.btn-sm,
+select.control-sm,
+input.control-sm {
+  min-height: var(--control-height-sm);
+  padding: var(--control-pad-sm);
+  font-size: 13px;
+}
+
+.icon-button.btn-sm { width: var(--control-height-sm); min-width: var(--control-height-sm); padding: 0; }
+.icon-button.btn-sm .material-symbols-outlined { font-size: 18px; }
+
+button.btn-lg,
+select.control-lg,
+input.control-lg {
+  min-height: var(--control-height-lg);
+  padding: var(--control-pad-lg);
+}
+
+/* Un bouton en cours garde sa largeur : sans ça le libellé « Envoi… » le fait
+   rétrécir et la barre d'outils saute sous le curseur. */
+button.is-loading { min-width: fit-content; }
+
+.material-symbols-outlined.spin {
+  animation: agora-spin 900ms linear infinite;
+}
+
+@keyframes agora-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .material-symbols-outlined.spin { animation-duration: 2400ms; }
+}
+
+/* --- champ : libellé + contrôle + aide --------------------- */
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.field-hint,
+.field-error {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.field-hint { color: var(--muted); }
+.field-error { color: var(--danger); }
+.field.has-error > input,
+.field.has-error > select,
+.field.has-error > textarea { border-color: var(--danger); }
+
+/* --- toasts ------------------------------------------------ */
+.toast-stack {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 1200;
+  display: grid;
+  gap: var(--space-2);
+  justify-items: end;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised, 0 8px 24px rgba(0,0,0,.12));
+  font-size: 14px;
+  animation: agora-toast-in 160ms ease-out;
+}
+
+@keyframes agora-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+
+/* Le liseré reprend le rail de verdict : vert pour ce qui a abouti, rouille
+   pour ce qui a échoué. */
+.toast-ok    { border-left: var(--rail-width) solid var(--primary); }
+.toast-error { border-left: var(--rail-width) solid var(--danger); }
+.toast-ok    > .material-symbols-outlined { color: var(--primary); }
+.toast-error > .material-symbols-outlined { color: var(--danger); }
+
+.toast-message { flex: 1 1 auto; line-height: 1.4; }
+
+.toast-close {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.toast-close:hover:not(:disabled) { background: none; color: var(--text); }
+.toast-close .material-symbols-outlined { font-size: 18px; }
+
+/* Reste des capacités, en compte plutôt qu'en pastilles : la carte disait ce
+   que fait l'agent, pas la liste exhaustive de ses fonctions. */
+.chip-more {
+  align-self: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-foot-meta {
+  margin-top: var(--space-2);
+  font-size: 12px;
+  color: var(--muted);
 }
