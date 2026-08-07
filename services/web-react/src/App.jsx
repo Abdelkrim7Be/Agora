@@ -8,6 +8,7 @@ import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { BusyProvider } from './contexts/BusyContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { PendingClick } from './components/ui/PendingClick';
 import { RequireGlobalRole } from './components/layout/RequireGlobalRole';
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query';
 import { recordFailure, clearFailure, recordActionFailure, clearActionFailure } from './api/failureLog';
@@ -116,6 +117,7 @@ export default function App() {
                 <DialogProvider>
                   <ToastProvider>
                   <BusyProvider>
+                  <PendingClick />
                   <SessionBodyClass />
                   <BrowserRouter>
                     <ErrorBoundary>
