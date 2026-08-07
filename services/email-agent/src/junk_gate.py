@@ -42,7 +42,7 @@ _JUNK_SENDER_LOCAL = re.compile(
 )
 
 _JUNK_SENDER_DOMAIN = re.compile(
-    r"@(?:[a-z0-9-]+\.)*(linkedin|facebookmail|facebook|twitter|x|instagram|tiktok|pinterest|youtube|medium|substack)\.com\b",
+    r"@(?:[a-z0-9-]+\.)*(linkedin|facebookmail|facebook|twitter|x|instagram|tiktok|pinterest|youtube|medium|substack|quora|reddit)\.com\b",
     re.IGNORECASE,
 )
 
@@ -56,6 +56,12 @@ _BULK_SUBDOMAINS = {
     "notification", "notifications", "notify", "alerts", "alert", "updates",
     "update", "info", "reply", "no-reply", "noreply", "link", "links", "click",
     "clicks", "crm", "engage", "contact",
+    # Marketing-only prefixes seen on real bulk mail that reached the model and
+    # was ignored anyway (hello.bitdefender.com, engage.canva.com and friends).
+    # "orders", "billing" and "invoice" are deliberately absent: those carry
+    # transactional mail a business mailbox has to see.
+    "hello", "digest", "social", "community", "connect", "shop", "store",
+    "deals", "offers", "message", "messages", "inbox",
 }
 
 # Bulk-sending platforms: mail from these is campaign traffic whatever the
@@ -67,6 +73,12 @@ _ESP_DOMAINS = {
     "hubspotemail.net", "exacttarget.com", "mktdns.com", "createsend.com",
     "cmail19.com", "cmail20.com", "sailthru.com", "salesforce-email.com",
     "intercom-mail.com", "customeriomail.com", "postmarkapp.com",
+    # Newsletter platforms: everything they send is a subscription broadcast.
+    "substack.com", "beehiiv.com", "mailerlite.com", "buttondown.email",
+    "ghost.io", "revue.email", "sendfox.com", "aweber.com", "getresponse.com",
+    "activehosted.com", "omnisend.com", "sendpulse.com",
+    # Retail campaign domains that exist only to send bulk.
+    "temuemail.com", "eu.temuemail.com",
 }
 
 
