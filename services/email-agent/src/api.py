@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from langgraph.types import Command
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ from src.roles import (
     update_role,
 )
 from src.contacts import (
+    AUDIENCE_VALUES,
     Contact,
     ContactCategoryError,
     ContactConflictError,
@@ -372,6 +373,12 @@ class CampaignPrepareInput(BaseModel):
 class ContactInput(BaseModel):
     email: str
     name: str | None = None
+    # Validated here, not only on the domain `Contact`. An unknown audience used
+    # to pass this model as a free string and then raise inside the handler,
+    # which FastAPI turns into a 500 — a client mistake reported as a server
+    # fault, with no indication of the accepted values. Kept as a validator
+    # rather than a Literal so the domain model's normalization still applies:
+    # "Client " remains valid input.
     audience: str
     fields: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
@@ -381,6 +388,14 @@ class ContactInput(BaseModel):
     priority: str | None = None
     category_source: str = "manual"
     category_confidence: float | None = None
+
+    @field_validator("audience")
+    @classmethod
+    def _known_audience(cls, value: str) -> str:
+        cleaned = str(value).strip().lower()
+        if cleaned not in AUDIENCE_VALUES:
+            raise ValueError(f"audience must be one of: {', '.join(AUDIENCE_VALUES)}")
+        return cleaned
 
 
 class SegmentInput(BaseModel):
