@@ -29,6 +29,28 @@ class CategoryInstructions(BaseModel):
     ask_for_missing: str | bool | None = None
 
 
+# The action space each policy opens, when a workflow does not name one itself.
+#
+# This is the CaMeL "workflow decides the tool" step. Until now the drafting
+# model picked which tool to call, and it picked it *after* reading untrusted
+# mail — so an injection could steer the run from "draft a reply" to forwarding
+# or trashing, and every check downstream would then be asked about the tool the
+# attacker chose. The tool now comes from operator configuration; the model only
+# fills in the content for a tool that was already decided.
+#
+# Each entry mirrors what its policy already reaches for, so an existing
+# configuration keeps working: `auto_draft` finalizes a reply, `notify` sends the
+# synthesized internal note, `organize` files the message, `ignore` may only
+# auto-organize. Anything absent — `forward_email`, `trash_email`,
+# `schedule_meeting` — requires a workflow that names it explicitly.
+POLICY_DEFAULT_ACTIONS: dict[str, list[str]] = {
+    "auto_draft": ["write_email", "reply_all", "create_draft"],
+    "notify": ["notify_internal"],
+    "organize": ["apply_label", "remove_label", "archive_email", "mark_read", "mark_unread"],
+    "ignore": ["apply_label", "archive_email"],
+}
+
+
 class Category(BaseModel):
     name: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
@@ -64,6 +86,18 @@ class Category(BaseModel):
     # tool calls to AGENT_INTERNAL_DOMAINS recipients only.
     require_approval: bool = False
     external_send_allowed: bool = True
+    # Which tools this workflow may execute. `None` means "whatever this policy
+    # opens" (POLICY_DEFAULT_ACTIONS); an explicit list replaces that entirely,
+    # and an empty list means the workflow executes nothing. Like
+    # require_approval, this only ever narrows — it cannot grant a tool that
+    # security/policy.yaml denies.
+    allowed_actions: list[str] | None = None
+
+    def actions(self) -> list[str]:
+        """The tool names this workflow is allowed to execute."""
+        if self.allowed_actions is not None:
+            return list(self.allowed_actions)
+        return list(POLICY_DEFAULT_ACTIONS.get(self.policy, []))
 
     @field_validator("name")
     @classmethod
