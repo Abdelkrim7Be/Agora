@@ -110,9 +110,18 @@ const ADMIN_SECTIONS = [
   },
 ];
 
+/** Stable anchor id from a section title, so a link survives a copy-paste. */
+function sectionId(title) {
+  return 'guide-' + String(title)
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 function GuideSection({ section }) {
   return (
-    <section className="guide-section">
+    <section className="guide-section" id={sectionId(section.title)}>
       <h3>
         <span className="material-symbols-outlined" aria-hidden="true">{section.icon}</span>
         <span>{section.title}</span>
@@ -124,15 +133,49 @@ function GuideSection({ section }) {
   );
 }
 
+/**
+ * Contents, not tabs.
+ *
+ * A guide is scanned, not stepped through: you arrive knowing roughly what you
+ * are after and want to see whether it is covered. Tabs hide every section but
+ * one, so the reader has to open each in turn to find out what exists. A list
+ * of anchors shows the whole map and jumps.
+ */
+function GuideContents({ groups }) {
+  return (
+    <nav className="guide-contents" aria-label="Sommaire du guide">
+      {groups.map((group) => (
+        <div key={group.label}>
+          <span className="label-mono">{group.label}</span>
+          <ul>
+            {group.sections.map((section) => (
+              <li key={section.title}>
+                <a href={`#${sectionId(section.title)}`}>{section.title}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
 export default function GuidePage() {
   const { currentInstance, hasRole } = useInstance();
   const { globalRole } = useAuth();
   const isAdmin = (globalRole || '').toLowerCase() === 'admin';
   const isOwner = hasRole('owner');
 
+  const groups = [
+    { label: 'Au quotidien', sections: EVERYDAY_SECTIONS },
+    ...(isOwner || isAdmin ? [{ label: 'Configurer l’agent', sections: OWNER_SECTIONS }] : []),
+    ...(isAdmin ? [{ label: 'Administration', sections: ADMIN_SECTIONS }] : []),
+  ];
+
   return (
-    <div className="guide-page">
+    <div className="guide-page guide-layout">
       <PageHeading view="guide" />
+      <GuideContents groups={groups} />
       <Card>
         <div className="card-header">
           <div>
