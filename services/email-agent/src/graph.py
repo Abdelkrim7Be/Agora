@@ -1128,7 +1128,39 @@ def _off_workflow_action(category, name: str) -> str | None:
     )
 
 
-def _effective_recipients(name: str, args: dict, state: State) -> list[str]:
+# Recipients a human typed in the approval screen, per tool call.
+# Kept out of `args` so the model can never write into it: the model's args are
+# what the reviewer is checking, and a value it could set would defeat the point
+# of showing the destination at all.
+_REVIEWER_RECIPIENT_KEY = "_recipients"
+
+
+def _reviewer_recipients(edited_args: dict, previous: list[str]) -> list[str] | None:
+    """Addresses the reviewer put in the approval screen, or None.
+
+    The preview already renders the resolved destination under this key; letting
+    it come back changed is how a person redirects or adds a recipient. Returning
+    None means "unchanged", so the trusted context stays in charge.
+
+    Nothing is trusted about these values. They are re-authorized by the policy
+    engine, checked against the workflow's `external_send_allowed`, and the send
+    helpers enforce AGENT_OUTBOUND_ALLOWLIST underneath all of it.
+    """
+    if not isinstance(edited_args, dict) or _REVIEWER_RECIPIENT_KEY not in edited_args:
+        return None
+    raw = edited_args.get(_REVIEWER_RECIPIENT_KEY)
+    values = raw if isinstance(raw, list) else [raw]
+    addresses = []
+    for value in values:
+        address = _email_addr(value)
+        if address and address not in addresses:
+            addresses.append(address)
+    if not addresses or addresses == list(previous):
+        return None
+    return addresses
+
+
+def _effective_recipients(name: str, args: dict, state: State, override: list[str] | None = None) -> list[str]:
     """Every address this tool call will actually reach.
 
     Send tools no longer take a recipient argument, so the addresses live in the
@@ -1136,6 +1168,10 @@ def _effective_recipients(name: str, args: dict, state: State) -> list[str]:
     the workflow's configured targets for routing. Reading them from `args` here
     would find nothing and silently pass every recipient check.
     """
+    if override:
+        # A person named these, in front of the draft. They still go through
+        # every check below this call — this only changes *what* is checked.
+        return list(dict.fromkeys(address.lower() for address in override if address))
     recipients: list[str] = []
     if name in _REPLY_TOOL_NAMES:
         reply = _trusted_reply_to(state)
@@ -1307,6 +1343,7 @@ def tool_node(state: State, store: BaseStore, config=None):
         # never even submitted as a candidate action: an injection that steered
         # a "draft a reply" workflow into forwarding or trashing would otherwise
         # get every downstream check asked about the tool it chose.
+        reviewer_recipients: list[str] | None = None
         blocked_action = _off_workflow_action(category_obj, name)
         if blocked_action is not None:
             result.append(_blocked_tool_message(name, blocked_action, tool_call["id"]))
@@ -1433,6 +1470,17 @@ def tool_node(state: State, store: BaseStore, config=None):
 
             if decision_type == "edit":
                 edited_args = decision_data or args
+                chosen = _reviewer_recipients(edited_args, effective_recipients)
+                if chosen is not None:
+                    reviewer_recipients = chosen
+                    effective_recipients = chosen
+                if isinstance(edited_args, dict) and _REVIEWER_RECIPIENT_KEY in edited_args:
+                    # Preview-only key. It must never reach the tool as an
+                    # argument, and it must not show up in the learned-preference
+                    # diff below as if the model had written it.
+                    edited_args = {
+                        k: v for k, v in edited_args.items() if k != _REVIEWER_RECIPIENT_KEY
+                    }
                 if edited_args != args:
                     # Rewrite the AI message's tool_call args so message history
                     # reflects what actually ran (immutable copy — reference pattern).
@@ -1472,7 +1520,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                 tool_call,
                 refresh=True,
                 arg_trust=_derive_arg_trust(args, state["email_input"].get("security")),
-                recipients=_effective_recipients(name, args, state),
+                recipients=_effective_recipients(name, args, state, reviewer_recipients),
             )
             if authz["decision"] == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
@@ -1506,10 +1554,18 @@ def tool_node(state: State, store: BaseStore, config=None):
             state["email_input"].get("gmail_thread_id")
         )
         # Recipients are graph context, never tool arguments. The model can say
-        # anything it likes about where mail should go; these are the only two
-        # places it can actually go.
-        reply_to_token = current_reply_to.set(_trusted_reply_to(state))
-        route_targets_token = current_route_targets.set(_trusted_route_targets(state))
+        # anything it likes about where mail should go; these are the only
+        # places it can actually go: the sender of the message being handled,
+        # the workflow's configured targets, or an address a *person* typed in
+        # the approval screen. That last one arrives through the HITL resume
+        # payload, has already been re-authorized above, and is still subject to
+        # AGENT_OUTBOUND_ALLOWLIST inside the send helpers.
+        reply_to_token = current_reply_to.set(
+            (reviewer_recipients[0] if reviewer_recipients else None) or _trusted_reply_to(state)
+        )
+        route_targets_token = current_route_targets.set(
+            tuple(reviewer_recipients) if reviewer_recipients else _trusted_route_targets(state)
+        )
         try:
             if name in approval_set:
                 tok = hitl_approved.set(True)
