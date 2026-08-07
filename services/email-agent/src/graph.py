@@ -1652,6 +1652,12 @@ def after_tools(state: State) -> Literal["llm_call", "redraft_direct", "__end__"
     ):
         return END
     if state.get("redraft_requested"):
+        # Same wall as in _force_redraft_or_give_up: a refused action stays
+        # refused, so revising the body forever cannot get past it.
+        if _denied_since_last_feedback(state["messages"]):
+            raise RedraftGiveUpError(POLICY_REFUSED_MESSAGE)
+        if len(state["messages"]) > _MAX_RUN_MESSAGES:
+            raise RedraftGiveUpError(LOOP_ABORTED_MESSAGE)
         return "redraft_direct"
     return "llm_call"
 
@@ -1783,6 +1789,23 @@ _REDRAFT_NUDGE_SNIPPETS = (
 # decision); nudge attempts reset at each new round.
 _FEEDBACK_MARKER = "The user requested changes to this draft:"
 _REDRAFT_MAX_ATTEMPTS = 3
+# Start of the tool message tool_node appends when the security service refuses
+# an action outright (see _blocked_tool_message).
+_POLICY_DENIED_MARKER = "Security policy denied the"
+# A ceiling no legitimate run approaches: a normal draft-approve-send run holds
+# well under twenty messages, and the longest observed real feedback round held
+# thirty. Anything past this is a loop, and every extra turn costs a full-window
+# model call.
+_MAX_RUN_MESSAGES = 60
+
+POLICY_REFUSED_MESSAGE = (
+    "La politique de sécurité a refusé l'envoi de ce brouillon — "
+    "envoyez-le manuellement ou ajustez la politique."
+)
+LOOP_ABORTED_MESSAGE = (
+    "La reprise automatique tournait en boucle et a été arrêtée — "
+    "le brouillon précédent reste en attente."
+)
 
 
 class RedraftGiveUpError(RuntimeError):
@@ -1809,8 +1832,36 @@ def _redraft_attempts(messages) -> int:
     return count
 
 
+def _denied_since_last_feedback(messages) -> bool:
+    """True when policy refused an action during the current feedback round."""
+    denied = False
+    for message in messages:
+        content = (
+            message.get("content") if isinstance(message, dict)
+            else getattr(message, "content", None)
+        )
+        if not isinstance(content, str):
+            continue
+        if _FEEDBACK_MARKER in content:
+            denied = False
+        if _POLICY_DENIED_MARKER in content:
+            denied = True
+    return denied
+
+
 def _force_redraft_or_give_up(state: State) -> Literal["force_redraft"]:
-    if _redraft_attempts(state["messages"]) >= _REDRAFT_MAX_ATTEMPTS:
+    messages = state["messages"]
+    # A refusal is not a drafting mistake, so re-drafting cannot clear it. The
+    # denial message tells the model to call Done, and this router used to answer
+    # Done with "no, produce a revised draft" — a livelock that re-sent a
+    # full-window prompt on every turn. One observed run reached 758 messages and
+    # 379 model calls without ever being able to succeed.
+    if _denied_since_last_feedback(messages):
+        raise RedraftGiveUpError(POLICY_REFUSED_MESSAGE)
+    # Belt and braces for any future loop this router does not know about.
+    if len(messages) > _MAX_RUN_MESSAGES:
+        raise RedraftGiveUpError(LOOP_ABORTED_MESSAGE)
+    if _redraft_attempts(messages) >= _REDRAFT_MAX_ATTEMPTS:
         raise RedraftGiveUpError(
             f"No revised draft after {_REDRAFT_MAX_ATTEMPTS} attempts; "
             "the previous draft is kept pending."
