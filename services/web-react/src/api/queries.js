@@ -710,6 +710,16 @@ export function useUploadSignatureImage() {
   });
 }
 
+export function useImportSignatureImageFromUrl() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: (url) => api('/api/agent/signature/image/from-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+  });
+}
+
 export function useApplySignatureToDraft() {
   const { api } = useApi();
   return useMutation({
