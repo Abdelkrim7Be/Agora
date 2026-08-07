@@ -98,12 +98,18 @@ gateway:
     window-seconds: ${GATEWAY_LOGIN_RATELIMIT_WINDOW_SECONDS:900}
     max-failures: ${GATEWAY_LOGIN_RATELIMIT_MAX_FAILURES:5}
     global-max-failures: ${GATEWAY_LOGIN_RATELIMIT_GLOBAL_MAX_FAILURES:100}
+  # Seeded accounts. The optional email is what lets the team page invite,
+  # re-invite or reach them; it is backfilled onto an account seeded before it
+  # was configured, and never overwrites an address already set.
   owner:
     username: ${GATEWAY_OWNER_USERNAME:}
     password: ${GATEWAY_OWNER_PASSWORD:}
+    email: ${GATEWAY_OWNER_EMAIL:}
   viewer:
     username: ${GATEWAY_VIEWER_USERNAME:}
     password: ${GATEWAY_VIEWER_PASSWORD:}
+    email: ${GATEWAY_VIEWER_EMAIL:}
   admin:
     username: ${GATEWAY_ADMIN_USERNAME:}
     password: ${GATEWAY_ADMIN_PASSWORD:}
+    email: ${GATEWAY_ADMIN_EMAIL:}
