@@ -788,15 +788,31 @@ def _unique_refs(refs: list[dict]) -> list[dict]:
     return unique
 
 
+# Run statuses that make a message a no-op for the main loop: it is either
+# finished or parked on a person. Only `security_hold` is missing, and that on
+# purpose — held runs are retried, by `retry_security_holds`, not here.
+_SETTLED_RUN_STATUSES = ("pending_approval", "completed", "notify", "failed")
+
+
 def _messages_awaiting_approval() -> set[str]:
-    """Gmail ids of this instance's runs already parked on a human decision."""
+    """Gmail ids this instance has already settled — nothing left for the loop.
+
+    history.list replays *changes*, not current state, so a message delivered
+    and then processed keeps reappearing in every window until the baseline
+    moves past it. With a truncated window the baseline never moves, so the same
+    already-finished messages were re-listed forever while new mail waited
+    outside the window. They are dropped before the cut, so the budget goes to
+    messages that can still do something.
+    """
     try:
-        pending = list_runs(
-            status="pending_approval",
-            user_id=None,
-            agent_instance_id=current_agent_instance_id(),
-            limit=500,
-        )
+        pending = []
+        for status in _SETTLED_RUN_STATUSES:
+            pending.extend(list_runs(
+                status=status,
+                user_id=None,
+                agent_instance_id=current_agent_instance_id(),
+                limit=500,
+            ))
     except Exception as exc:
         # Never let a registry hiccup stop detection; worst case is the old
         # behavior of re-fetching mail that will be deduped downstream anyway.
