@@ -268,10 +268,11 @@ public class ProxyController {
     }
 
     private boolean shouldRecordAdminMailboxAccess(HttpServletRequest request, String downstreamPath) {
-        if ("GET".equals(request.getMethod()) && "/api/agent/health".equals(downstreamPath)) {
-            return false;
-        }
-        if ("GET".equals(request.getMethod()) && "/api/agent/metrics".equals(downstreamPath)) {
+        // Same exclusion as the forwarded trail. "An administrator opened your
+        // mailbox" has to mean something; a row every few seconds for the tab's
+        // own unread-count poll made the notice read as constant surveillance
+        // and buried the one access that mattered.
+        if (!shouldRecordForwardedAudit(request, downstreamPath)) {
             return false;
         }
         return downstreamPath.startsWith("/api/agent/");

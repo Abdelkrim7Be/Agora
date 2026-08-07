@@ -784,14 +784,20 @@ p {
   box-shadow: var(--shadow-subtle);
 }
 
-.card.rail-current,
-#pending-list > .card {
+/* No rail by default.
+   Every card in the validation queue carried the same brass stripe, so it
+   distinguished nothing — a mark that appears on all of them is decoration
+   wearing the costume of meaning. The rail is kept for the one card that is
+   actually selected, which is the only state worth marking. */
+.card.rail-current {
   overflow: hidden;
   border-left: 0;
   box-shadow: inset var(--rail-width) 0 0 var(--rail-current), var(--shadow-subtle);
 }
 
 #pending-list > .card.active-run {
+  overflow: hidden;
+  border-left: 0;
   box-shadow: inset var(--rail-width) 0 0 var(--primary), 0 0 0 1px color-mix(in srgb, var(--primary) 28%, transparent), var(--shadow-subtle);
 }
 
@@ -1403,6 +1409,20 @@ pre {
   min-height: 330px;
   display: flex;
   flex-direction: column;
+}
+
+/* Both charts start their plot at the same y and share the leftover height.
+   The bar list is short and the volume chart is tall, so the list sat pinned to
+   the top of a half-empty card while the bars next to it filled theirs — two
+   panels of the same width reading as two different sizes. The chart body now
+   takes the remaining height and centres what it holds. */
+.dashboard-chart-card > .section-title { flex: 0 0 auto; }
+
+.dashboard-chart-card > :not(.section-title) {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 /* Inside a card the empty state needs no box of its own — the card already is

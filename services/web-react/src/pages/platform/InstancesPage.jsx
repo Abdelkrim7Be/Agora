@@ -10,7 +10,7 @@ import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
 import { currentUsername } from '../../utils/jwt';
-import { agentTypeLabel, formatDateTimeFr, instanceIdentity, instanceSummaryFields, roleLabelFr } from '../../utils/format';
+import { agentTypeLabel, instanceIdentity, instanceSummaryFields } from '../../utils/format';
 import {
   useAgentInstancesQuery,
   useAgentTypesQuery,
@@ -20,8 +20,6 @@ import {
   useUsersQuery,
   useSetInstanceActive,
   useTestMailboxConnection,
-  useInstanceGrantsQuery,
-  useAdminAccessQuery,
 } from '../../api/queries';
 
 const EMPTY_CREATE_FORM = { agentType: '', displayName: '', assignedTo: '' };
@@ -55,13 +53,10 @@ export default function InstancesPage() {
   const selfServiceLimitReached = !isAdmin && ownEmailInstanceCount >= SELF_SERVICE_LIMIT;
   const canCreate = isAdmin || !selfServiceLimitReached;
   const canManage = isAdmin;
-  // Who, besides the creator, can reach each instance. Admin-only: the grants
-  // endpoint is, so a non-admin simply gets an empty list rather than an error.
-  const grantsQuery = useInstanceGrantsQuery(instances, canManage);
-  const adminAccessQuery = useAdminAccessQuery(instances, true);
-  const accessFor = (instanceId) => (grantsQuery.data || [])
-    .filter((grant) => grant.agent_instance_id === instanceId);
-  const adminAccessFor = (instanceId) => adminAccessQuery.data?.[instanceId] || [];
+  // The access list and the admin-access trail used to render here. They made
+  // every card a wall of chips — and the admin trail was mostly the browser's
+  // own polling. Both belong in a per-user view, not on every instance card;
+  // dropping them also removes two fan-out queries (one request per instance).
   const announcedInitialLoad = useRef(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
@@ -346,35 +341,6 @@ export default function InstancesPage() {
                     <div key={label}><span>{label}</span><strong>{value}</strong></div>
                   ))}
                 </div>
-                {canManage ? (
-                  <div className="instance-access-row">
-                    <span>Accès</span>
-                    <div className="user-instance-pills">
-                      <span className="mini-chip grant-chip">{instance.created_by || 'inconnu'} · créateur</span>
-                      {accessFor(instance.id).map((grant) => (
-                        <span className="mini-chip grant-chip" key={grant.user_id}>
-                          {grant.user_id} · {roleLabelFr(grant.role)}
-                        </span>
-                      ))}
-                      {!accessFor(instance.id).length ? (
-                        <span className="muted">Aucun accès délégué</span>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-                {adminAccessFor(instance.id).length ? (
-                  <div className="instance-admin-access-row" aria-label={`Accès administrateur récents pour ${instance.display_name || instance.id}`}>
-                    <span>Accès administrateur</span>
-                    <div className="admin-access-events">
-                      {adminAccessFor(instance.id).slice(0, 3).map((event) => (
-                        <span className="mini-chip admin-access-chip" key={`${event.timestamp}-${event.username}-${event.outcome}`}>
-                          <span className="material-symbols-outlined" aria-hidden="true">visibility</span>
-                          {event.username || 'admin'} · {formatDateTimeFr(event.timestamp)} · {event.outcome || event.method}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
               </Card>
             );
           })
