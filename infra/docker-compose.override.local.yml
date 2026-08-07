@@ -73,8 +73,19 @@ services:
       # the SPA's Origin has to be on this list or /auth/login answers 403, and
       # curl without an Origin header still succeeds, which makes it look like
       # the UI is at fault rather than the allow list.
-      GATEWAY_CORS_ALLOWED_ORIGINS: http://localhost:${WEB_PORT:-5173}
+      # Two origins, because local dev has two front ends: the nginx container
+      # on WEB_PORT and `npm run dev` on VITE_DEV_PORT. Serving only the first
+      # made the dev server's sign-in return 403 while curl (no Origin header)
+      # still returned 200 — which reads as a broken login, not a CORS list.
+      GATEWAY_CORS_ALLOWED_ORIGINS: http://localhost:${WEB_PORT:-5173},http://localhost:${VITE_DEV_PORT:-5173}
       GATEWAY_APP_URL: http://localhost:${WEB_PORT:-5173}
+      # The instance used when a request carries no X-Agora-Agent-Instance —
+      # which is every call the platform dashboard makes before a workspace is
+      # picked. It was left at the built-in `default-email-agent`, and once a
+      # database holds real instances under different ids, that name resolves to
+      # nothing: effectiveRole comes back empty and every headerless call 403s.
+      # Set it to an instance that actually exists in this database.
+      GATEWAY_DEFAULT_AGENT_INSTANCE: ${GATEWAY_DEFAULT_AGENT_INSTANCE:-default-email-agent}
       # Local dev is plain HTTP, and a Secure cookie is silently dropped there —
       # which kills silent token refresh and logs the browser out every 15 min.
       # Never set this in a deployed stack; production serves the SPA over TLS.
