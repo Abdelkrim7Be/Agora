@@ -147,6 +147,11 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/agent/signature").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/signature/image").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/signature/image").hasAnyRole("OWNER", "ADMIN")
+                // Same authority as uploading one: it is the same act, with the
+                // server doing the fetching. Without a rule here `anyRequest()
+                // .denyAll()` answers 403 and the feature looks broken rather
+                // than forbidden.
+                .requestMatchers(HttpMethod.POST, "/api/agent/signature/image/from-url").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/signature/image").hasAnyRole("OWNER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/signature/apply").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/memory").hasAnyRole("OWNER", "VIEWER", "ADMIN")
