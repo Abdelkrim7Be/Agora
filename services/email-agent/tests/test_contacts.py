@@ -180,3 +180,33 @@ def test_migrate_legacy_leaves_categories_yaml_unchanged(tmp_path, monkeypatch):
     # missing attribute/import error would surface since none is stubbed.
     migrate_legacy_category_contacts()
     assert calls
+
+
+def test_an_unknown_audience_is_a_422_not_a_500():
+    """A client mistake must not be reported as a server fault.
+
+    `ContactInput.audience` was a free string, so an unknown value passed the
+    request model and then raised inside the handler when the domain `Contact`
+    was built — FastAPI turns that into a 500, with no indication of what the
+    accepted values are.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api import app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/contacts",
+            json={"email": "someone@example.com", "audience": "clients"},
+        )
+
+    assert response.status_code == 422
+    assert "client" in response.text
+
+
+def test_an_audience_is_normalized_at_the_boundary():
+    # The domain model trims and lowercases; validating at the API must not
+    # make " Client " a rejection.
+    from src.api import ContactInput
+
+    assert ContactInput(email="a@b.c", audience=" Client ").audience == "client"
