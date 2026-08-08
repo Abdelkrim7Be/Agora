@@ -60,14 +60,18 @@ export default function DashboardPage() {
       <div className="cost-summary-grid dashboard-summary-grid">
         <div><strong>{formatCountFr(totals.emails_handled)}</strong><span>E-mails traités</span></div>
         <div>
-            <strong>{formatPercentFr(totals.approval_rate_pct)}</strong>
+            <strong className={totals.approval_rate_pct === null || totals.approval_rate_pct === undefined ? 'metric-value-unavailable' : undefined}>
+              {formatPercentFr(totals.approval_rate_pct)}
+            </strong>
             <span>Taux d'approbation</span>
             {totals.approval_rate_pct === null || totals.approval_rate_pct === undefined ? (
               <small className="metric-hint">Aucune validation décidée sur la période</small>
             ) : null}
           </div>
         <div>
-            <strong>{formatDurationFr(totals.avg_turnaround_seconds)}</strong>
+            <strong className={totals.avg_turnaround_seconds === null || totals.avg_turnaround_seconds === undefined ? 'metric-value-unavailable' : undefined}>
+              {formatDurationFr(totals.avg_turnaround_seconds)}
+            </strong>
             <span>Délai moyen</span>
             {totals.avg_turnaround_seconds === null || totals.avg_turnaround_seconds === undefined ? (
               <small className="metric-hint">Se calcule dès la première décision</small>
