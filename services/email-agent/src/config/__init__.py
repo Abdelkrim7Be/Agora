@@ -123,6 +123,10 @@ class Settings:
     # PDF text extraction (gated — default off to avoid downloading large files).
     extract_attachments: bool = _env_bool("AGENT_EXTRACT_ATTACHMENTS", "false")
     attachment_max_chars: int = int(os.getenv("AGENT_ATTACHMENT_MAX_CHARS", "3000"))
+    # Cap for attachments carried onto an outgoing draft/send — original-message
+    # reattachment and human-uploaded files at approval both count against this.
+    max_attachment_bytes: int = int(os.getenv("AGENT_MAX_ATTACHMENT_BYTES", str(10 * 1024 * 1024)))
+    max_attachment_count: int = int(os.getenv("AGENT_MAX_ATTACHMENT_COUNT", "5"))
     # Security service integration (off by default — no behavior change until opted in).
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")

@@ -26,14 +26,17 @@ import re as _re
 from src.automation import load_rules as load_automation_rules, suggest_rule_from_correction
 from src.capabilities import (
     approval_required,
+    current_email_attachments,
     current_email_id,
     current_gmail_thread_id,
     current_reply_to,
     current_route_targets,
+    current_uploaded_attachments,
     hitl_approved,
     load_capabilities,
     tools_by_name,
 )
+from src.run_attachments import load_attachments as load_uploaded_attachments
 from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config, totals_for_run_node
 from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
@@ -1153,6 +1156,11 @@ def _off_workflow_action(category, name: str) -> str | None:
 # of showing the destination at all.
 _REVIEWER_RECIPIENT_KEY = "_recipients"
 
+# Attachment ids a human staged via POST /run/{id}/attachments before approving.
+# Same trust boundary as _REVIEWER_RECIPIENT_KEY: the model never sees or sets
+# this — tool_node resolves the ids to bytes and injects them through context.
+_REVIEWER_ATTACHMENTS_KEY = "_attachments"
+
 
 def _reviewer_recipients(edited_args: dict, previous: list[str]) -> list[str] | None:
     """Addresses the reviewer put in the approval screen, or None.
@@ -1371,6 +1379,7 @@ def tool_node(state: State, store: BaseStore, config=None):
         # a "draft a reply" workflow into forwarding or trashing would otherwise
         # get every downstream check asked about the tool it chose.
         reviewer_recipients: list[str] | None = None
+        reviewer_attachment_ids: list[str] | None = None
         blocked_action = _off_workflow_action(category_obj, name)
         if blocked_action is not None:
             result.append(_blocked_tool_message(name, blocked_action, tool_call["id"]))
@@ -1505,12 +1514,19 @@ def tool_node(state: State, store: BaseStore, config=None):
                 if chosen is not None:
                     reviewer_recipients = chosen
                     effective_recipients = chosen
-                if isinstance(edited_args, dict) and _REVIEWER_RECIPIENT_KEY in edited_args:
-                    # Preview-only key. It must never reach the tool as an
-                    # argument, and it must not show up in the learned-preference
-                    # diff below as if the model had written it.
+                if isinstance(edited_args, dict) and _REVIEWER_ATTACHMENTS_KEY in edited_args:
+                    raw_ids = edited_args.get(_REVIEWER_ATTACHMENTS_KEY)
+                    if isinstance(raw_ids, list):
+                        reviewer_attachment_ids = [str(v) for v in raw_ids if v]
+                if isinstance(edited_args, dict) and (
+                    _REVIEWER_RECIPIENT_KEY in edited_args or _REVIEWER_ATTACHMENTS_KEY in edited_args
+                ):
+                    # Preview-only keys. They must never reach the tool as an
+                    # argument, and must not show up in the learned-preference
+                    # diff below as if the model had written them.
                     edited_args = {
-                        k: v for k, v in edited_args.items() if k != _REVIEWER_RECIPIENT_KEY
+                        k: v for k, v in edited_args.items()
+                        if k not in (_REVIEWER_RECIPIENT_KEY, _REVIEWER_ATTACHMENTS_KEY)
                     }
                 if edited_args != args:
                     # Rewrite the AI message's tool_call args so message history
@@ -1585,6 +1601,9 @@ def tool_node(state: State, store: BaseStore, config=None):
         thread_id_token = current_gmail_thread_id.set(
             state["email_input"].get("gmail_thread_id")
         )
+        attachments_token = current_email_attachments.set(
+            tuple(state["email_input"].get("attachments") or [])
+        )
         # Recipients are graph context, never tool arguments. The model can say
         # anything it likes about where mail should go; these are the only
         # places it can actually go: the sender of the message being handled,
@@ -1598,6 +1617,12 @@ def tool_node(state: State, store: BaseStore, config=None):
         route_targets_token = current_route_targets.set(
             tuple(reviewer_recipients) if reviewer_recipients else _trusted_route_targets(state)
         )
+        uploaded, _upload_notes = (
+            load_uploaded_attachments(run_id, reviewer_attachment_ids)
+            if reviewer_attachment_ids
+            else ([], [])
+        )
+        uploaded_token = current_uploaded_attachments.set(tuple(uploaded))
         try:
             if name in approval_set:
                 tok = hitl_approved.set(True)
@@ -1621,8 +1646,10 @@ def tool_node(state: State, store: BaseStore, config=None):
                 return {"messages": result, "email_send_failed": message}
             continue
         finally:
+            current_uploaded_attachments.reset(uploaded_token)
             current_route_targets.reset(route_targets_token)
             current_reply_to.reset(reply_to_token)
+            current_email_attachments.reset(attachments_token)
             current_gmail_thread_id.reset(thread_id_token)
             current_email_id.reset(email_id_token)
         result.append(

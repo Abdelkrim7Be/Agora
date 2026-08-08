@@ -519,6 +519,7 @@ def _build_email_message(
     extra_headers: dict[str, str] | None = None,
     rich: bool = True,
     inline_images: dict[str, tuple[bytes, str]] | None = None,
+    attachments: list[dict] | None = None,
 ) -> EmailMessage:
     recipients = to if isinstance(to, list) else [to]
     message = EmailMessage()
@@ -538,6 +539,18 @@ def _build_email_message(
                 html_part.add_related(
                     data, maintype="image", subtype=subtype, cid=f"<{cid}>"
                 )
+    # add_attachment must run after add_alternative/add_related — EmailMessage
+    # promotes the whole thing to multipart/mixed wrapping the existing
+    # alternative part, which is only correct once that part is complete.
+    for attachment in attachments or []:
+        mime_type = attachment.get("mime_type") or "application/octet-stream"
+        maintype, _, subtype = mime_type.partition("/")
+        message.add_attachment(
+            attachment["data"],
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=attachment.get("filename") or "attachment",
+        )
     return message
 
 
@@ -561,12 +574,14 @@ def _send_email_message(
     extra_headers: dict[str, str] | None = None,
     resource=None,
     rich: bool = True,
+    attachments: list[dict] | None = None,
 ) -> dict:
     _enforce_outbound_allowlist(to)
     resource = resource or gmail_resource()
     message = _build_email_message(
         to, subject, body, extra_headers=extra_headers, rich=rich,
         inline_images=_signature_inline_images(body) if rich else None,
+        attachments=attachments,
     )
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
@@ -580,11 +595,15 @@ def _send_email_message(
     )
 
 
-def send_message(to: str, subject: str, body: str, resource=None) -> dict:
+def send_message(
+    to: str, subject: str, body: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Send an agent-authored email with plain-text and HTML alternatives."""
     if effective_dry_run():
         return _dry_run_result("send_message", to=to, subject=subject)
-    return _send_email_message(to=to, subject=subject, body=body, resource=resource, rich=True)
+    return _send_email_message(
+        to=to, subject=subject, body=body, resource=resource, rich=True, attachments=attachments
+    )
 
 
 def send_html_message(
@@ -750,6 +769,7 @@ def create_draft(
     subject: str,
     body: str,
     thread_id: str | None = None,
+    attachments: list[dict] | None = None,
     resource=None,
 ) -> dict:
     """Create a Gmail draft without sending it."""
@@ -761,7 +781,7 @@ def create_draft(
             thread_id=thread_id,
         )
     resource = resource or gmail_resource()
-    message = _build_email_message(to, subject, body, rich=True)
+    message = _build_email_message(to, subject, body, rich=True, attachments=attachments)
     draft_message = {"raw": _encode_message(message)}
     if thread_id:
         draft_message["threadId"] = thread_id

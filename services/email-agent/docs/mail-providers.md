@@ -111,3 +111,7 @@ state is displayed. Exposed in the workspace as "Tester la connexion".
   guarantees nothing is missed.
 - Outlook attachment text extraction follows the same
   `AGENT_EXTRACT_ATTACHMENTS` gate as Gmail.
+- **Outlook cannot send attachments.** `write_email`/`create_draft`'s `include_attachments` and
+  reviewer-uploaded files (see `docs/capabilities.md#attachments`) are Gmail-only —
+  `OutlookProvider.send_message`/`create_draft` raise `NotImplementedError` if attachments are
+  passed.

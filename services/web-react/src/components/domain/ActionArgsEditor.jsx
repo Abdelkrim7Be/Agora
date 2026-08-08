@@ -1,4 +1,11 @@
+import { useState } from 'react';
+import { useUploadRunAttachment } from '../../api/queries';
 import { actionRequest, actionArgs, actionArgLabel, formatEditableValue, coerceEditedValue, actionRecipients, formatRecipients, ACTION_ARG_HIDDEN } from '../../utils/format';
+
+// Attachments only make sense on the one HITL-gated tool that supports them —
+// create_draft accepts include_attachments too, but it never pauses for
+// approval, so this UI never has a chance to run for it.
+const ATTACHMENT_CAPABLE_ACTIONS = new Set(['write_email']);
 
 export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
   const request = actionRequest(run);
@@ -12,11 +19,58 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
     ([key]) => !ACTION_ARG_HIDDEN.has(key) && !(key === 'to' && recipients.length > 0),
   );
 
+  const uploadAttachment = useUploadRunAttachment();
+  const [staged, setStaged] = useState([]);
+  const [uploadError, setUploadError] = useState('');
+
+  const syncStagedIds = (next) => {
+    onFieldChange(run.run_id, '_attachments', next.map((item) => item.attachment_id));
+  };
+
+  const handleFilePick = async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    for (const file of files) {
+      try {
+        const entry = await uploadAttachment.mutateAsync({ runId: run.run_id, file });
+        setStaged((prev) => {
+          const next = [...prev, entry];
+          syncStagedIds(next);
+          return next;
+        });
+        setUploadError('');
+      } catch (error) {
+        setUploadError(error.message || 'Échec de l’envoi du fichier.');
+      }
+    }
+  };
+
+  const removeStaged = (attachmentId) => {
+    setStaged((prev) => {
+      const next = prev.filter((item) => item.attachment_id !== attachmentId);
+      syncStagedIds(next);
+      return next;
+    });
+  };
+
+  const includeOriginalAttachments = editedFields.include_attachments !== undefined
+    ? editedFields.include_attachments
+    : Boolean(args.include_attachments);
+
   return (
     <div className="action-preview">
       {recipients.length ? (
         <label className="action-row">
-          <strong>Destinataire</strong>
+          <strong>
+            Destinataire
+            <span
+              className="material-symbols-outlined field-hint-icon"
+              aria-hidden="true"
+              title="Proposé par l’agent d’après l’expéditeur du message. Vous pouvez le remplacer ou en ajouter (séparés par des virgules) ; l’envoi reste soumis aux règles d’autorisation."
+            >
+              info
+            </span>
+          </strong>
           {/* Editable by a person, never by the model.
               The agent resolves this from the message's own sender, and the
               model has no way to write it — that is what stops an injected
@@ -34,11 +88,6 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
             }
             onChange={(event) => onFieldChange(run.run_id, '_recipients', event.target.value)}
           />
-          <small>
-            Proposé par l’agent d’après l’expéditeur du message. Vous pouvez le remplacer
-            ou en ajouter (séparés par des virgules) ; l’envoi reste soumis aux règles
-            d’autorisation.
-          </small>
         </label>
       ) : null}
       {request.action === 'forward_email' ? (
@@ -51,6 +100,48 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
         <div className="route-preview">
           <strong>Notifier en interne {formatRecipients(run)}</strong>
           <span>{run.workflow_owner ? `Propriétaire : ${run.workflow_owner}` : 'Routage du cas métier'}</span>
+        </div>
+      ) : null}
+      {ATTACHMENT_CAPABLE_ACTIONS.has(request.action) ? (
+        <div className="action-row attachment-controls">
+          <strong>Pièces jointes</strong>
+          <label className="attachment-toggle">
+            <input
+              type="checkbox"
+              checked={includeOriginalAttachments}
+              onChange={(event) => onFieldChange(run.run_id, 'include_attachments', event.target.checked)}
+            />
+            Joindre les pièces jointes du message original
+          </label>
+          <div className="attachment-upload">
+            <input
+              type="file"
+              multiple
+              onChange={handleFilePick}
+              disabled={uploadAttachment.isPending}
+              aria-label="Joindre un fichier"
+            />
+            {uploadAttachment.isPending ? <small className="metric-hint">Envoi en cours…</small> : null}
+            {uploadError ? <small className="field-error">{uploadError}</small> : null}
+          </div>
+          {staged.length ? (
+            <ul className="attachment-chip-list">
+              {staged.map((item) => (
+                <li key={item.attachment_id} className="chip">
+                  <span className="material-symbols-outlined" aria-hidden="true" style={{ fontSize: '14px' }}>attach_file</span>
+                  <span>{item.filename}</span>
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => removeStaged(item.attachment_id)}
+                    aria-label={`Retirer ${item.filename}`}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
       {fields.length ? fields.map(([key, value]) => (

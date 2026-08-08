@@ -126,15 +126,26 @@ class MailProvider(Protocol):
         ...
 
     # --- send ------------------------------------------------------------
-    def send_message(self, to: str, subject: str, body: str) -> dict: ...
+    def send_message(
+        self, to: str, subject: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
+        """`attachments` items are `{filename, mime_type, data}` with `data` as bytes."""
+        ...
 
     def send_html_message(
         self, to: str, subject: str, html: str, text: str, respect_dry_run: bool = True
     ) -> dict: ...
 
     def create_draft(
-        self, to: str, subject: str, body: str, thread_id: str | None = None
-    ) -> dict: ...
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        attachments: list[dict] | None = None,
+    ) -> dict:
+        """`attachments` items are `{filename, mime_type, data}` with `data` as bytes."""
+        ...
 
     def forward_message(self, message_id: str, to: str, note: str) -> dict: ...
 

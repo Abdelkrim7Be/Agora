@@ -163,8 +163,12 @@ class GmailProvider:
         return gmail_client.ensure_label(name, resource=self._deferred)
 
     # --- send ------------------------------------------------------------
-    def send_message(self, to: str, subject: str, body: str) -> dict:
-        return gmail_client.send_message(to, subject, body, resource=self._deferred)
+    def send_message(
+        self, to: str, subject: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
+        return gmail_client.send_message(
+            to, subject, body, attachments=attachments, resource=self._deferred
+        )
 
     def send_html_message(
         self, to: str, subject: str, html: str, text: str, respect_dry_run: bool = True
@@ -174,10 +178,15 @@ class GmailProvider:
         )
 
     def create_draft(
-        self, to: str, subject: str, body: str, thread_id: str | None = None
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> dict:
         return gmail_client.create_draft(
-            to, subject, body, thread_id=thread_id, resource=self._deferred
+            to, subject, body, thread_id=thread_id, attachments=attachments, resource=self._deferred
         )
 
     def forward_message(self, message_id: str, to: str, note: str) -> dict:

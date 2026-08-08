@@ -1,4 +1,13 @@
 # Capability policy for the agent's tool actions. Default-deny: anything not listed is denied.
+#
+# Attachments on write_email/create_draft are NOT checked here — the byte/count cap
+# (AGENT_MAX_ATTACHMENT_BYTES / AGENT_MAX_ATTACHMENT_COUNT) is enforced in the email-agent
+# itself (src/capabilities/attachment_support.py, src/run_attachments.py), not through
+# /authorize. At authorize time the agent only has the model's raw tool args, not downloaded
+# attachment bytes; resolving them earlier just to report a size would force a real download
+# on every call (including simulated/dry-run ones) for no real security gain — reattached
+# files are the sender's own (already Gmail-size-bounded), and uploaded files are capped at
+# upload time before they ever reach a tool.
 default: deny
 
 tools:
