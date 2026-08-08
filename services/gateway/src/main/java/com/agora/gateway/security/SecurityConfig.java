@@ -119,6 +119,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/respond/stream").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                // Staging a file to attach at approval — same reviewer surface as
+                // approve/reject/respond, checked again per-instance by ProxyController.
+                .requestMatchers(HttpMethod.POST, "/api/agent/run/*/attachments").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 // Read-only AI helpers (thread summary, tone-adjust preview) — same access
                 // as the rest of the approval surface; neither mutates run state.
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/summarize").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")

@@ -1049,6 +1049,44 @@ p {
   max-height: none;
 }
 
+.attachment-controls {
+  gap: 6px;
+}
+
+.attachment-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  padding-top: 2px;
+}
+
+.attachment-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.attachment-upload input[type="file"] {
+  font-size: 12px;
+}
+
+.attachment-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 11px;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -5205,6 +5243,24 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* n/d is not a number — it must not carry the same visual weight as one. */
+.cost-summary-grid strong.metric-value-unavailable,
+.dashboard-summary-grid strong.metric-value-unavailable {
+  color: var(--muted);
+}
+
+/* A one-line explanation of a proposed value doesn't need a permanent paragraph
+   under the field — an inline hint the reader can summon on hover keeps the
+   answer available without the space cost every time. */
+.field-hint-icon {
+  font-size: 15px;
+  color: var(--muted);
+  cursor: help;
+  vertical-align: -2px;
+  margin-left: 4px;
+}
+.field-hint-icon:hover { color: var(--text); }
 
 /* Rules page: subsystem switches read as "what it does / is it on", not as five
    identical pills. */

@@ -184,6 +184,9 @@ from src.media import (
     save_signature_image,
     signature_image_inline,
 )
+from src.run_attachments import AttachmentLimitError
+from src.run_attachments import save_attachment as save_run_attachment
+from src.run_attachments import staged_attachments as staged_run_attachments
 from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
@@ -4301,6 +4304,44 @@ async def _reject_run(graph, run_id: str) -> RunResponse:
     # old graph validation so callers still get a precise 404.
     await _require_run(graph, run_id)
     raise HTTPException(status_code=409, detail="Run is not pending approval")
+
+
+@app.post("/run/{run_id}/attachments")
+async def upload_run_attachment(
+    request: Request, run_id: str, file: UploadFile = File(...)
+) -> dict:
+    """Stage a file a reviewer wants attached to this run's pending draft/send.
+
+    The returned attachment_id is opaque to the model — it only ever reaches
+    a tool through _REVIEWER_ATTACHMENTS_KEY in an approve/edit payload, the
+    same trusted-context path _recipients uses. Files are deleted once the
+    run resolves (src/run_registry.py, discard_run_attachments).
+    """
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    _require_pending(run_id)
+    data = await file.read()
+    if len(data) > settings.max_attachment_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {settings.max_attachment_bytes} byte attachment limit.",
+        )
+    try:
+        entry = await asyncio.to_thread(
+            save_run_attachment, run_id, file.filename or "attachment", file.content_type, data
+        )
+    except AttachmentLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    return entry
+
+
+@app.get("/run/{run_id}/attachments")
+async def list_run_attachments(request: Request, run_id: str) -> dict:
+    _require_instance_role(request, "viewer")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    return {"attachments": staged_run_attachments(run_id)}
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)

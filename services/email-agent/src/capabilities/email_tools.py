@@ -10,6 +10,7 @@ from src.capabilities import (
     current_route_targets,
     hitl_approved,
 )
+from src.capabilities.attachment_support import resolve_attachments
 from src.config import settings  # noqa: F401 — tests patch dry_run through this module
 from src.mail import get_provider
 from src.send_mode import SIMULATED_NOTE, effective_dry_run
@@ -61,17 +62,30 @@ def _require_approval(tool_name: str) -> None:
 
 
 @tool
-def write_email(subject: str, content: str) -> str:
-    """Reply to the sender of the email currently being handled."""
+def write_email(subject: str, content: str, include_attachments: bool = False) -> str:
+    """Reply to the sender of the email currently being handled.
+
+    Set include_attachments=True to carry the original message's attachments
+    onto the reply (e.g. returning the same file the sender attached).
+    """
     to = _reply_recipient()
     if effective_dry_run():
         return f"Email sent to {to} with subject '{subject}' ({SIMULATED_NOTE})"
     _require_approval("write_email")
-    result = get_provider().send_message(to=to, subject=subject, body=content)
+    attachments, notes = resolve_attachments(include_attachments)
+    kwargs = {"to": to, "subject": subject, "body": content}
+    if attachments:
+        kwargs["attachments"] = attachments
+    result = get_provider().send_message(**kwargs)
     sent_id = result.get("id") if isinstance(result, dict) else None
-    return f"Email sent to {to} with subject '{subject}'" + (
+    summary = f"Email sent to {to} with subject '{subject}'" + (
         f" (message id: {sent_id})" if sent_id else ""
     )
+    if attachments:
+        summary += f" Attached {len(attachments)} file(s)."
+    if notes:
+        summary += " " + " ".join(notes)
+    return summary
 
 
 @tool
@@ -141,7 +155,8 @@ class Done(BaseModel):
 
 TOOLS = [write_email, forward_email, notify_internal, reply_all, Done]
 TOOLS_PROMPT = """
-1. write_email(subject, content) - Reply to the sender of the current email
+1. write_email(subject, content, include_attachments) - Reply to the sender of the current email.
+   Set include_attachments=true to carry the original message's attachments onto the reply.
 2. forward_email(note) - Forward the current email to this workflow's configured recipients
 3. notify_internal(subject, note) - Notify this workflow's configured recipients, not a forward
 4. reply_all(content) - Reply to all participants on the current email thread

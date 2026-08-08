@@ -345,6 +345,15 @@ export function useRejectRun() {
   });
 }
 
+// Stages a file for a pending run's draft/send — the returned attachment_id is
+// carried in the eventual approve/respond call, never exposed to the model.
+export function useUploadRunAttachment() {
+  const { apiUpload } = useApi();
+  return useMutation({
+    mutationFn: ({ runId, file }) => apiUpload(`/api/agent/run/${runId}/attachments`, file),
+  });
+}
+
 export function useClaimRun() {
   const { api } = useApi();
   const queryClient = useQueryClient();

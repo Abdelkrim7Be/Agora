@@ -548,9 +548,14 @@ class OutlookProvider:
         self._request("POST", "/me/sendMail", json=payload)
         return {"status": "sent", "to": to, "subject": subject}
 
-    def send_message(self, to: str, subject: str, body: str) -> dict:
+    def send_message(
+        self, to: str, subject: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
         if effective_dry_run():
             return _dry_run_result("send_message", to=to, subject=subject)
+        if attachments:
+            # Attachment passthrough is Gmail-only for now — see docs/mail-providers.md.
+            raise NotImplementedError("Outlook send attachments are not yet supported.")
         return self._send_mail(to, subject, body)
 
     def send_html_message(
@@ -561,10 +566,18 @@ class OutlookProvider:
         return self._send_mail(to, subject, text, html=html)
 
     def create_draft(
-        self, to: str, subject: str, body: str, thread_id: str | None = None
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> dict:
         if effective_dry_run():
             return _dry_run_result("create_draft", to=to, subject=subject)
+        if attachments:
+            # Attachment passthrough is Gmail-only for now — see docs/mail-providers.md.
+            raise NotImplementedError("Outlook draft attachments are not yet supported.")
         # Drafts never leave the mailbox, but the allowlist still applies: a draft
         # is one click from a send, and this mirrors the Gmail policy.
         enforce_outbound_allowlist(to)

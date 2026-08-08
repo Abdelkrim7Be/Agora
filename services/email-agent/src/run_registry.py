@@ -182,7 +182,15 @@ def upsert_run(
         decision,
         decision_at,
     )
-    return _registry.upsert(record, path=path)
+    result = _registry.upsert(record, path=path)
+    if status not in ACTIVE_RUN_STATUSES:
+        # Reviewer-uploaded attachments only need to survive while the run is
+        # waiting for a human; once it resolves (sent, ignored, rejected,
+        # failed...) they no longer serve a purpose.
+        from src.run_attachments import discard_run_attachments
+
+        discard_run_attachments(run_id)
+    return result
 
 
 def find_run_by_email(

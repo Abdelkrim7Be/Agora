@@ -1,6 +1,6 @@
 import pytest
 
-from src.capabilities import current_email_id, hitl_approved
+from src.capabilities import attachment_support, current_email_attachments, current_email_id, hitl_approved
 from src.capabilities.email_tools import forward_email, notify_internal, reply_all, write_email
 from tests.conftest import patch_provider, reply_to, route_targets
 
@@ -45,6 +45,50 @@ def test_write_email_live_path_invokes_rich_gmail_helper_after_approval(monkeypa
     ]
 
 
+def test_write_email_reattaches_original_attachments(monkeypatch):
+    from src.capabilities import email_tools
+
+    calls: list[dict] = []
+    downloads: list[tuple[str, str]] = []
+    monkeypatch.setattr(email_tools.settings, "dry_run", False)
+    provider = patch_provider(
+        monkeypatch,
+        email_tools,
+        send_message=lambda **kwargs: calls.append(kwargs) or {"id": "sent-1"},
+    )
+    provider.download_attachment = lambda mid, aid: downloads.append((mid, aid)) or b"pdf-bytes"
+    monkeypatch.setattr(attachment_support, "get_provider", lambda *a, **k: provider)
+    monkeypatch.setattr(attachment_support, "effective_dry_run", lambda: False)
+
+    email_id_token = current_email_id.set("msg-1")
+    attachments_token = current_email_attachments.set((
+        {"filename": "invoice.pdf", "mime_type": "application/pdf", "size": 9, "attachment_id": "att-1"},
+    ))
+    approval_token = hitl_approved.set(True)
+    try:
+        with reply_to("client@example.com"):
+            result = write_email.invoke({
+                "subject": "Re: invoice",
+                "content": "Here it is again.",
+                "include_attachments": True,
+            })
+    finally:
+        hitl_approved.reset(approval_token)
+        current_email_attachments.reset(attachments_token)
+        current_email_id.reset(email_id_token)
+
+    assert downloads == [("msg-1", "att-1")]
+    assert calls == [{
+        "to": "client@example.com",
+        "subject": "Re: invoice",
+        "body": "Here it is again.",
+        "attachments": [
+            {"filename": "invoice.pdf", "mime_type": "application/pdf", "data": b"pdf-bytes"}
+        ],
+    }]
+    assert "Attached 1 file(s)" in result
+
+
 def test_send_tool_schemas_expose_no_recipient():
     """No send tool takes a recipient argument.
 
@@ -54,7 +98,9 @@ def test_send_tool_schemas_expose_no_recipient():
     """
     assert set(forward_email.args_schema.model_json_schema()["properties"]) == {"note"}
     assert set(reply_all.args_schema.model_json_schema()["properties"]) == {"content"}
-    assert set(write_email.args_schema.model_json_schema()["properties"]) == {"subject", "content"}
+    assert set(write_email.args_schema.model_json_schema()["properties"]) == {
+        "subject", "content", "include_attachments",
+    }
 
 
 def test_forward_email_requires_context_email_id():
