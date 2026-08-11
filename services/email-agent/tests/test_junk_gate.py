@@ -70,6 +70,29 @@ def test_marketing_local_part_is_junk():
     assert junk
 
 
+def test_own_component_alert_is_junk():
+    """The admin alert recipient is frequently the monitored mailbox itself —
+    a down/up alert must not loop back into triage as ordinary mail."""
+    junk, reason = is_junk(_email(subject="Alerte Agora : Poller hors service"))
+    assert junk
+    assert reason == "system:self-alert"
+
+
+def test_own_component_resolution_is_junk():
+    junk, reason = is_junk(_email(subject="Resolution Agora : Poller de nouveau actif"))
+    assert junk
+    assert reason == "system:self-alert"
+
+
+def test_own_alert_is_junk_even_from_an_allowed_sender():
+    from src.junk_config import JunkConfig
+
+    config = JunkConfig(allowed_senders=["jean.dupont@example.com"])
+    junk, reason = is_junk(_email(subject="Alerte Agora : Securite hors service"), config)
+    assert junk
+    assert reason == "system:self-alert"
+
+
 def test_junk_reason_survives_into_the_run_record(tmp_path, monkeypatch):
     """The gate's verdict has to be auditable after the fact.
 
