@@ -52,7 +52,10 @@ import NotFoundPage from './pages/NotFoundPage';
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
-    onError: (error, query) => recordFailure(query.queryKey, error),
+    onError: (error, query) => {
+      if (query.meta?.silentFailure) return;
+      recordFailure(query.queryKey, error);
+    },
     onSuccess: (_data, query) => clearFailure(query.queryKey),
   }),
   // Reads reported their failures and writes did not, so a button the server

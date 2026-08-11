@@ -168,7 +168,10 @@ export function useInviteUser() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/invite`, { method: 'POST' }),
+    mutationFn: ({ id, email } = {}) => api(`/users/${encodeURIComponent(id)}/invite`, {
+      method: 'POST',
+      body: JSON.stringify({ email: email || undefined }),
+    }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 }
@@ -841,6 +844,10 @@ export function useUnreadCountQuery() {
     queryFn: () => api('/api/agent/notifications/unread-count'),
     enabled: Boolean(token) && Boolean(instanceId),
     refetchInterval: 30_000,
+    // A badge count silently retrying is normal background chatter, not a
+    // page failing to load — it shouldn't raise the same alarm as a query the
+    // page actually depends on to render.
+    meta: { silentFailure: true },
   });
 }
 
