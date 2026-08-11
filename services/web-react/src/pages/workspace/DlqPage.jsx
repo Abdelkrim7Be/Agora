@@ -73,13 +73,19 @@ export default function DlqPage() {
                   <td>{entry.error || ''}</td>
                   <td><span className={`status-pill ${entry.status === 'dead_letter' ? 'error' : 'warn'}`}>{statusLabelFr(entry.status)}</span></td>
                   <td>
-                    <button
-                      type="button"
-                      disabled={entry.status !== 'dead_letter' || requeuingId === entry.entry_id}
-                      onClick={() => handleRequeue(entry.entry_id)}
-                    >
-                      {requeuingId === entry.entry_id ? 'Relance...' : 'Relancer'}
-                    </button>
+                    {entry.reason === 'mailbox_sync_failure' ? (
+                      <button type="button" disabled title="Aucun e-mail à relancer — reconnectez la boîte depuis sa page de connexion.">
+                        Relancer
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={entry.status !== 'dead_letter' || requeuingId === entry.entry_id}
+                        onClick={() => handleRequeue(entry.entry_id)}
+                      >
+                        {requeuingId === entry.entry_id ? 'Relance...' : 'Relancer'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
