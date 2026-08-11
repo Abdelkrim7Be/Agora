@@ -1290,6 +1290,11 @@ async def dlq_requeue(request: Request, entry_id: str) -> dict:
     entry = get_dead_letter(entry_id, agent_instance_id=current_agent_instance_id())
     if entry is None:
         raise HTTPException(status_code=404, detail="DLQ entry not found")
+    if entry.get("reason") == "mailbox_sync_failure":
+        raise HTTPException(
+            status_code=400,
+            detail="A mailbox connection failure has no email to replay — reconnect the mailbox instead.",
+        )
     claimed = claim_dead_letter(
         entry_id,
         "dead_letter",

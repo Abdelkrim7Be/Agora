@@ -97,7 +97,7 @@ from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
 from src.run_lock import try_claim_message
 from src.notifications import notify_overdue_approval, notify_pending_approval
-from src.dlq import record_dead_letter, setup_dlq
+from src.dlq import claim_dead_letter, record_dead_letter, setup_dlq
 from src.metrics import inc_counter
 from src.health import aggregate_health
 from src.alerts import evaluate_alerts
@@ -1123,6 +1123,12 @@ async def maybe_seed_style_profile(instance_id: str, store, provider) -> None:
         print(f"poller: {instance_id} style auto-seed skipped: {exc}")
 
 
+def _mailbox_sync_dlq_entry_id(instance_id: str) -> str:
+    """Deterministic, so repeat failures on the same instance upsert one row
+    instead of flooding the DLQ with a fresh entry every poll cycle."""
+    return f"mailbox-sync-{instance_id}"
+
+
 async def poll_active_instances_once(
     graph,
     instance_ids: list[str] | None = None,
@@ -1162,6 +1168,21 @@ async def poll_active_instances_once(
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))
+                    # A mailbox-level failure (OAuth, network) never reaches per-message
+                    # dead-lettering — no message was even fetched — so it was invisible
+                    # to the DLQ view even though it's exactly the kind of thing an admin
+                    # checking DLQ wants to see. Not requeueable (no email_input to run):
+                    # dlq_requeue rejects this reason, and the reviewer reconnects the
+                    # mailbox instead. A deterministic entry_id upserts one row per
+                    # instance instead of a fresh entry every poll cycle a broken
+                    # mailbox stays broken — it can run for hours between reconnects.
+                    record_dead_letter({
+                        "entry_id": _mailbox_sync_dlq_entry_id(instance_id),
+                        "reason": "mailbox_sync_failure",
+                        "error": str(exc),
+                        "agent_instance_id": instance_id,
+                        "payload": {"instance_id": instance_id},
+                    })
                     results[instance_id] = []
                     if _note_gmail_rate_limit(exc):
                         break
@@ -1171,6 +1192,14 @@ async def poll_active_instances_once(
                 if outcomes:
                     print(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
                 record_success("polling")
+                # Close out any mailbox_sync_failure entry this instance left open —
+                # a no-op when there isn't one (claim only succeeds from "dead_letter").
+                claim_dead_letter(
+                    _mailbox_sync_dlq_entry_id(instance_id),
+                    "dead_letter",
+                    "resolved",
+                    agent_instance_id=instance_id,
+                )
             finally:
                 await _run_instance_maintenance(instance_id)
     return results

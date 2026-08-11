@@ -845,6 +845,14 @@ async def test_poll_active_instances_uses_context_and_isolates_failures(monkeypa
     resources = []
     successes = []
     failures = []
+    dlq_writes = []
+    dlq_claims = []
+    monkeypatch.setattr(poller, "record_dead_letter", lambda entry: dlq_writes.append(entry))
+    monkeypatch.setattr(
+        poller,
+        "claim_dead_letter",
+        lambda entry_id, expected, new, **kwargs: dlq_claims.append((entry_id, expected, new, kwargs)),
+    )
 
     monkeypatch.setattr(
         poller,
@@ -898,6 +906,15 @@ async def test_poll_active_instances_uses_context_and_isolates_failures(monkeypa
     assert successes == [("ceo-email-agent", "polling")]
     assert failures == [("broken-email-agent", "broken token")]
     assert current_agent_instance_id() == poller.settings.default_agent_instance_id
+
+    # The mailbox-level failure gets a DLQ entry (deterministic id — repeat
+    # failures upsert instead of flooding the queue); the instance that
+    # succeeded gets its (nonexistent) entry closed out as a no-op claim.
+    assert len(dlq_writes) == 1
+    assert dlq_writes[0]["reason"] == "mailbox_sync_failure"
+    assert dlq_writes[0]["entry_id"] == "mailbox-sync-broken-email-agent"
+    assert dlq_writes[0]["agent_instance_id"] == "broken-email-agent"
+    assert ("mailbox-sync-ceo-email-agent", "dead_letter", "resolved", {"agent_instance_id": "ceo-email-agent"}) in dlq_claims
 
 
 def test_ensure_watch_seeds_baseline(monkeypatch, provider):
