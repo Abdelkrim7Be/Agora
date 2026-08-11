@@ -32,7 +32,7 @@ export default function ValidationPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog } = useDialog();
-  const { runBusy } = useBusy();
+  const { runBusy, holdOverlay } = useBusy();
   const { api, streamApi } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -320,9 +320,16 @@ export default function ValidationPage() {
     }
   };
 
+  // The toolbar already draws its own progress bar for this sync — holding
+  // the overlay off keeps it from covering the exact bar being watched.
+  useEffect(() => {
+    if (!syncGmail.isPending || !holdOverlay) return undefined;
+    return holdOverlay();
+  }, [syncGmail.isPending, holdOverlay]);
+
   const handleSync = async () => {
     try {
-      await runBusy('Vérification de la boîte Gmail', () => syncGmail.mutateAsync());
+      await syncGmail.mutateAsync();
       setStatus('Synchronisation terminée.', 'ok');
     } catch (error) {
       setStatus(`Synchronisation échouée : ${error.message}`, 'error');
