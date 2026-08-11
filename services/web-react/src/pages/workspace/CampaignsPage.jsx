@@ -235,8 +235,13 @@ export default function CampaignsPage() {
         <Card>
           <div className="card-header">
             <div><h2>Nouvelle campagne</h2><p>Ciblez un segment, voyez l'aperçu en direct, puis mettez l'envoi en file d'approbation.</p></div>
-            <button type="button" onClick={() => { segmentsQuery.refetch(); templatesQuery.refetch(); pendingQuery.refetch(); }}>
-              <span className="material-symbols-outlined" aria-hidden="true">refresh</span><span>Actualiser</span>
+            <button
+              type="button"
+              disabled={segmentsQuery.isFetching || templatesQuery.isFetching || pendingQuery.isFetching}
+              onClick={() => { segmentsQuery.refetch(); templatesQuery.refetch(); pendingQuery.refetch(); }}
+            >
+              <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
+              <span>{segmentsQuery.isFetching || templatesQuery.isFetching || pendingQuery.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
             </button>
           </div>
           <form className="login-form" onSubmit={handlePrepare}>
