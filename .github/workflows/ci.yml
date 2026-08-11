@@ -114,7 +114,7 @@ jobs:
           exit-code: "1"
 
       - name: Build service image
-        run: docker build --pull -t agora-${{ matrix.image }}:ci services/${{ matrix.context }}
+        run: docker build --pull -t agora-${{ matrix.image }}:ci -f services/${{ matrix.context }}/Dockerfile ${{ matrix.build-context || format('services/{0}', matrix.context) }}
       - name: Scan service image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -131,6 +131,9 @@ jobs:
         include:
           - image: email-agent
             context: email-agent
+            # Dockerfile COPYs platform-core/ as a sibling of email-agent/, so
+            # the build context has to be the parent services/ dir.
+            build-context: services
           - image: security
             context: security
           - image: gateway
