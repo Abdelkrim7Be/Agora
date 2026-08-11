@@ -42,7 +42,7 @@ export function recordFailure(queryKey, error) {
  * All actions share one entry: only the most recent matters, and stacking them
  * would bury the read failures the banner also carries.
  */
-const ACTION_FAILURE_ID = '["__action__"]';
+export const ACTION_FAILURE_ID = '["__action__"]';
 
 export function recordActionFailure(error) {
   const message = error?.message || 'Erreur inconnue';
