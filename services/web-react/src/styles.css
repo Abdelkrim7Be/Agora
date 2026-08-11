@@ -1975,13 +1975,13 @@ body:not(.workspace-mode) .instance-context { display: none; }
   margin-top: auto;
 }
 
-/* The green border and the green rail together read as one thick strip. The
-   rail marks the live agent; a hairline ring carries the accent. */
+/* A live, healthy agent gets a glowing ring around the whole card rather than
+   a rail down one side — the rail read as a stray stripe, not a status. */
 .type-card.active-healthy {
-  border-color: var(--outline);
+  border-color: var(--secondary);
   box-shadow:
-    inset var(--rail-width) 0 0 var(--secondary),
-    0 0 0 1px color-mix(in srgb, var(--secondary) 26%, transparent),
+    0 0 0 1px var(--secondary),
+    0 0 16px color-mix(in srgb, var(--secondary) 35%, transparent),
     var(--shadow-subtle);
 }
 .compact-summary { margin-top: 14px; }
