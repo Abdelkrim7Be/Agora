@@ -1094,6 +1094,10 @@ p {
   margin-top: 14px;
 }
 
+/* Inside a table cell .actions is the whole cell content, not a block below
+   something else — the 14px top margin above just misaligned it from the row. */
+.data-table .actions { margin-top: 0; }
+
 .ai-summary {
   margin-top: 10px;
   padding: 10px 12px;
