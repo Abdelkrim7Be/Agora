@@ -790,6 +790,16 @@ async def _step_learn_style(context: SetupContext) -> dict:
     return {"sample_count": len(context.sent_samples), "writing_style": text}
 
 
+# Tone/persona inference needs only a handful of examples, but
+# context.recent_messages carries whatever AGENT_SETUP_RECENT_LIMIT is set
+# to (200 by default) — passed through unfiltered, that reliably blew past
+# a local model's context window (10k+ tokens against a 4k window is not
+# an edge case, it is every mailbox with real volume). Capped independently
+# of the fetch limit so raising that setting for other steps can't reopen this.
+MAX_SUGGEST_RECENT_MESSAGES = 20
+MAX_SUGGEST_SENT_SAMPLES = 8
+
+
 async def _step_suggest_persona(context: SetupContext) -> dict:
     from src.persona import load_persona, suggest_persona
 
@@ -801,7 +811,10 @@ async def _step_suggest_persona(context: SetupContext) -> dict:
     from src import graph as graph_module
 
     suggestion = await _to_thread_with_timeout(
-        suggest_persona, context.sent_samples, context.recent_messages, graph_module.llm,
+        suggest_persona,
+        context.sent_samples[:MAX_SUGGEST_SENT_SAMPLES],
+        context.recent_messages[:MAX_SUGGEST_RECENT_MESSAGES],
+        graph_module.llm,
         step_label="persona suggestion",
     )
     return {"suggestion": suggestion.model_dump()}
