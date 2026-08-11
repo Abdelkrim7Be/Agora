@@ -5,6 +5,63 @@ import { useStatus } from '../../contexts/StatusContext';
 import { formatDateTimeFr, statusLabelFr, formatCount, formatCost, summarizeTraceError } from '../../utils/format';
 import { useRunDetailQuery } from '../../api/queries';
 
+const TRUST_LABELS = { TRUSTED: 'Fiable', UNTRUSTED: 'Non fiable', INTERNAL: 'Interne' };
+const trustLabel = (trust) => TRUST_LABELS[trust] || trust || 'Inconnu';
+const trustClass = (trust) => (trust === 'TRUSTED' ? 'ok' : trust === 'INTERNAL' ? '' : 'warn');
+
+const CLASSIFICATION_LABELS = { benign: 'Bénin', suspicious: 'Suspect', malicious: 'Malveillant' };
+const classificationLabel = (value) => CLASSIFICATION_LABELS[value] || value || 'Non classé';
+
+/** A verdict from the quarantined classifier, read by a human who is deciding
+ * whether to trust this message — not a debugging dump of the service call. */
+function SecuritySummary({ security }) {
+  if (!security) return <span className="muted">Aucun verdict de sécurité attaché.</span>;
+  const fields = Object.entries(security.fields || {});
+  return (
+    <div className="security-summary">
+      <div className="card-tags">
+        <span className={`status-pill ${security.injection_detected ? 'error' : 'ok'}`}>
+          {security.injection_detected ? 'Injection détectée' : 'Aucune injection détectée'}
+        </span>
+        <span className={`status-pill ${security.classification === 'benign' ? 'ok' : 'warn'}`}>
+          {classificationLabel(security.classification)}
+        </span>
+        <span className={`status-pill ${trustClass(security.source_trust)}`}>
+          Source : {trustLabel(security.source_trust)}
+        </span>
+        {security.classifier_unavailable ? (
+          <span className="status-pill warn">Classificateur indisponible — repli sur les heuristiques</span>
+        ) : null}
+      </div>
+      {security.reasons?.length ? (
+        <ul className="security-reasons">
+          {security.reasons.map((reason, index) => <li key={index}>{reason}</li>)}
+        </ul>
+      ) : null}
+      {fields.length ? (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr><th>Champ</th><th>Valeur</th><th>Confiance</th></tr></thead>
+            <tbody>
+              {fields.map(([key, field]) => (
+                <tr key={key}>
+                  <td>{key}</td>
+                  <td>{field?.value ?? ''}</td>
+                  <td><span className={`status-pill ${trustClass(field?.trust)}`}>{trustLabel(field?.trust)}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <details className="data-error-detail">
+        <summary>Voir le JSON brut</summary>
+        <pre>{JSON.stringify(security, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
 export default function RunDetailPage() {
   const { runId } = useParams();
   const { setStatus } = useStatus();
@@ -51,7 +108,7 @@ export default function RunDetailPage() {
           </div>
 
           <h3>Sécurité</h3>
-          {detail.security ? <pre>{JSON.stringify(detail.security, null, 2)}</pre> : <span className="muted">Aucun verdict de sécurité attaché.</span>}
+          <SecuritySummary security={detail.security} />
 
           <h3>Trace par nœud</h3>
           <div className="table-wrap">

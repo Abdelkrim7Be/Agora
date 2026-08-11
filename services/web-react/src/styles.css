@@ -1136,6 +1136,15 @@ pre {
   font: 13px/20px var(--font-mono);
 }
 
+.security-summary { display: grid; gap: 10px; }
+
+.security-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .timeline { display: grid; gap: 10px; }
 
 .timeline-item {
