@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useUploadRunAttachment } from '../../api/queries';
+import { FileField } from '../ui/FileField';
 import { actionRequest, actionArgs, actionArgLabel, formatEditableValue, coerceEditedValue, actionRecipients, formatRecipients, ACTION_ARG_HIDDEN } from '../../utils/format';
 
 // Attachments only make sense on the one HITL-gated tool that supports them —
@@ -114,11 +115,11 @@ export default function ActionArgsEditor({ run, editedFields, onFieldChange }) {
             Joindre les pièces jointes du message original
           </label>
           <div className="attachment-upload">
-            <input
-              type="file"
+            <FileField
               multiple
               onChange={handleFilePick}
               disabled={uploadAttachment.isPending}
+              label="Joindre un fichier"
               aria-label="Joindre un fichier"
             />
             {uploadAttachment.isPending ? <small className="metric-hint">Envoi en cours…</small> : null}
