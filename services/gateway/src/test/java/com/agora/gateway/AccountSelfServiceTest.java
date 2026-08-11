@@ -138,7 +138,7 @@ class AccountSelfServiceTest {
     void changing_your_own_password_requires_the_current_one() throws Exception {
         String token = login("owner", "ownerpass");
         String body = objectMapper.writeValueAsString(
-                Map.of("currentPassword", "not-the-password", "newPassword", "brandNewSecret2026"));
+                Map.of("currentPassword", "not-the-password", "newPassword", "rotated-test-password-1"));
 
         mockMvc.perform(put("/me/password").header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
@@ -162,7 +162,7 @@ class AccountSelfServiceTest {
         // puts the password back before it returns.
         String token = login("approverless", "approverless-pass");
         String body = objectMapper.writeValueAsString(
-                Map.of("currentPassword", "approverless-pass", "newPassword", "brandNewSecret2026"));
+                Map.of("currentPassword", "approverless-pass", "newPassword", "rotated-test-password-1"));
 
         mockMvc.perform(put("/me/password").header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
@@ -173,7 +173,7 @@ class AccountSelfServiceTest {
                         .content(objectMapper.writeValueAsString(
                                 Map.of("username", "approverless", "password", "approverless-pass"))))
                 .andExpect(status().isUnauthorized());
-        login("approverless", "brandNewSecret2026");
+        login("approverless", "rotated-test-password-1");
     }
 
     @Test
