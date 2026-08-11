@@ -260,6 +260,27 @@ def validate_model_redaction(config: Settings | None = None) -> None:
     )
 
 
+def validate_live_send_config(config: Settings | None = None) -> None:
+    """Live send with no outbound allowlist is a footgun, not a configuration.
+
+    AGENT_DRY_RUN=false plus an empty AGENT_OUTBOUND_ALLOWLIST means every
+    send-style tool call the agent (or a background poller) makes can reach any
+    real address, unattended. That combination is only ever meant for a
+    deliberately scoped live test against known mailboxes — never the default
+    for a running instance — so it fails closed at startup instead of silently
+    running wide open.
+    """
+    config = config or settings
+    if config.dry_run:
+        return
+    if config.outbound_allowlist:
+        return
+    raise RuntimeError(
+        "AGENT_DRY_RUN=false requires a non-empty AGENT_OUTBOUND_ALLOWLIST. "
+        "Live send with no allowlist can reach any address unattended."
+    )
+
+
 def validate_gmail_webhook_config(config: Settings | None = None) -> None:
     config = config or settings
     if not config.gmail_webhook_enabled:
