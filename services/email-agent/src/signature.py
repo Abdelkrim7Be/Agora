@@ -206,7 +206,12 @@ def apply_signature(content: str, signature: SignatureConfig | None = None, *, m
         # No per-draft choice supplied yet — defer to the approval UI, do not append.
         return body
     # append_platform_signature (default), or ask_each_time once a mode override
-    # (the human's chosen value) has been supplied.
+    # (the human's chosen value) has been supplied. Strip the provider-side
+    # block first if onboarding detected one — style learning trains on the
+    # user's own sent mail, which included it, so a draft can echo it back and
+    # end up with both the echoed original and the newly appended one.
+    if signature.detected_block:
+        body = strip_detected_signature(body, signature.detected_block)
     return append_signature(body, signature)
 
 
