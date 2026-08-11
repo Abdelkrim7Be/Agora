@@ -82,6 +82,33 @@ def test_dlq_api_requeue_processes_once(monkeypatch, tmp_path):
     assert calls == [entry["entry_id"]]
 
 
+def test_dlq_api_rejects_requeue_of_a_mailbox_sync_failure(monkeypatch, tmp_path):
+    """No email_input exists for a mailbox-level failure — requeuing it would
+    invoke the graph with a near-empty payload instead of a clear error."""
+    path = tmp_path / "dlq.json"
+    monkeypatch.setattr(settings, "dlq_backend", "json")
+    monkeypatch.setattr(settings, "dlq_path", str(path))
+    monkeypatch.setattr(dlq, "DEFAULT_DLQ_PATH", path)
+
+    entry = dlq.record_dead_letter(
+        {
+            "entry_id": "mailbox-sync-ceo-email-agent",
+            "reason": "mailbox_sync_failure",
+            "error": "invalid_scope: Bad Request",
+            "payload": {"instance_id": "ceo-email-agent"},
+        },
+        path=path,
+    )
+
+    with TestClient(app) as client:
+        client.app.state.graph = object()
+        response = client.post(f"/dlq/{entry['entry_id']}/requeue", headers={"X-Agora-Instance-Role": "owner"})
+
+    assert response.status_code == 400
+    # Rejected before any claim attempt — still requeueable later once fixed.
+    assert dlq.list_dead_letters(path=path, limit=10)[0]["status"] == "dead_letter"
+
+
 def test_optional_timestamps_are_null_not_empty_strings():
     """Postgres timestamptz rejects '', which silently broke every DLQ write."""
     from src.dlq import _normalize_entry
