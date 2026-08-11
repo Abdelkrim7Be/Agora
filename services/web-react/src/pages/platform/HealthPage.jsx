@@ -58,7 +58,7 @@ export default function HealthPage() {
           </div>
           <div className="health-refresh">
             <span className="counter">{query.isFetching ? 'Actualisation…' : 'Actualisé toutes les 15 s'}</span>
-            <button type="button" onClick={() => query.refetch()}>
+            <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
               <span className="material-symbols-outlined" aria-hidden="true">sync</span>
               <span>Actualiser</span>
             </button>

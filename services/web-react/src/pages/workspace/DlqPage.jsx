@@ -55,7 +55,7 @@ export default function DlqPage() {
             <h2>File des échecs (DLQ)</h2>
             <div className="meta"><span>Emails en échec relançables une seule fois</span></div>
           </div>
-          <button type="button" onClick={() => query.refetch()}>Actualiser</button>
+          <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</button>
         </div>
         <div className="table-wrap">
           <table className="data-table">

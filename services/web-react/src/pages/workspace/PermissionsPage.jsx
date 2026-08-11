@@ -75,8 +75,9 @@ export default function PermissionsPage() {
       <Card>
         <div className="card-header">
           <div><h2>Permissions</h2><div className="meta"><span>Délégations de rôle par instance</span></div></div>
-          <button type="button" onClick={handleReload}>
-            <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Actualiser</span>
+          <button type="button" disabled={grantsQuery.isFetching || usersQuery.isFetching} onClick={handleReload}>
+            <span className="material-symbols-outlined" aria-hidden="true">sync</span>
+            <span>{grantsQuery.isFetching || usersQuery.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
           </button>
         </div>
         <div className="notice">

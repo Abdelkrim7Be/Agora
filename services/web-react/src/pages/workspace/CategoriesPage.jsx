@@ -396,8 +396,9 @@ export default function CategoriesPage() {
     <>
       <PageHeading view="categories" />
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Actualiser</span>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
         <button className="primary" type="button" onClick={handleSaveYamlRaw}>
           <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer</span>

@@ -52,8 +52,9 @@ export default function DashboardPage() {
           <option value="week">7 derniers jours</option>
           <option value="month">Mois en cours</option>
         </select>
-        <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Actualiser</span>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
         <span className="counter">{summary?.agent_instance_id || instanceId}</span>
       </div>

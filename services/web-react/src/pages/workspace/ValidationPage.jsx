@@ -388,9 +388,9 @@ export default function ValidationPage() {
         <strong>Décisions à prendre :</strong> seules les actions qui attendent une validation humaine apparaissent ici.
       </div>
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
-          <span>Actualiser</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
         <button className="primary" type="button" onClick={handleSync} disabled={syncGmail.isPending}>
           <span className="material-symbols-outlined" aria-hidden="true">mark_email_read</span>

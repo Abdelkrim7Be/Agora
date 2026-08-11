@@ -49,9 +49,9 @@ export default function AgentTypesPage() {
     <>
       <PageHeading view="agentTypes" />
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
-          <span>Actualiser</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
       </div>
       <div className="type-grid">
