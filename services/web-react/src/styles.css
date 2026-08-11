@@ -1480,18 +1480,18 @@ pre {
   flex-direction: column;
 }
 
-/* Both charts start their plot at the same y and share the leftover height.
-   The bar list is short and the volume chart is tall, so the list sat pinned to
-   the top of a half-empty card while the bars next to it filled theirs — two
-   panels of the same width reading as two different sizes. The chart body now
-   takes the remaining height and centres what it holds. */
+/* Centering a short list in the leftover height read worse than the mismatch
+   it was meant to fix: with 2-3 categories the rows floated in the middle of
+   the card with a large dead gap above them, which looks broken rather than
+   aligned. Top-anchored is what every other list in this app already does —
+   a short list just being shorter than its neighbour reads as normal. */
 .dashboard-chart-card > .section-title { flex: 0 0 auto; }
 
 .dashboard-chart-card > :not(.section-title) {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 /* Inside a card the empty state needs no box of its own — the card already is
