@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.config import AgentConfig, load_config
-from src.config import validate_gmail_webhook_config, validate_model_redaction
+from src.config import validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
 from src.prompts import agent_system_prompt, triage_system_prompt
 
 
@@ -224,6 +224,25 @@ def test_gmail_webhook_accepts_complete_push_config():
     )
 
     validate_gmail_webhook_config(config)
+
+
+def test_live_send_allowed_in_dry_run_with_no_allowlist():
+    config = SimpleNamespace(dry_run=True, outbound_allowlist=frozenset())
+
+    validate_live_send_config(config)
+
+
+def test_live_send_requires_allowlist():
+    config = SimpleNamespace(dry_run=False, outbound_allowlist=frozenset())
+
+    with pytest.raises(RuntimeError, match="AGENT_DRY_RUN=false requires a non-empty AGENT_OUTBOUND_ALLOWLIST"):
+        validate_live_send_config(config)
+
+
+def test_live_send_accepts_dry_run_false_with_allowlist():
+    config = SimpleNamespace(dry_run=False, outbound_allowlist=frozenset({"test@example.com"}))
+
+    validate_live_send_config(config)
 
 
 def test_dlq_settings_default_to_local_backend():
