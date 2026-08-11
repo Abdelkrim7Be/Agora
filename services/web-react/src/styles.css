@@ -1528,7 +1528,10 @@ pre {
   justify-content: space-between;
   gap: 10px;
   border-bottom: 1px solid var(--outline);
-  padding: 10px 0;
+  /* .rule-list switched to a self-bordered, rounded container (matching
+     .directory-row's list pattern) but this row padding was never updated to
+     match — rows sat flush against the rounded edges. */
+  padding: 14px 16px;
 }
 
 .rule-row span { color: var(--muted); }
