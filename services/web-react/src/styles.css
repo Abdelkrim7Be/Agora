@@ -678,32 +678,6 @@ p {
   gap: 12px;
 }
 
-.status {
-  min-height: 28px;
-  max-width: 520px;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  color: var(--muted);
-  padding: 5px 10px;
-  font-size: 12px;
-  box-shadow: var(--shadow-subtle);
-}
-
-.status.error {
-  color: var(--danger);
-  background: var(--danger-bg);
-  border-color: color-mix(in srgb, var(--danger) 26%, var(--outline));
-}
-
-.status.ok {
-  color: var(--secondary);
-  background: var(--secondary-bg);
-  border-color: color-mix(in srgb, var(--secondary) 26%, var(--outline));
-}
-
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -5502,63 +5476,6 @@ button.is-loading { min-width: fit-content; }
 .field.has-error > input,
 .field.has-error > select,
 .field.has-error > textarea { border-color: var(--danger); }
-
-/* --- toasts ------------------------------------------------ */
-.toast-stack {
-  position: fixed;
-  right: var(--space-4);
-  bottom: var(--space-4);
-  z-index: 1200;
-  display: grid;
-  gap: var(--space-2);
-  justify-items: end;
-  pointer-events: none;
-}
-
-.toast {
-  pointer-events: auto;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 10px 12px;
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  box-shadow: var(--shadow-raised, 0 8px 24px rgba(0,0,0,.12));
-  font-size: 14px;
-  animation: agora-toast-in 160ms ease-out;
-}
-
-@keyframes agora-toast-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .toast { animation: none; }
-}
-
-/* Le liseré reprend le rail de verdict : vert pour ce qui a abouti, rouille
-   pour ce qui a échoué. */
-.toast-ok    { border-left: var(--rail-width) solid var(--primary); }
-.toast-error { border-left: var(--rail-width) solid var(--danger); }
-.toast-ok    > .material-symbols-outlined { color: var(--primary); }
-.toast-error > .material-symbols-outlined { color: var(--danger); }
-
-.toast-message { flex: 1 1 auto; line-height: 1.4; }
-
-.toast-close {
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  box-shadow: none;
-  color: var(--muted);
-}
-
-.toast-close:hover:not(:disabled) { background: none; color: var(--text); }
-.toast-close .material-symbols-outlined { font-size: 18px; }
 
 /* Reste des capacités, en compte plutôt qu'en pastilles : la carte disait ce
    que fait l'agent, pas la liste exhaustive de ses fonctions. */

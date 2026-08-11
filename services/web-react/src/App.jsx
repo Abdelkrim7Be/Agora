@@ -3,11 +3,11 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { InstanceProvider } from './contexts/InstanceContext';
 import { I18nProvider } from './contexts/I18nContext';
-import { ThemeProvider } from './contexts/ThemeContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { BusyProvider } from './contexts/BusyContext';
-import { ToastProvider } from './contexts/ToastContext';
+import { Toaster } from 'sonner';
 import { PendingClick } from './components/ui/PendingClick';
 import { RequireGlobalRole } from './components/layout/RequireGlobalRole';
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query';
@@ -99,6 +99,14 @@ function PublicOnlyRoute({ children }) {
   return children;
 }
 
+// Sonner reads the app's own dark/light toggle rather than guessing from
+// prefers-color-scheme, so a toast never clashes with whichever theme the
+// person actually chose.
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster theme={theme} position="bottom-right" richColors closeButton />;
+}
+
 // Keeps `body.signed-in` in sync so the CSS written for the vanilla app
 // (login layout, pulse-dot colors, etc.) applies unchanged.
 function SessionBodyClass() {
@@ -118,8 +126,8 @@ export default function App() {
             <ThemeProvider>
               <StatusProvider>
                 <DialogProvider>
-                  <ToastProvider>
                   <BusyProvider>
+                  <ThemedToaster />
                   <PendingClick />
                   <SessionBodyClass />
                   <BrowserRouter>
@@ -191,7 +199,6 @@ export default function App() {
                     </ErrorBoundary>
                   </BrowserRouter>
                   </BusyProvider>
-                  </ToastProvider>
                 </DialogProvider>
               </StatusProvider>
             </ThemeProvider>
