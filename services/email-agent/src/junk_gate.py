@@ -64,6 +64,13 @@ _BULK_SUBDOMAINS = {
     "deals", "offers", "message", "messages", "inbox",
 }
 
+# Agora's own component-health alert mail (alerts.py). The admin recipient is
+# frequently the same mailbox the agent monitors — in that case the alert
+# lands right back in the inbox it was sent from and gets triaged like any
+# other message. Not a policy choice: this is always noise, so it is checked
+# unconditionally, ahead of the switchable heuristics below.
+_SYSTEM_ALERT_SUBJECT_PREFIXES = ("Alerte Agora :", "Resolution Agora :")
+
 # Bulk-sending platforms: mail from these is campaign traffic whatever the
 # local part looks like.
 _ESP_DOMAINS = {
@@ -97,6 +104,10 @@ def is_junk(email_input: dict, config: JunkConfig | None = None) -> tuple[bool, 
     author = str(email_input.get("author") or "")
     address = normalize_address(author)
     domain = address_domain(author)
+
+    subject = str(email_input.get("subject") or "")
+    if subject.startswith(_SYSTEM_ALERT_SUBJECT_PREFIXES):
+        return True, "system:self-alert"
 
     if address_matches(address, config.allowed_senders) or domain_matches(domain, config.allowed_domains):
         return False, ""
