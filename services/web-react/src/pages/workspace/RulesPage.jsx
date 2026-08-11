@@ -373,9 +373,9 @@ export default function RulesPage() {
           </ul>
         </Card>
       )}
-      <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les règles</span>
+      <div className="toolbar" style={{ marginTop: 'var(--space-3)' }}>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>{query.isFetching ? 'Actualisation…' : 'Charger les règles'}</span>
         </button>
         <button className="primary" type="button" onClick={handleSaveYaml}>
           <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer les règles</span>
