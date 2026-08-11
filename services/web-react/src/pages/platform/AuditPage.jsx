@@ -91,14 +91,18 @@ export default function AuditPage() {
           <tbody>
             {filtered.length ? filtered.map((event, index) => (
               <tr key={index}>
-                <td>{event.timestamp || ''}</td>
-                <td>{event.username || ''}</td>
-                <td><span className="status-pill">{event.role || ''}</span></td>
-                <td>{event.action || ''}</td>
-                <td>{event.method || ''}</td>
-                <td>{event.path || ''}</td>
-                <td>{String(event.upstreamStatus ?? '')}</td>
-                <td><span className={`status-pill ${outcomeClass(event.outcome, event.upstreamStatus)}`}>{event.outcome || ''}</span></td>
+                <td>{event.timestamp || '—'}</td>
+                <td>{event.username || '—'}</td>
+                <td><span className="status-pill">{event.role || '—'}</span></td>
+                <td>{event.action || '—'}</td>
+                <td>{event.method || '—'}</td>
+                <td>{event.path || '—'}</td>
+                {/* Not every audited action is proxied to an agent (login,
+                    user management) — those legitimately have no upstream
+                    status. A blank cell there read as a rendering glitch;
+                    a dash reads as "not applicable". */}
+                <td>{event.upstreamStatus ?? '—'}</td>
+                <td><span className={`status-pill ${outcomeClass(event.outcome, event.upstreamStatus)}`}>{event.outcome || '—'}</span></td>
               </tr>
             )) : (
               <tr><td colSpan={8} className="empty-cell">Aucun événement d’audit ne correspond.</td></tr>
