@@ -8,7 +8,6 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
-import { useApi } from '../../api/useApi';
 import { currentUsername } from '../../utils/jwt';
 import { agentTypeLabel, instanceIdentity, instanceSummaryFields } from '../../utils/format';
 import {
@@ -36,7 +35,6 @@ export default function InstancesPage() {
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog } = useDialog();
   const navigate = useNavigate();
-  const { api } = useApi();
   const query = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const usersQuery = useUsersQuery(globalRole === 'admin');
@@ -82,12 +80,6 @@ export default function InstancesPage() {
       setCreateError(`Limite atteinte : ${SELF_SERVICE_LIMIT} instances email-agent maximum par utilisateur.`);
       return;
     }
-    const oauthPopup = window.open('', 'agora-gmail-connect', 'popup=yes,width=520,height=720');
-    if (!oauthPopup) {
-      setCreateError('Popup bloquée. Autorisez les popups pour ce site puis recréez l’instance.');
-      return;
-    }
-    oauthPopup.document.write('<!doctype html><title>Connexion Gmail</title><body style="font-family:system-ui,sans-serif;padding:24px;background:#0b1326;color:#dae2fd">Création de l’instance puis ouverture du consentement Google...</body>');
     try {
       const created = await createInstance.mutateAsync({
         agentType: createForm.agentType,
@@ -98,25 +90,14 @@ export default function InstancesPage() {
       setCreateOpen(false);
       if (created?.id) {
         setInstanceId(created.id);
-        // Keep the app on setup while Google OAuth happens in a separate window.
-        // The setup screen polls Gmail status and starts onboarding when the
-        // callback stores the token.
-        try {
-          const result = await api(
-            `/api/agent/agent-instances/${encodeURIComponent(created.id)}/connect/gmail/start`
-          );
-          navigate(`/instance/${created.id}/setup`);
-          oauthPopup.location.href = result.authorization_url;
-          oauthPopup.focus();
-          setStatus('Connectez Gmail dans la fenêtre Google. La configuration démarrera automatiquement.', 'ok');
-        } catch (gmailError) {
-          oauthPopup.close();
-          setStatus(`Instance « ${displayName} » créée, mais connexion Gmail impossible : ${gmailError.message}`, 'error');
-          navigate(`/instance/${created.id}`);
-        }
+        // Land inside the instance's own setup/dashboard and let the person
+        // connect Gmail from there (Boîte connectée) — a popup fired from
+        // this dialog opened Google's consent screen before anyone had seen
+        // the instance they just created, and every instance-scoped connect
+        // action already lives on that screen. One connect entry point.
+        navigate(`/instance/${created.id}/setup`);
       }
     } catch (error) {
-      oauthPopup.close();
       setCreateError(error.message);
     }
   };
@@ -235,9 +216,9 @@ export default function InstancesPage() {
           <span className="material-symbols-outlined" aria-hidden="true">add</span>
           <span>Ajouter une instance</span>
         </button>
-        <button type="button" onClick={async () => { await query.refetch(); setStatus('Instances d’agents chargées.', 'ok'); }}>
+        <button type="button" disabled={query.isFetching} onClick={async () => { await query.refetch(); setStatus('Instances d’agents chargées.', 'ok'); }}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
-          <span>Actualiser</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
       </div>
       {!isAdmin ? (
