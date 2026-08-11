@@ -886,6 +886,30 @@ class RbacTest {
     }
 
     @Test
+    void viewer_can_read_agent_manifest() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/manifest"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"id\":\"email-agent\",\"contract_version\":1}")));
+
+        mockMvc.perform(get("/api/agent/manifest")
+                        .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("email-agent"));
+
+        wireMock.verify(1, getRequestedFor(urlEqualTo("/manifest")));
+    }
+
+    @Test
+    void unauthenticated_cannot_read_agent_manifest_401() throws Exception {
+        mockMvc.perform(get("/api/agent/manifest"))
+                .andExpect(status().isUnauthorized());
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/manifest")));
+    }
+
+    @Test
     void admin_can_list_users() throws Exception {
         mockMvc.perform(get("/users")
                         .header("Authorization", "Bearer " + login("admin", "adminpass")))
