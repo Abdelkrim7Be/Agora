@@ -1,3 +1,14 @@
+import { scaleSymlog } from 'd3-scale';
+import {
+  Bar,
+  BarChart,
+  Cell,
+  LabelList,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { workflowLabelFr } from '../../utils/format';
 
 /** Log-spaced ticks: a linear 0/half/top scale puts every quiet day at the
@@ -15,11 +26,14 @@ function axisTicks(maxValue) {
   return Array.from(ticks).sort((a, b) => a - b);
 }
 
-/** Position on a log1p scale — compresses a dominant outlier so the rest of
- * the series still has usable pixel range instead of sitting on the axis. */
-function logShare(value, maxValue) {
-  if (!maxValue || value <= 0) return 0;
-  return Math.log1p(value) / Math.log1p(maxValue);
+/** A symlog scale behaves like log1p above ~1 but stays finite (and linear)
+ * through zero, which plain d3 log scales can't do — half of any given
+ * period here is legitimately zero (quiet days, rare categories). Recharts
+ * calls .copy().domain(...).range(...) on whatever scale function it's given
+ * (see combineConfiguredScaleInternal), so this only needs to be a valid d3
+ * scale factory — domain/range come from the axis's own domain/range props. */
+function logScale() {
+  return scaleSymlog().constant(1);
 }
 
 /** "0 %" reads as literally nothing; a share that rounds to zero is still
@@ -32,142 +46,169 @@ function formatShareFr(value, total) {
   return `${pct.toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits })} %`;
 }
 
+function VolumeTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const point = payload[0].payload;
+  return (
+    <div className="chart-tooltip">
+      <strong>{point.label}</strong>
+      <span>{point.count > 0 ? `${point.count} e-mail(s)` : 'Aucune donnée'}</span>
+    </div>
+  );
+}
+
 export function VerticalBarChart({ points, emptyLabel }) {
-  const rows = (points || []).filter((point) => Number(point.count || 0) >= 0);
-  const maxValue = Math.max(0, ...rows.map((point) => Number(point.count || 0)));
+  const rows = (points || [])
+    .filter((point) => Number(point.count || 0) >= 0)
+    .map((point) => ({ label: point.label || '', count: Number(point.count || 0) }));
+  const maxValue = Math.max(0, ...rows.map((row) => row.count));
   if (!rows.length || maxValue === 0) return <div className="empty">{emptyLabel}</div>;
 
-  const width = 560;
-  const height = 220;
-  const left = 34;
-  const right = 16;
-  const top = 18;
-  const bottom = 44;
-  const chartWidth = width - left - right;
-  const chartHeight = height - top - bottom;
-  const gap = Math.max(4, Math.floor(chartWidth / Math.max(rows.length, 1) / 5));
-  const barWidth = Math.max(10, Math.floor((chartWidth - gap * (rows.length - 1)) / rows.length));
-  const labelEvery = rows.length > 10 ? 2 : 1;
-  const ticks = axisTicks(maxValue);
   const lastIndex = rows.length - 1;
+  const ticks = axisTicks(maxValue);
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Volume traité sur la période">
-      {/* A scale, so a lone tall bar means something instead of just being tall. */}
-      {ticks.map((tick) => {
-        const y = top + chartHeight - logShare(tick, maxValue) * chartHeight;
-        return (
-          <g key={tick}>
-            <line
-              x1={left}
-              y1={y}
-              x2={width - right}
-              y2={y}
-              stroke="var(--outline)"
-              strokeWidth="1"
-              strokeDasharray={tick === 0 ? undefined : '3 4'}
-              opacity={tick === 0 ? 1 : 0.6}
+    <ResponsiveContainer width="100%" height={220} aria-label="Volume traité sur la période">
+      <BarChart data={rows} margin={{ top: 18, right: 12, bottom: 4, left: 0 }} barCategoryGap="20%">
+        <XAxis
+          dataKey="label"
+          axisLine={{ stroke: 'var(--outline)' }}
+          tickLine={false}
+          interval={rows.length > 10 ? 1 : 0}
+          tick={({ x, y, payload, index }) => (
+            <text
+              x={x}
+              y={y + 14}
+              textAnchor="middle"
+              fontSize="11"
+              fill={index === lastIndex ? 'var(--text)' : 'var(--muted)'}
+            >
+              {payload.value}
+            </text>
+          )}
+        />
+        <YAxis
+          scale={logScale()}
+          domain={[0, maxValue]}
+          ticks={ticks}
+          axisLine={false}
+          tickLine={false}
+          tick={{ fontSize: 10, fill: 'var(--muted)' }}
+          width={28}
+        />
+        <Tooltip content={<VolumeTooltip />} cursor={{ fill: 'var(--surface-high)' }} />
+        <Bar dataKey="count" radius={[3, 3, 0, 0]} maxBarSize={48} isAnimationActive={false}>
+          {rows.map((row, index) => (
+            <Cell
+              key={row.label || index}
+              // An empty day is empty — a 2px stub with a "0" over it read as a
+              // tiny bar and made six quiet days look like six data points. Today
+              // is different: zero-so-far isn't the same claim as "nothing
+              // happened", so it gets a dashed outline instead of nothing at all.
+              fill={
+                row.count > 0
+                  ? index === lastIndex
+                    ? 'var(--primary)'
+                    : 'color-mix(in srgb, var(--primary) 62%, transparent)'
+                  : 'transparent'
+              }
+              stroke={row.count === 0 && index === lastIndex ? 'var(--muted)' : undefined}
+              strokeDasharray={row.count === 0 && index === lastIndex ? '2 3' : undefined}
             />
-            <text x={left - 8} y={y + 4} textAnchor="end" fontSize="10" fill="var(--muted)">{tick}</text>
-          </g>
-        );
-      })}
-
-      {rows.map((point, index) => {
-        const value = Number(point.count || 0);
-        const x = left + index * (barWidth + gap);
-        const barHeight = Math.round(logShare(value, maxValue) * chartHeight);
-        const y = top + chartHeight - barHeight;
-        const isLatest = index === lastIndex;
-        return (
-          <g key={point.label ?? index}>
-            {/* An empty day is empty — the old 2px stub with a "0" over it read as
-                a tiny bar and made six quiet days look like six data points. Today
-                is different: zero-so-far isn't the same claim as "nothing happened",
-                so it gets a dashed placeholder instead of silence. */}
-            {value > 0 ? (
-              <>
-                <rect
-                  x={x}
-                  y={y}
-                  width={barWidth}
-                  height={Math.max(barHeight, 3)}
-                  rx="3"
-                  fill={isLatest ? 'var(--primary)' : 'color-mix(in srgb, var(--primary) 62%, transparent)'}
-                />
-                <text x={x + barWidth / 2} y={Math.max(y - 6, 12)} textAnchor="middle" fontSize="11" fill="var(--text)">
+          ))}
+          <LabelList
+            dataKey="count"
+            position="top"
+            content={({ x, y, width, value, index }) =>
+              value > 0 ? (
+                <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize="11" fill="var(--text)">
                   {value}
                 </text>
-              </>
-            ) : isLatest ? (
-              <>
-                <title>Aujourd'hui — pas encore de données</title>
-                <rect
-                  x={x}
-                  y={top + chartHeight - 3}
-                  width={barWidth}
-                  height="3"
-                  rx="1.5"
-                  fill="none"
-                  stroke="var(--muted)"
-                  strokeDasharray="2 3"
-                />
-              </>
-            ) : null}
-            {index % labelEvery === 0 && (
-              <text
-                x={x + barWidth / 2}
-                y={height - 16}
-                textAnchor="middle"
-                fontSize="11"
-                fill={isLatest ? 'var(--text)' : 'var(--muted)'}
-              >
-                {point.label || ''}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+              ) : null
+            }
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function CategoryTick({ x, y, payload, labelByKey }) {
+  const meta = labelByKey.get(payload.value);
+  if (!meta) return null;
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text x={0} y={-3} textAnchor="end" fontSize="12" fill="var(--text)">
+        {meta.label.length > 26 ? `${meta.label.slice(0, 25)}…` : meta.label}
+      </text>
+      <text x={0} y={11} textAnchor="end" fontSize="10" fill="var(--muted)">
+        {meta.shareLabel}
+      </text>
+    </g>
   );
 }
 
 export function HorizontalBarChart({ rows, emptyLabel }) {
-  const items = (rows || []).slice(0, 5);
-  const maxValue = Math.max(0, ...items.map((row) => Number(row.count || 0)));
+  const total = (rows || []).reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const items = (rows || []).slice(0, 5).map((row, index) => {
+    const count = Number(row.count || 0);
+    const key = row.category ?? row.display_name ?? String(index);
+    return { key, count, label: workflowLabelFr(row), shareLabel: formatShareFr(count, total) };
+  });
+  const maxValue = Math.max(0, ...items.map((item) => item.count));
   if (!items.length || maxValue === 0) return <div className="empty">{emptyLabel}</div>;
 
-  const width = 560;
-  const rowHeight = 32;
-  const height = items.length * rowHeight + 16;
-  const left = 176;
-  const right = 44;
-  const barWidth = width - left - right;
-  const total = items.reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const labelByKey = new Map(items.map((item) => [item.key, item]));
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Cas métier les plus actifs sur la période">
-      {items.map((row, index) => {
-        const value = Number(row.count || 0);
-        const y = 8 + index * rowHeight;
-        // Log scale: a dominant category (e.g. auto-ignored bulk mail) would
-        // otherwise flatten every other row to the 6px floor.
-        const widthPx = Math.max(6, Math.round(logShare(value, maxValue) * barWidth));
-        const shareLabel = formatShareFr(value, total);
-        const label = workflowLabelFr(row);
-        return (
-          <g key={row.category ?? row.display_name ?? index}>
-            <title>{`${label} — ${value} e-mail(s), ${shareLabel} de la période`}</title>
-            <text x="8" y={y + 15} fontSize="12" fill="var(--text)">
-              {label.length > 26 ? `${label.slice(0, 25)}…` : label}
-            </text>
-            <rect x={left} y={y + 2} width={barWidth} height="14" rx="4" fill="var(--surface-high)" />
-            <rect x={left} y={y + 2} width={widthPx} height="14" rx="4" fill="var(--primary)" />
-            <text x={width - 8} y={y + 13} textAnchor="end" fontSize="12" fill="var(--text)">{value}</text>
-            <text x="8" y={y + 27} fontSize="10" fill="var(--muted)">{shareLabel}</text>
-          </g>
-        );
-      })}
-    </svg>
+    <ResponsiveContainer width="100%" height={items.length * 32 + 16} aria-label="Cas métier les plus actifs sur la période">
+      <BarChart
+        data={items}
+        layout="vertical"
+        margin={{ top: 4, right: 44, bottom: 4, left: 0 }}
+        barCategoryGap="24%"
+      >
+        <XAxis type="number" scale={logScale()} domain={[0, maxValue]} hide />
+        <YAxis
+          type="category"
+          dataKey="key"
+          width={176}
+          axisLine={false}
+          tickLine={false}
+          tick={(props) => <CategoryTick {...props} labelByKey={labelByKey} />}
+        />
+        <Tooltip
+          cursor={{ fill: 'var(--surface-high)' }}
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const item = payload[0].payload;
+            return (
+              <div className="chart-tooltip">
+                <strong>{item.label}</strong>
+                <span>{item.count} e-mail(s), {item.shareLabel} de la période</span>
+              </div>
+            );
+          }}
+        />
+        <Bar
+          dataKey="count"
+          fill="var(--primary)"
+          background={{ fill: 'var(--surface-high)', radius: 4 }}
+          radius={4}
+          barSize={14}
+          isAnimationActive={false}
+        >
+          <LabelList
+            dataKey="count"
+            position="right"
+            content={({ x, y, height, value }) => (
+              <text x={x + 8} y={y + height / 2 + 4} fontSize="12" fill="var(--text)">
+                {value}
+              </text>
+            )}
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
   );
 }
