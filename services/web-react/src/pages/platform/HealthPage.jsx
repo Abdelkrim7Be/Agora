@@ -91,9 +91,6 @@ export default function HealthPage() {
             ) : null}
             <MetricTile
               label="Notifications e-mail"
-              hint={notifyEnabled
-                ? 'Relance des validateurs, escalade SLA et alertes techniques par e-mail.'
-                : 'Le centre de notifications reste actif ; seuls les envois par e-mail sont coupés.'}
               value={<span className={`status-pill ${notifyEnabled ? 'ok' : 'warn'}`}>{notifyEnabled ? 'Activé' : 'Désactivé'}</span>}
             />
           </div>
