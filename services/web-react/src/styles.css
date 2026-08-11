@@ -3909,6 +3909,23 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   color: var(--text);
 }
 
+.data-error-detail {
+  margin-top: 2px;
+}
+
+.data-error-detail summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.data-error-detail code {
+  display: block;
+  margin-top: 3px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .crash-screen {
   min-height: 100vh;
   display: grid;
@@ -4461,7 +4478,6 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 .guide-divider {
   margin: 24px 0 4px;
   padding-top: 18px;
-  border-top: 2px solid var(--outline);
   font-size: 1.05rem;
 }
 
