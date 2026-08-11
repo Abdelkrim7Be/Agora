@@ -89,6 +89,29 @@ class InstanceGrantTest {
         return objectMapper.readTree(response).get("token").asText();
     }
 
+    private void createOwnerInstance(String instanceId) throws Exception {
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", instanceId,
+                                "agent_type", "email-agent",
+                                "display_name", instanceId
+                        ))))
+                .andExpect(status().isCreated());
+    }
+
+    private void grantViewerOn(String instanceId, String role) throws Exception {
+        mockMvc.perform(post("/agent-instances/" + instanceId + "/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "user_id", "viewer",
+                                "role", role
+                        ))))
+                .andExpect(status().isCreated());
+    }
+
     @Test
     void owner_can_list_grants_empty() throws Exception {
         mockMvc.perform(get("/agent-instances/default-email-agent/grants")
@@ -182,6 +205,94 @@ class InstanceGrantTest {
 
         wireMock.verify(1, postRequestedFor(urlPathEqualTo("/run/xyz/approve"))
                 .withHeader("X-Agora-Instance-Role", equalTo("approver")));
+    }
+
+    @Test
+    void viewer_grant_on_private_instance_allows_read_but_not_approve_or_write() throws Exception {
+        createOwnerInstance("private-viewer-boundary");
+        grantViewerOn("private-viewer-boundary", "viewer");
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"messages\":[]}")));
+
+        String viewerToken = login("viewer", "viewerpass");
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + viewerToken)
+                        .header("X-Agora-Agent-Instance", "private-viewer-boundary"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox"))
+                .withHeader("X-Agora-User", equalTo("viewer"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("private-viewer-boundary"))
+                .withHeader("X-Agora-Instance-Role", equalTo("viewer")));
+
+        mockMvc.perform(post("/api/agent/run/xyz/approve")
+                        .header("Authorization", "Bearer " + viewerToken)
+                        .header("X-Agora-Agent-Instance", "private-viewer-boundary")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/agent/categories")
+                        .header("Authorization", "Bearer " + viewerToken)
+                        .header("X-Agora-Agent-Instance", "private-viewer-boundary")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/run/xyz/approve")));
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/categories")));
+    }
+
+    @Test
+    void approver_grant_on_private_instance_allows_read_and_approve_but_not_write() throws Exception {
+        createOwnerInstance("private-approver-boundary");
+        grantViewerOn("private-approver-boundary", "approver");
+
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"messages\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/run/xyz/approve"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"run_id\":\"xyz\",\"status\":\"completed\"}")));
+
+        String viewerToken = login("viewer", "viewerpass");
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + viewerToken)
+                        .header("X-Agora-Agent-Instance", "private-approver-boundary"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/agent/run/xyz/approve")
+                        .header("Authorization", "Bearer " + viewerToken)
+                        .header("X-Agora-Agent-Instance", "private-approver-boundary")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox"))
+                .withHeader("X-Agora-User", equalTo("viewer"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("private-approver-boundary"))
+                .withHeader("X-Agora-Instance-Role", equalTo("approver")));
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/run/xyz/approve"))
+                .withHeader("X-Agora-User", equalTo("viewer"))
+                .withHeader("X-Agora-Agent-Instance", equalTo("private-approver-boundary"))
+                .withHeader("X-Agora-Instance-Role", equalTo("approver")));
+
+        mockMvc.perform(post("/api/agent/categories")
+                        .header("Authorization", "Bearer " + viewerToken)
+                        .header("X-Agora-Agent-Instance", "private-approver-boundary")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/categories")));
     }
 
     @Test
