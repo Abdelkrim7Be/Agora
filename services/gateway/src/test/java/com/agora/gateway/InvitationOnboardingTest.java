@@ -146,6 +146,34 @@ class InvitationOnboardingTest {
     }
 
     @Test
+    void resending_invitation_can_override_the_destination_address() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "typo@example.test",
+                                "role", "viewer",
+                                "email", "typoo@example.test"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString());
+        long userId = created.get("id").asLong();
+
+        mockMvc.perform(post("/users/" + userId + "/invite")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("email", "typo@example.test"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("typo@example.test"));
+
+        mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == " + userId + ")].email").value(org.hamcrest.Matchers.contains("typo@example.test")));
+    }
+
+    @Test
     void the_clear_token_is_never_stored_or_audited() throws Exception {
         String adminToken = login("admin", "adminpass");
         JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")

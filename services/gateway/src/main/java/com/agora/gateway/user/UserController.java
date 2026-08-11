@@ -126,10 +126,22 @@ public class UserController {
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 
-    /** Re-issue an invitation, retiring whatever link was outstanding. */
+    public record InviteRequest(String email) {}
+
+    /** Re-issue an invitation, retiring whatever link was outstanding.
+     *
+     * An optional email in the body overrides — and persists as — the address
+     * the invite goes to. Without it, an admin fixing a typo'd address before
+     * sending had no way to do that except a separate save-then-invite round
+     * trip, and the invite would go out to the stale one in between. */
     @PostMapping("/{id}/invite")
-    public ResponseEntity<?> invite(@PathVariable Long id, Authentication auth) {
+    public ResponseEntity<?> invite(@PathVariable Long id, @RequestBody(required = false) InviteRequest req, Authentication auth) {
         return users.findById(id).map(user -> {
+            String override = req != null ? req.email() : null;
+            if (override != null && !override.isBlank()) {
+                user.setEmail(override.strip());
+                users.save(user);
+            }
             Map<String, Object> body = userBody(user);
             body.putAll(issueInvitation(user, auth));
             return ResponseEntity.ok(body);
