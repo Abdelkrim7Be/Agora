@@ -175,6 +175,11 @@ public class SecurityConfig {
                 // used by the Docker healthcheck unauthenticated). This is the proxied
                 // email-agent System Health aggregate for the browser control panel.
                 .requestMatchers(HttpMethod.GET, "/api/agent/health").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                // Self-description only (capabilities, settings schema, contract
+                // version) — no tenant data. AgentRegistryService already reads this
+                // server-to-server; this is the same route for a browser/external
+                // client asking the same question through the proxy.
+                .requestMatchers(HttpMethod.GET, "/api/agent/manifest").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/metrics").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/dlq").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/dlq/*/requeue").hasRole("ADMIN")
