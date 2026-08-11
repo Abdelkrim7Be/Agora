@@ -331,41 +331,43 @@ export default function UsersPage() {
                       </span>
                     </td>
                     <td>
-                      <button type="button" onClick={() => handleUpdateUser(user)}>
-                        Enregistrer
-                      </button>
-                      <button type="button" onClick={() => handleInvite(user)}>
-                        Inviter
-                      </button>
-                      <button type="button" onClick={() => handleSetPassword(user)}>
-                        Mot de passe
-                      </button>
-                      {user.mfaEnabled ? (
-                        <button type="button" onClick={() => handleResetMfa(user)}>
-                          Réinitialiser 2FA
+                      <div className="actions">
+                        <button type="button" onClick={() => handleUpdateUser(user)}>
+                          Enregistrer
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        disabled={selfDisable}
-                        title={selfDisable ? 'Vous ne pouvez pas désactiver votre propre compte actif' : undefined}
-                        aria-label={`${label} ${user.username || 'utilisateur'}`}
-                        onClick={() => handleToggle(user)}
-                      >
-                        {label}
-                      </button>
-                      {anonymized ? null : (
+                        <button type="button" onClick={() => handleInvite(user)}>
+                          Inviter
+                        </button>
+                        <button type="button" onClick={() => handleSetPassword(user)}>
+                          Mot de passe
+                        </button>
+                        {user.mfaEnabled ? (
+                          <button type="button" onClick={() => handleResetMfa(user)}>
+                            Réinitialiser 2FA
+                          </button>
+                        ) : null}
                         <button
                           type="button"
-                          className="danger"
-                          disabled={user.username === username}
-                          title={user.username === username ? 'Vous ne pouvez pas anonymiser votre propre compte' : undefined}
-                          aria-label={`Anonymiser ${user.username || 'utilisateur'}`}
-                          onClick={() => handleAnonymize(user)}
+                          disabled={selfDisable}
+                          title={selfDisable ? 'Vous ne pouvez pas désactiver votre propre compte actif' : undefined}
+                          aria-label={`${label} ${user.username || 'utilisateur'}`}
+                          onClick={() => handleToggle(user)}
                         >
-                          Anonymiser
+                          {label}
                         </button>
-                      )}
+                        {anonymized ? null : (
+                          <button
+                            type="button"
+                            className="danger"
+                            disabled={user.username === username}
+                            title={user.username === username ? 'Vous ne pouvez pas anonymiser votre propre compte' : undefined}
+                            aria-label={`Anonymiser ${user.username || 'utilisateur'}`}
+                            onClick={() => handleAnonymize(user)}
+                          >
+                            Anonymiser
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
