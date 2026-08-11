@@ -32,12 +32,46 @@ function onboardingState(user) {
   return { label: 'À inviter', tone: 'warn' };
 }
 
+const PLATFORM_ROLES = [
+  {
+    key: 'admin',
+    label: 'Administrateur',
+    summary: 'Administration de la plateforme : comptes, instances, coûts, file d’erreurs, audit.',
+    grants: ['Toutes les routes plateforme (/users, /audit, /api/agent/costs, /api/agent/dlq, /api/agent/capabilities)', 'Lecture et administration de toute instance'],
+  },
+  {
+    key: 'owner',
+    label: 'Propriétaire',
+    summary: 'Autorité complète sur les instances qu’il crée ou auxquelles il est autorisé : configuration, envoi, approbation.',
+    grants: ['Écriture sur l’instance (config, règles, cas métier, signature, persona)', 'Approuver / rejeter / répondre'],
+  },
+  {
+    key: 'approver',
+    label: 'Validateur',
+    summary: 'Peut approuver, rejeter ou répondre aux actions proposées dans les instances où il est autorisé — pas de configuration.',
+    grants: ['Approuver / rejeter / répondre', 'Lecture de l’instance'],
+  },
+  {
+    key: 'viewer',
+    label: 'Lecteur',
+    summary: 'Accès en lecture seule aux instances autorisées — aucune approbation, aucune écriture.',
+    grants: ['Lecture de l’instance et des surfaces plateforme autorisées'],
+  },
+];
+
+const TABS = [
+  { key: 'comptes', label: 'Comptes' },
+  { key: 'acces', label: 'Accès aux instances' },
+  { key: 'roles', label: 'Gestion des rôles' },
+];
+
 export default function UsersPage() {
   const { setStatus } = useStatus();
   const { token } = useAuth();
   const { promptDialog, confirmDialog } = useDialog();
   const navigate = useNavigate();
   const [openUser, setOpenUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('comptes');
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
@@ -118,10 +152,23 @@ export default function UsersPage() {
   };
 
   const handleInvite = async (user) => {
+    // The stored address is whatever was typed in at account creation — often
+    // not double-checked. Confirming (or overriding) it right before the send
+    // beats finding out later that the invite went to a typo, and this is the
+    // one moment the actual destination is on screen.
+    const email = await promptDialog({
+      title: `Inviter ${user.username}`,
+      message: 'Adresse à laquelle envoyer le lien d’invitation.',
+      placeholder: 'personne@exemple.com',
+      defaultValue: user.email || '',
+      confirmLabel: 'Envoyer l’invitation',
+      required: true,
+    });
+    if (!email) return;
     try {
-      const result = await inviteUser.mutateAsync(user.id);
+      const result = await inviteUser.mutateAsync({ id: user.id, email });
       setInviteLink(result.setupLink || '');
-      setStatus(result.setupLink ? `Invitation recréée pour ${user.username}.` : `Invitation envoyée à ${user.email || user.username}.`, 'ok');
+      setStatus(result.setupLink ? `Invitation recréée pour ${user.username}.` : `Invitation envoyée à ${email}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible d’envoyer l’invitation : ${error.message}`, 'error');
     }
@@ -258,15 +305,30 @@ export default function UsersPage() {
   return (
     <>
       <PageHeading view="users" />
+      <div className="page-tabs" role="tablist" aria-label="Sections Équipe">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            className={activeTab === tab.key ? 'active' : ''}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {activeTab === 'comptes' && (
       <Card className="users-card">
         <div className="card-header">
           <div>
             <h2>Utilisateurs et invitations</h2>
             <div className="meta"><span>Comptes, rôles et accès initial</span></div>
           </div>
-          <button type="button" onClick={async () => { await query.refetch(); setStatus('Utilisateurs chargés.', 'ok'); }}>
+          <button type="button" disabled={query.isFetching} onClick={async () => { await query.refetch(); setStatus('Utilisateurs chargés.', 'ok'); }}>
             <span className="material-symbols-outlined" aria-hidden="true">sync</span>
-            <span>Actualiser</span>
+            <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
           </button>
         </div>
         <div className="notice">
@@ -426,6 +488,9 @@ export default function UsersPage() {
           </button>
         </form>
       </Card>
+      )}
+      {activeTab === 'acces' && (
+      <>
       <Card className="users-card user-instances-card">
         <div className="card-header">
           <div>
@@ -541,6 +606,35 @@ export default function UsersPage() {
         </div>
         {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
       </Card>
+      </>
+      )}
+      {activeTab === 'roles' && (
+      <Card className="users-card">
+        <div className="card-header">
+          <div>
+            <h2>Rôles plateforme</h2>
+            <div className="meta"><span>Distinct de l’annuaire des rôles d’une instance (routage métier vers une adresse) — ceci définit ce qu’un compte a le droit de faire sur la plateforme.</span></div>
+          </div>
+        </div>
+        <div className="platform-role-grid">
+          {PLATFORM_ROLES.map((role) => {
+            const count = users.filter((user) => (user.role || 'viewer') === role.key).length;
+            return (
+              <div className="platform-role-card" key={role.key}>
+                <div className="card-tags">
+                  <span className="status-pill">{role.label}</span>
+                  <span className="counter">{count} compte{count === 1 ? '' : 's'}</span>
+                </div>
+                <p>{role.summary}</p>
+                <ul className="security-reasons">
+                  {role.grants.map((grant, index) => <li key={index}>{grant}</li>)}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+      )}
     </>
   );
 }
