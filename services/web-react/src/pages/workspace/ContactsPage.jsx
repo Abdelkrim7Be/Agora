@@ -376,6 +376,12 @@ export default function ContactsPage() {
         <Card className="editor-card">
           <div className="card-header">
             <div><h2>Contacts enregistrés</h2><p>Audience, champs métier et statut actif restent visibles sans exposer le YAML.</p></div>
+            <input
+              aria-label="Rechercher un contact"
+              placeholder="Rechercher un contact"
+              value={search}
+              onChange={(event) => { setSearch(event.target.value); pager.setPage(0); }}
+            />
             {availableCategories.length ? (
               <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); pager.setPage(0); }}>
                 <option value="">Toutes catégories</option>
