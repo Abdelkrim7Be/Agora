@@ -159,7 +159,10 @@ export default function App() {
                             through two endpoints — one queue, one page. */}
                         <Route path="drafts" element={<Navigate to="../validation" replace />} />
                         <Route path="inbox" element={<InboxPage />} />
-                        <Route path="sent" element={<InboxPage initialMailbox="sent" />} />
+                        {/* Messages already toggles Envoyés from within the same page
+                            (InboxPage's own inbox/sent switch) — a separate route and
+                            sidebar entry for the same view was a duplicate, not a page. */}
+                        <Route path="sent" element={<Navigate to="../inbox" replace />} />
                         <Route path="run/:runId" element={<RunDetailPage />} />
                         <Route path="gmail" element={<GmailPage />} />
                         <Route path="config" element={<PersonaPage />} />
