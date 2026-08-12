@@ -22,6 +22,22 @@ spring:
 server:
   port: 8080
 
+management:
+  endpoints:
+    access:
+      default: read-only
+    web:
+      exposure:
+        include: health,prometheus
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
 gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}

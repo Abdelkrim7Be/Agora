@@ -112,6 +112,12 @@ class JwtHardeningTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void actuator_prometheus_is_scrapeable_without_jwt() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isOk());
+    }
+
     private MvcResult login() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of(
                 "username", "owner",
