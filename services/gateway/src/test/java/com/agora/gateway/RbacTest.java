@@ -14,6 +14,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -89,6 +91,10 @@ class RbacTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(response).get("token").asText();
+    }
+
+    private String adminGrantExpiry() {
+        return Instant.now().plus(1, ChronoUnit.HOURS).toString();
     }
 
     @Test
@@ -275,7 +281,11 @@ class RbacTest {
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "owner"))))
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "user_id", "admin",
+                                "role", "owner",
+                                "expires_at", adminGrantExpiry()
+                        ))))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(get("/api/agent/costs/summary?period=session")
@@ -385,7 +395,11 @@ class RbacTest {
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "owner"))))
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "user_id", "admin",
+                                "role", "owner",
+                                "expires_at", adminGrantExpiry()
+                        ))))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(put("/api/agent/signature")
@@ -1185,7 +1199,11 @@ class RbacTest {
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
                         .header("Authorization", "Bearer " + login("owner", "ownerpass"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "viewer"))))
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "user_id", "admin",
+                                "role", "viewer",
+                                "expires_at", adminGrantExpiry()
+                        ))))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(get("/api/agent/inbox?limit=25")

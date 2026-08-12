@@ -16,6 +16,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -112,6 +114,10 @@ class InstanceGrantTest {
                 .andExpect(status().isCreated());
     }
 
+    private String adminGrantExpiry() {
+        return Instant.now().plus(1, ChronoUnit.HOURS).toString();
+    }
+
     @Test
     void owner_can_list_grants_empty() throws Exception {
         mockMvc.perform(get("/agent-instances/default-email-agent/grants")
@@ -177,6 +183,47 @@ class InstanceGrantTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void permanent_admin_targeted_grant_returns_400() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of("user_id", "admin", "role", "owner"));
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("grants to admin users must include expires_at within 24 hours"));
+    }
+
+    @Test
+    void admin_targeted_grant_beyond_24h_returns_400() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "user_id", "admin",
+                "role", "owner",
+                "expires_at", Instant.now().plus(25, ChronoUnit.HOURS).toString()
+        ));
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void time_boxed_admin_targeted_grant_is_accepted() throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "user_id", "admin",
+                "role", "owner",
+                "expires_at", adminGrantExpiry()
+        ));
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.user_id").value("admin"))
+                .andExpect(jsonPath("$.expires_at").exists());
     }
 
     @Test
