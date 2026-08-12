@@ -83,6 +83,11 @@ public class InstanceGrantController {
         return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
     }
 
+    @ExceptionHandler(InstanceGrantService.AdminGrantRequiresExpiryException.class)
+    ResponseEntity<Map<String, String>> adminGrantRequiresExpiry(InstanceGrantService.AdminGrantRequiresExpiryException ex) {
+        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+    }
+
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)
     ResponseEntity<Map<String, String>> unknownInstance(AgentRegistryService.UnknownAgentTypeException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", ex.getMessage()));

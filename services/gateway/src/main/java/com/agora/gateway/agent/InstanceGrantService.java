@@ -1,5 +1,6 @@
 package com.agora.gateway.agent;
 
+import com.agora.gateway.user.UserRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -28,10 +29,12 @@ public class InstanceGrantService {
 
     private final AgentInstanceGrantRepository grants;
     private final AgentInstanceRepository instances;
+    private final UserRepository users;
 
-    public InstanceGrantService(AgentInstanceGrantRepository grants, AgentInstanceRepository instances) {
+    public InstanceGrantService(AgentInstanceGrantRepository grants, AgentInstanceRepository instances, UserRepository users) {
         this.grants = grants;
         this.instances = instances;
+        this.users = users;
     }
 
     /**
@@ -84,15 +87,17 @@ public class InstanceGrantService {
         if (!instances.existsById(agentInstanceId)) {
             throw new AgentRegistryService.UnknownAgentTypeException(agentInstanceId);
         }
+        Instant resolvedExpiresAt = resolveExpiry(role, expiresAt);
+        requireAdminGrantExpiry(userId, expiresAt, resolvedExpiresAt);
         Optional<AgentInstanceGrant> existing = grants.findByAgentInstanceIdAndUserId(agentInstanceId, userId);
         if (existing.isPresent()) {
             AgentInstanceGrant g = existing.get();
             g.setRole(role);
-            g.setExpiresAt(resolveExpiry(role, expiresAt));
+            g.setExpiresAt(resolvedExpiresAt);
             return grants.save(g);
         }
         AgentInstanceGrant grant = new AgentInstanceGrant(agentInstanceId, userId, role, grantedBy);
-        grant.setExpiresAt(resolveExpiry(role, expiresAt));
+        grant.setExpiresAt(resolvedExpiresAt);
         return grants.save(grant);
     }
 
@@ -107,6 +112,12 @@ public class InstanceGrantService {
         }
     }
 
+    public static class AdminGrantRequiresExpiryException extends RuntimeException {
+        public AdminGrantRequiresExpiryException() {
+            super("grants to admin users must include expires_at within 24 hours");
+        }
+    }
+
     public static boolean active(AgentInstanceGrant grant) {
         return grant.getExpiresAt() == null || grant.getExpiresAt().isAfter(Instant.now());
     }
@@ -115,5 +126,18 @@ public class InstanceGrantService {
         if (expiresAt != null) return expiresAt;
         if ("viewer".equals(role)) return Instant.now().plus(DEFAULT_VIEWER_GRANT_HOURS, ChronoUnit.HOURS);
         return null;
+    }
+
+    private void requireAdminGrantExpiry(String userId, Instant requestedExpiresAt, Instant resolvedExpiresAt) {
+        boolean targetIsAdmin = users.findByUsername(userId)
+                .map(user -> "admin".equalsIgnoreCase(user.getRole()))
+                .orElse(false);
+        if (!targetIsAdmin) {
+            return;
+        }
+        Instant latestAllowed = Instant.now().plus(DEFAULT_VIEWER_GRANT_HOURS, ChronoUnit.HOURS);
+        if (requestedExpiresAt == null || resolvedExpiresAt == null || resolvedExpiresAt.isAfter(latestAllowed)) {
+            throw new AdminGrantRequiresExpiryException();
+        }
     }
 }
