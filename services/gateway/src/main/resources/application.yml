@@ -90,6 +90,7 @@ gateway:
     ttl-minutes: ${GATEWAY_JWT_TTL_MINUTES:15}
     refresh-ttl-days: ${GATEWAY_JWT_REFRESH_TTL_DAYS:7}
     secure-cookies: ${GATEWAY_JWT_SECURE_COOKIES:true}
+  agent-shared-secret: ${GATEWAY_AGENT_SHARED_SECRET:}
   mfa:
     challenge-ttl-minutes: ${GATEWAY_MFA_CHALLENGE_TTL_MINUTES:5}
     recovery-code-count: ${GATEWAY_MFA_RECOVERY_CODE_COUNT:8}

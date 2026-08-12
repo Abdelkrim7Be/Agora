@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hmac
 import html
 import json
 import logging
@@ -26,7 +27,7 @@ from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
-from src.config import settings, validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
+from src.config import settings, validate_gateway_shared_secret, validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
 from src.trace import list_traces, setup_trace_store
 from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, record_dead_letter, setup_dlq
@@ -228,6 +229,7 @@ async def _watch_renewal_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_model_redaction()
+    validate_gateway_shared_secret()
     validate_gmail_webhook_config()
     validate_live_send_config()
     validate_token_security()
@@ -289,12 +291,20 @@ def _request_agent_instance_id(request: Request) -> str | None:
     return request.headers.get("x-agora-agent-instance")
 
 
+def _gateway_secret_is_valid(request: Request) -> bool:
+    expected = settings.gateway_shared_secret.strip()
+    if not expected:
+        return True
+    actual = request.headers.get("x-agora-gateway-secret", "")
+    return hmac.compare_digest(actual, expected)
+
+
 def _require_instance_role(request: Request, min_role: str) -> None:
     """Defense-in-depth: verify the gateway-stamped instance role is sufficient.
 
     The gateway resolves and stamps X-Agora-Instance-Role before forwarding.
-    When the header is absent (direct call bypassing the gateway) no check is applied —
-    the gateway is the authoritative enforcement layer; this is an additional guard only.
+    The gateway resolves and stamps this after authenticating itself with the
+    shared gateway secret checked by tenant_context_middleware.
     Roles: owner > approver > viewer.
     """
     ROLE_TIER = {"owner": 3, "approver": 2, "viewer": 1}
@@ -319,6 +329,12 @@ def _require_dept_access(request: Request, record: dict | None) -> None:
 
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
+    if not _gateway_secret_is_valid(request):
+        return Response(
+            content='{"detail":"gateway authentication required"}',
+            status_code=401,
+            media_type="application/json",
+        )
     with user_context(_request_user_id(request)):
         with agent_instance_context(_request_agent_instance_id(request)):
             return await call_next(request)

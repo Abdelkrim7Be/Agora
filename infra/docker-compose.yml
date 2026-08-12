@@ -258,6 +258,7 @@ services:
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_SECURITY_TIMEOUT: 10
+      GATEWAY_AGENT_SHARED_SECRET: ${GATEWAY_AGENT_SHARED_SECRET}
       # Browser Gmail OAuth onboarding. Demo/live compose mounts credentials.json explicitly.
       # Redirect URI points at the gateway — the browser cannot reach email-agent directly.
       GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH:-credentials.json}
@@ -301,6 +302,7 @@ services:
     environment:
       GATEWAY_SECRET_DIR: ${GATEWAY_SECRET_DIR:-/run/secrets/agora-gateway/}
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
+      GATEWAY_AGENT_SHARED_SECRET: ${GATEWAY_AGENT_SHARED_SECRET}
       # Invitation links point at the public web app; SMTP is optional — with no
       # relay the endpoints return the setup link instead of mailing it.
       # Invitation links are built from this, so it must be the URL a person can

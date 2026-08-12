@@ -42,6 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "gateway.upstream.summary-cache-seconds=0",
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
+        "gateway.agent-shared-secret=test-agent-shared-secret-0123456789",
         "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",
         "gateway.owner.password=ownerpass",
@@ -121,7 +122,8 @@ class ProxyControllerTest {
 
         wireMock.verify(postRequestedFor(urlEqualTo("/run"))
                 .withHeader("X-Agora-User", equalTo("owner"))
-                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent"))
+                .withHeader("X-Agora-Gateway-Secret", equalTo("test-agent-shared-secret-0123456789")));
     }
 
 
@@ -256,7 +258,8 @@ class ProxyControllerTest {
 
         wireMock.verify(postRequestedFor(urlEqualTo("/sync?limit=7"))
                 .withHeader("X-Agora-User", equalTo("owner"))
-                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
+                .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent"))
+                .withHeader("X-Agora-Gateway-Secret", equalTo("test-agent-shared-secret-0123456789")));
     }
 
 
