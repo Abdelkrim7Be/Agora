@@ -19,6 +19,7 @@ public class GatewayProperties {
     private String defaultAgentMailbox = "";
     private List<AgentType> agentTypes = new ArrayList<>(List.of(AgentType.defaultEmailAgent()));
     private Jwt jwt = new Jwt();
+    private String agentSharedSecret = "";
     private Mfa mfa = new Mfa();
     private LoginRateLimit loginRateLimit = new LoginRateLimit();
     private Credentials owner = new Credentials();
@@ -52,6 +53,9 @@ public class GatewayProperties {
 
     public Jwt getJwt() { return jwt; }
     public void setJwt(Jwt jwt) { this.jwt = jwt; }
+
+    public String getAgentSharedSecret() { return agentSharedSecret; }
+    public void setAgentSharedSecret(String agentSharedSecret) { this.agentSharedSecret = agentSharedSecret; }
 
     public Mfa getMfa() { return mfa; }
     public void setMfa(Mfa mfa) { this.mfa = mfa; }

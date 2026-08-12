@@ -130,6 +130,7 @@ class Settings:
     # Security service integration (off by default — no behavior change until opted in).
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
+    gateway_shared_secret: str = os.getenv("GATEWAY_AGENT_SHARED_SECRET", "")
     # 10s was tuned for a hosted classifier call; against a single shared local
     # Ollama instance that's also serving triage/draft/persona generation, the
     # classifier queues behind whatever else is running and 10s isn't enough —
@@ -299,6 +300,14 @@ def validate_gmail_webhook_config(config: Settings | None = None) -> None:
         raise RuntimeError(
             "GMAIL_POLLING_FALLBACK_ENABLED must stay true while Gmail webhooks are enabled."
         )
+
+
+def validate_gateway_shared_secret(config: Settings | None = None) -> None:
+    config = config or settings
+    if config.gateway_shared_secret.strip():
+        return
+    if config.database_url.strip() or config.storage_backend == "postgres":
+        raise RuntimeError("GATEWAY_AGENT_SHARED_SECRET must be set for deployed email-agent instances.")
 
 
 # --- Behavior config (config.yaml) — separate concern from Settings above. ---

@@ -34,13 +34,14 @@ public class ProxyController {
     private static final String USER_DEPT_HEADER = "X-Agora-User-Dept";
     private static final String AGENT_INSTANCE_HEADER = "X-Agora-Agent-Instance";
     private static final String INSTANCE_ROLE_HEADER = "X-Agora-Instance-Role";
+    private static final String GATEWAY_SECRET_HEADER = "X-Agora-Gateway-Secret";
     private static final Pattern VERB_PATTERN = Pattern.compile("^/api/agent/run/[^/]+/([^/]+)$");
 
     private static final Set<String> HOP_BY_HOP = Set.of(
             "host", "connection", "content-length", "transfer-encoding",
             "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
             USER_HEADER.toLowerCase(), USER_DEPT_HEADER.toLowerCase(), AGENT_INSTANCE_HEADER.toLowerCase(),
-            INSTANCE_ROLE_HEADER.toLowerCase()
+            INSTANCE_ROLE_HEADER.toLowerCase(), GATEWAY_SECRET_HEADER.toLowerCase()
     );
 
     // Write-tier paths: owner only.
@@ -66,6 +67,7 @@ public class ProxyController {
     private final AgentRegistryService agentRegistryService;
     private final InstanceGrantService grantService;
     private final String defaultAgentInstance;
+    private final String agentSharedSecret;
     private final UserRepository userRepository;
 
     public ProxyController(GatewayProperties props, RestClient.Builder builder, AuditService auditService,
@@ -73,6 +75,10 @@ public class ProxyController {
                            UserRepository userRepository) {
         this.upstreamBase = props.getUpstream().getEmailAgentUrl();
         this.defaultAgentInstance = props.getDefaultAgentInstance();
+        this.agentSharedSecret = props.getAgentSharedSecret();
+        if ((agentSharedSecret == null || agentSharedSecret.isBlank()) && !isLocalUpstream(upstreamBase)) {
+            throw new IllegalStateException("GATEWAY_AGENT_SHARED_SECRET must be set");
+        }
         this.restClient = builder.build();
         this.auditService = auditService;
         this.agentRegistryService = agentRegistryService;
@@ -162,6 +168,9 @@ public class ProxyController {
         }
         spec = spec.header(AGENT_INSTANCE_HEADER, agentInstance);
         spec = spec.header(INSTANCE_ROLE_HEADER, effectiveRole);
+        if (agentSharedSecret != null && !agentSharedSecret.isBlank()) {
+            spec = spec.header(GATEWAY_SECRET_HEADER, agentSharedSecret);
+        }
 
         if (body.length > 0 && contentType != null) {
             spec = spec.contentType(MediaType.parseMediaType(contentType)).body(body);
@@ -211,6 +220,10 @@ public class ProxyController {
                 .filter(instance -> agentRegistryService.canView(instance, username, role))
                 .map(instance -> requested)
                 .orElse(null);
+    }
+
+    private boolean isLocalUpstream(String url) {
+        return url != null && (url.startsWith("http://localhost:") || url.startsWith("http://127.0.0.1:"));
     }
 
     private String deriveTier(String path, String method) {

@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.config import AgentConfig, load_config
-from src.config import validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
+from src.config import validate_gateway_shared_secret, validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
 from src.prompts import agent_system_prompt, triage_system_prompt
 
 
@@ -243,6 +243,37 @@ def test_live_send_accepts_dry_run_false_with_allowlist():
     config = SimpleNamespace(dry_run=False, outbound_allowlist=frozenset({"test@example.com"}))
 
     validate_live_send_config(config)
+
+
+def test_deployed_agent_requires_gateway_shared_secret():
+    config = SimpleNamespace(
+        gateway_shared_secret="",
+        database_url="postgresql://example/db",
+        storage_backend="postgres",
+    )
+
+    with pytest.raises(RuntimeError, match="GATEWAY_AGENT_SHARED_SECRET"):
+        validate_gateway_shared_secret(config)
+
+
+def test_local_agent_can_run_without_gateway_shared_secret():
+    config = SimpleNamespace(
+        gateway_shared_secret="",
+        database_url="",
+        storage_backend="sqlite",
+    )
+
+    validate_gateway_shared_secret(config)
+
+
+def test_deployed_agent_accepts_gateway_shared_secret():
+    config = SimpleNamespace(
+        gateway_shared_secret="shared-secret",
+        database_url="postgresql://example/db",
+        storage_backend="postgres",
+    )
+
+    validate_gateway_shared_secret(config)
 
 
 def test_dlq_settings_default_to_local_backend():
