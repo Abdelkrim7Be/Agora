@@ -21,7 +21,7 @@ DEFAULT_RUN_INDEX = SERVICE_ROOT / "logs" / "run_index.json"
 MAX_RUNS = 1000
 
 # Statuses where the email is still awaiting a human and is left UNREAD on purpose.
-ACTIVE_RUN_STATUSES = ("pending_approval", "security_hold")
+ACTIVE_RUN_STATUSES = ("pending_approval", "security_hold", "sensitive_hold")
 
 # The email agent's own run columns, on top of platform_core.runs.CORE_COLUMNS.
 # One list feeds every statement, so a column cannot be read by one and dropped
@@ -51,6 +51,7 @@ EMAIL_COLUMNS = (
     "decision_at",
     "error",
     "junk_reason",
+    "sensitive_reason",
     "updated_at",
 )
 
@@ -150,6 +151,8 @@ def _record(
         "error": email_input.get("error"),
         # Set by the junk gate; None for every run that reached the graph.
         "junk_reason": email_input.get("junk_reason"),
+        # Set by the sensitivity gate; body was never fetched.
+        "sensitive_reason": email_input.get("sensitive_reason"),
         "created_at": created_at or now,
         "decision": decision,
         "decision_at": decision_at,

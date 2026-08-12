@@ -316,6 +316,12 @@ class OutlookProvider:
         )
 
     # --- read ------------------------------------------------------------
+    def get_message_headers(self, msg_id: str) -> dict:
+        # Graph does not have Gmail's exact metadataHeaders mode in this provider.
+        # The sensitivity no-body guarantee is Gmail-specific; Outlook keeps the
+        # existing full fetch behavior until a native metadata path is added.
+        return self.get_message(msg_id)
+
     def get_message(self, msg_id: str) -> dict:
         message = self._request("GET", f"/me/messages/{msg_id}?$select={self.FULL_FIELDS}")
         if message.get("hasAttachments"):

@@ -53,6 +53,7 @@ DELEGATIONS = [
     ("current_sync_cursor", "current_history_id", (), (), {"resource": ...}),
     ("fetch_changes_since", "fetch_history_message_refs", ("900",), ("900",), {"resource": ...}),
     ("watch_mailbox", "watch_mailbox", ("topic",), ("topic",), {"resource": ...}),
+    ("get_message_headers", "get_message_headers", ("m1",), ("m1",), {"resource": ...}),
     ("get_message", "get_message", ("m1",), ("m1",), {"resource": ...}),
     ("fetch_thread", "fetch_thread", ("t1",), ("t1",), {"resource": ...}),
     ("mark_as_read", "mark_as_read", ("m1",), ("m1",), {"resource": ...}),

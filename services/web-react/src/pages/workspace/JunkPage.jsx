@@ -4,7 +4,13 @@ import { Card } from '../../components/ui/Card';
 import { SyncProgressBar } from '../../components/ui/SyncProgressBar';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
-import { useJunkQuery, useSaveJunk, useJunkSuggestionsQuery } from '../../api/queries';
+import {
+  useJunkQuery,
+  useSaveJunk,
+  useJunkSuggestionsQuery,
+  useSensitivityQuery,
+  useSaveSensitivity,
+} from '../../api/queries';
 
 const LIST_FIELDS = [
   {
@@ -52,6 +58,34 @@ const TOGGLES = [
   },
 ];
 
+const SENSITIVITY_FIELDS = [
+  {
+    key: 'allowed_senders',
+    label: 'Expéditeurs exemptés',
+    hint: 'Adresses complètes. Priorité absolue : ces messages peuvent être traités malgré une règle sensible.',
+  },
+  {
+    key: 'allowed_domains',
+    label: 'Domaines exemptés',
+    hint: 'Un domaine par ligne, sans @.',
+  },
+  {
+    key: 'blocked_senders',
+    label: 'Expéditeurs sensibles',
+    hint: 'Adresses dont le corps ne doit jamais être ouvert par l’agent.',
+  },
+  {
+    key: 'blocked_domains',
+    label: 'Domaines sensibles',
+    hint: 'Un domaine par ligne. Couvre aussi les sous-domaines.',
+  },
+  {
+    key: 'subject_keywords',
+    label: 'Mots-clés de sujet sensibles',
+    hint: 'Un mot ou fragment par ligne. Comparaison insensible à la casse.',
+  },
+];
+
 function toLines(value) {
   return (value || []).join('\n');
 }
@@ -70,7 +104,10 @@ export default function JunkPage() {
 
   const query = useJunkQuery();
   const save = useSaveJunk();
+  const sensitivityQuery = useSensitivityQuery();
+  const saveSensitivity = useSaveSensitivity();
   const [form, setForm] = useState(null);
+  const [sensitivityForm, setSensitivityForm] = useState(null);
 
   useEffect(() => {
     if (!query.data?.junk) return;
@@ -88,8 +125,25 @@ export default function JunkPage() {
   }, [query.data]);
 
   useEffect(() => {
+    if (!sensitivityQuery.data?.sensitivity) return;
+    const sensitivity = sensitivityQuery.data.sensitivity;
+    setSensitivityForm({
+      enabled: sensitivity.enabled === true,
+      allowed_senders: toLines(sensitivity.allowed_senders),
+      allowed_domains: toLines(sensitivity.allowed_domains),
+      blocked_senders: toLines(sensitivity.blocked_senders),
+      blocked_domains: toLines(sensitivity.blocked_domains),
+      subject_keywords: toLines(sensitivity.subject_keywords),
+    });
+  }, [sensitivityQuery.data]);
+
+  useEffect(() => {
     if (query.error) setStatus(`Filtre indisponible : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (sensitivityQuery.error) setStatus(`Filtre sensibilité indisponible : ${sensitivityQuery.error.message}`, 'error');
+  }, [sensitivityQuery.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [scanRequested, setScanRequested] = useState(false);
   const suggestionsQuery = useJunkSuggestionsQuery(scanRequested);
@@ -116,6 +170,23 @@ export default function JunkPage() {
         blocked_domains: fromLines(form.blocked_domains),
       });
       setStatus('Filtre anti-bruit enregistré.', 'ok');
+    } catch (error) {
+      setStatus(`Enregistrement impossible : ${error.message}`, 'error');
+    }
+  };
+
+  const handleSaveSensitivity = async () => {
+    if (!sensitivityForm) return;
+    try {
+      await saveSensitivity.mutateAsync({
+        enabled: sensitivityForm.enabled,
+        allowed_senders: fromLines(sensitivityForm.allowed_senders),
+        allowed_domains: fromLines(sensitivityForm.allowed_domains),
+        blocked_senders: fromLines(sensitivityForm.blocked_senders),
+        blocked_domains: fromLines(sensitivityForm.blocked_domains),
+        subject_keywords: fromLines(sensitivityForm.subject_keywords),
+      });
+      setStatus('Filtre de sensibilité enregistré.', 'ok');
     } catch (error) {
       setStatus(`Enregistrement impossible : ${error.message}`, 'error');
     }
@@ -229,6 +300,68 @@ export default function JunkPage() {
                 <p className="muted">Les ajouts ne prennent effet qu'après « Enregistrer ».</p>
               </div>
             ) : null}
+
+            {!canManage ? <p className="muted">Un propriétaire de l’instance peut modifier ce filtre.</p> : null}
+          </>
+        )}
+      </Card>
+
+      <Card>
+        <div className="card-header">
+          <div>
+            <h2>Courrier sensible</h2>
+            <div className="meta">
+              <span>
+                Les correspondances connues comme sensibles sont arrêtées sur les en-têtes : l’agent ne télécharge pas le corps du message.
+              </span>
+            </div>
+          </div>
+          <div className="toolbar">
+            <button
+              className="primary"
+              type="button"
+              disabled={!canManage || !sensitivityForm || saveSensitivity.isPending}
+              onClick={handleSaveSensitivity}
+            >
+              {saveSensitivity.isPending ? 'Enregistrement...' : 'Enregistrer'}
+            </button>
+          </div>
+        </div>
+
+        {sensitivityQuery.isLoading || !sensitivityForm ? (
+          <p className="empty-cell">Chargement du filtre...</p>
+        ) : (
+          <>
+            <fieldset className="junk-toggles">
+              <legend>Activation</legend>
+              <label className="junk-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(sensitivityForm.enabled)}
+                  disabled={!canManage}
+                  onChange={(event) => setSensitivityForm({ ...sensitivityForm, enabled: event.target.checked })}
+                />
+                <span>
+                  <strong>Filtre de sensibilité actif</strong>
+                  <span className="muted">Désactivé, aucune règle sensible n’est appliquée.</span>
+                </span>
+              </label>
+            </fieldset>
+
+            <div className="junk-lists">
+              {SENSITIVITY_FIELDS.map((field) => (
+                <label key={field.key} className="junk-list">
+                  <strong>{field.label}</strong>
+                  <span className="muted">{field.hint}</span>
+                  <textarea
+                    rows={5}
+                    value={sensitivityForm[field.key]}
+                    disabled={!canManage}
+                    onChange={(event) => setSensitivityForm({ ...sensitivityForm, [field.key]: event.target.value })}
+                  />
+                </label>
+              ))}
+            </div>
 
             {!canManage ? <p className="muted">Un propriétaire de l’instance peut modifier ce filtre.</p> : null}
           </>

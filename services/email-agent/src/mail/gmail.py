@@ -91,6 +91,9 @@ class GmailProvider:
         return gmail_client.watch_mailbox(topic_name, resource=self.resource)
 
     # --- read ------------------------------------------------------------
+    def get_message_headers(self, msg_id: str) -> dict:
+        return gmail_client.get_message_headers(msg_id, resource=self.resource)
+
     def get_message(self, msg_id: str) -> dict:
         return gmail_client.get_message(msg_id, resource=self.resource)
 
