@@ -300,6 +300,10 @@ def _gateway_secret_is_valid(request: Request) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
+def _bypasses_gateway_secret(path: str) -> bool:
+    return path in {"/health", "/metrics"}
+
+
 def _require_instance_role(request: Request, min_role: str) -> None:
     """Defense-in-depth: verify the gateway-stamped instance role is sufficient.
 
@@ -330,7 +334,7 @@ def _require_dept_access(request: Request, record: dict | None) -> None:
 
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
-    if not _gateway_secret_is_valid(request):
+    if not _bypasses_gateway_secret(request.url.path) and not _gateway_secret_is_valid(request):
         return Response(
             content='{"detail":"gateway authentication required"}',
             status_code=401,
