@@ -2003,8 +2003,9 @@ body:not(.workspace-mode) .instance-context { display: none; }
 }
 
 .platform-metric-card {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
   min-height: 116px;
   padding: var(--space-4);
   color: inherit;
@@ -2012,22 +2013,45 @@ body:not(.workspace-mode) .instance-context { display: none; }
   border: 1px solid var(--outline);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: inset var(--rail-width) 0 0 var(--primary), var(--shadow-subtle);
+  box-shadow: var(--shadow-subtle);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 
-.platform-metric-card span {
+/* An icon says what the number is about; a colored bar down the side doesn't
+   say anything — it just reads as decoration everyone's seen before. */
+.platform-metric-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--outline));
+  box-shadow: var(--shadow-raised, 0 6px 18px rgba(0,0,0,.1));
+  transform: translateY(-1px);
+}
+
+.platform-metric-icon {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--accent-bg);
+  color: var(--primary);
+  font-size: 20px;
+}
+
+.platform-metric-copy { display: grid; gap: 8px; min-width: 0; }
+
+.platform-metric-copy > span:first-child {
   color: var(--muted);
   font: 500 11px/16px var(--font-mono);
   text-transform: uppercase;
   letter-spacing: .08em;
 }
 
-.platform-metric-card strong {
+.platform-metric-copy strong {
   font: 650 32px/1.05 var(--font-display);
   letter-spacing: var(--tracking-heading);
 }
 
-.platform-metric-card small {
+.platform-metric-copy small {
   color: var(--muted);
 }
 
