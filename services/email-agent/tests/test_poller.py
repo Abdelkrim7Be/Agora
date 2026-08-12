@@ -187,6 +187,59 @@ async def test_poll_once_does_not_notify_on_completed(mocked_gmail, fake_llms, m
     assert calls == []
 
 
+async def test_sensitive_sender_never_fetches_full_message(monkeypatch, mocked_gmail, provider):
+    from src.run_registry import find_run_by_email
+    from src.sensitivity_config import SensitivityConfig
+
+    set_unread, marked = mocked_gmail
+    message = _raw_message("m_sensitive", "Board confidential", "body must not be read")
+    set_unread([message])
+    calls = {"headers": 0, "full": 0, "notify": 0}
+
+    def get_headers(msg_id, resource=None):
+        calls["headers"] += 1
+        return {
+            **message,
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Counsel <legal@law.example>"},
+                    {"name": "To", "value": "Me <me@example.com>"},
+                    {"name": "Subject", "value": "Board confidential"},
+                ]
+            },
+        }
+
+    def get_full(msg_id, resource=None):
+        calls["full"] += 1
+        raise AssertionError("sensitive mail body must not be fetched")
+
+    provider.get_message_headers = get_headers
+    provider.get_message = get_full
+    provider.fetch_messages_batch = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("sensitive mail must not be batch-fetched")
+    )
+    provider.notify_internal_message = lambda *a, **k: calls.__setitem__("notify", calls["notify"] + 1)
+    monkeypatch.setattr(
+        poller,
+        "load_sensitivity",
+        lambda agent_instance_id=None: SensitivityConfig(
+            enabled=True,
+            blocked_domains=["law.example"],
+        ),
+    )
+    monkeypatch.setattr(poller.settings, "notify_enabled", True)
+    monkeypatch.setattr(poller.settings, "alert_admin_recipient_default", "owner@example.com")
+
+    outcomes = await poller.poll_once(_graph(), provider=provider)
+
+    assert outcomes == [("m_sensitive", "sensitive_hold", outcomes[0][2])]
+    assert calls == {"headers": 1, "full": 0, "notify": 1}
+    assert marked == []
+    record = find_run_by_email("m_sensitive", user_id=None, agent_instance_id=current_agent_instance_id())
+    assert record["status"] == "sensitive_hold"
+    assert record["sensitive_reason"] == "domain:blocked"
+
+
 async def test_poll_once_skips_email_with_active_run(mocked_gmail, fake_llms, provider):
     """A pending email reprocessed on the next cycle must reuse its run, not duplicate it."""
     set_unread, marked = mocked_gmail

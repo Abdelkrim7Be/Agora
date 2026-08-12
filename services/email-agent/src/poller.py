@@ -92,6 +92,8 @@ from src.mail import get_provider
 from src.categories import classify_category, load_categories
 from src.junk_config import load_junk
 from src.junk_gate import is_junk
+from src.sensitivity_config import SensitivityConfig, load_sensitivity
+from src.sensitivity_gate import is_sensitive
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
@@ -133,6 +135,29 @@ def _http_status_code(exc: Exception) -> int | None:
         return int(status) if status is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _sensitivity_active(config: SensitivityConfig | None = None) -> bool:
+    config = config or load_sensitivity(agent_instance_id=current_agent_instance_id())
+    return bool(config.enabled and config.has_rules())
+
+
+def _notify_sensitive_message(provider, email_input: dict, reason: str) -> None:
+    recipient = (settings.alert_admin_recipient_default or "").strip()
+    if not settings.notify_enabled or not recipient:
+        return
+    subject = f"Email sensible à traiter manuellement : {email_input.get('subject') or '(sans objet)'}"
+    note = (
+        "Un email a été reconnu comme sensible et n'a pas été ouvert par l'agent.\n\n"
+        f"Expéditeur : {email_input.get('author') or 'inconnu'}\n"
+        f"Sujet : {email_input.get('subject') or '(sans objet)'}\n"
+        f"Raison : {reason}\n\n"
+        "Ouvrez la boîte mail directement pour le traiter."
+    )
+    try:
+        provider.notify_internal_message(recipient, subject, note)
+    except Exception as exc:
+        print(f"poller: sensitive-mail notification failed: {exc}")
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -540,10 +565,44 @@ async def _process_message_locked(
     if existing:
         if existing["status"] == "pending_approval":
             return (msg_id, existing["status"], existing["run_id"])
+        if existing["status"] == "sensitive_hold":
+            return (msg_id, "skipped", existing["run_id"])
         if existing["status"] != "security_hold":
             provider.mark_as_read(msg_id)
             return (msg_id, "skipped", existing["run_id"])
         retry_run_id = existing["run_id"]
+
+    sensitivity_config = load_sensitivity(agent_instance_id=current_agent_instance_id())
+    if message is None and _sensitivity_active(sensitivity_config):
+        header_message = provider.get_message_headers(msg_id)
+        header_labels = header_message.get("labelIds")
+        if header_labels is not None and ("INBOX" not in header_labels or "UNREAD" not in header_labels):
+            return (msg_id, "skipped", "")
+        header_input = {
+            **provider.to_email_input(header_message),
+            "agent_instance_id": current_agent_instance_id(),
+            "email_thread": "",
+        }
+        sensitive, sensitive_reason = is_sensitive(header_input, sensitivity_config)
+        if sensitive:
+            run_id = str(uuid.uuid4())
+            email_input = {
+                **header_input,
+                "category": "sensitive_manual",
+                "category_display_name": "Sensible - traitement manuel",
+                "sensitive_reason": sensitive_reason,
+            }
+            upsert_run(
+                run_id,
+                "sensitive_hold",
+                email_input=email_input,
+                classification="notify",
+                pending_action=None,
+                agent_instance_id=current_agent_instance_id(),
+            )
+            _notify_sensitive_message(provider, email_input, sensitive_reason)
+            print(f"poller: sensitivity-gated {msg_id} ({sensitive_reason})")
+            return (msg_id, "sensitive_hold", run_id)
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
     if message is None:
@@ -890,6 +949,9 @@ async def _discover_unread_refs(
         # A full unread list is one call, and the run registry dedups whatever it
         # returns, so reconcile whenever the incremental path comes back empty.
         refs = _ready(provider.fetch_unread(max_results))
+
+    if prefetch and _sensitivity_active():
+        prefetch = False
 
     # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
     # round-trip per 50 instead of one per message. Failure falls back to the

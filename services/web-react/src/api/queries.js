@@ -1314,6 +1314,27 @@ export function useSaveJunk() {
   });
 }
 
+export function useSensitivityQuery(enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['sensitivity', instanceId],
+    queryFn: () => api('/api/agent/sensitivity'),
+    enabled: Boolean(token) && enabled,
+  });
+}
+
+export function useSaveSensitivity() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/sensitivity', { method: 'PUT', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sensitivity', instanceId] }),
+  });
+}
+
 export function useJunkSuggestionsQuery(enabled = false) {
   const { api } = useApi();
   const { token } = useAuth();

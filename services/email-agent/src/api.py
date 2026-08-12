@@ -60,6 +60,7 @@ from src.capabilities import current_email_id, current_gmail_thread_id, hitl_app
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
 from src.junk_config import JunkConfig, load_junk, save_junk, suggest_junk_senders
+from src.sensitivity_config import SensitivityConfig, load_sensitivity, save_sensitivity
 from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once, process_message_with_retry
 from src.memory import (
     ORIGIN_DEFAULT,
@@ -487,6 +488,17 @@ class JunkInput(BaseModel):
     gmail_categories: bool | None = None
     bulk_headers: bool | None = None
     sender_heuristics: bool | None = None
+
+
+class SensitivityInput(BaseModel):
+    """Known-sensitive mail settings edited from the UI (metadata-only gate)."""
+
+    enabled: bool | None = None
+    allowed_senders: list[str] | None = None
+    allowed_domains: list[str] | None = None
+    blocked_senders: list[str] | None = None
+    blocked_domains: list[str] | None = None
+    subject_keywords: list[str] | None = None
 
 
 class RuleToggleInput(BaseModel):
@@ -2855,6 +2867,34 @@ async def update_junk(request: Request, body: JunkInput) -> dict:
     }
 
 
+@app.get("/sensitivity")
+async def get_sensitivity(request: Request) -> dict:
+    """Sensitivity-gate settings for this instance."""
+    _require_instance_role(request, "viewer")
+    config = load_sensitivity(agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "sensitivity": config.model_dump(),
+    }
+
+
+@app.put("/sensitivity")
+async def update_sensitivity(request: Request, body: SensitivityInput) -> dict:
+    """Patch sensitivity-gate settings; omitted fields keep their current value."""
+    _require_instance_role(request, "owner")
+    current = load_sensitivity(agent_instance_id=current_agent_instance_id())
+    patch = body.model_dump(exclude_none=True)
+    for key in ("allowed_senders", "allowed_domains", "blocked_senders", "blocked_domains", "subject_keywords"):
+        if key in patch:
+            patch[key] = [item.strip().lower() for item in patch[key] if item and item.strip()]
+    updated = SensitivityConfig(**{**current.model_dump(), **patch})
+    save_sensitivity(updated, agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "sensitivity": updated.model_dump(),
+    }
+
+
 @app.get("/rules")
 async def get_rules() -> dict:
     rules_yaml = read_instance_text("rules", DEFAULT_RULES_PATH) or "enabled: false\n"
@@ -4247,6 +4287,7 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
             "subject": record.get("subject"),
             "author": record.get("author"),
             "junk_reason": record.get("junk_reason"),
+            "sensitive_reason": record.get("sensitive_reason"),
             "decision": record.get("decision"),
         })
     return detail

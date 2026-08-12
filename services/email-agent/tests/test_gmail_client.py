@@ -12,6 +12,7 @@ from src.gmail_client import (
     fetch_history_message_refs,
     fetch_messages_batch,
     fetch_sent,
+    get_message_headers,
     forward_message,
     format_thread,
     gmail_to_email_input,
@@ -44,6 +45,39 @@ def _decoded(raw: str):
 def _plain_body(message) -> str:
     part = message.get_body(preferencelist=("plain",)) if message.is_multipart() else message
     return part.get_content().strip()
+
+
+def test_get_message_headers_uses_metadata_format():
+    message = _message(
+        [
+            {"name": "From", "value": "bank@example.com"},
+            {"name": "Subject", "value": "Confidential"},
+        ],
+        {"body": {}},
+    )
+    resource = _FakeGmailResource(messages={"m1": message})
+
+    fetched = get_message_headers("m1", resource=resource)
+
+    assert fetched == message
+    call = resource.users().messages().calls[-1]
+    assert call == (
+        "get",
+        {
+            "userId": "me",
+            "id": "m1",
+            "format": "metadata",
+            "metadataHeaders": [
+                "From",
+                "To",
+                "Subject",
+                "List-Unsubscribe",
+                "Precedence",
+                "List-Id",
+                "Auto-Submitted",
+            ],
+        },
+    )
 
 
 def _html_body(message) -> str:

@@ -443,6 +443,31 @@ def get_message(msg_id: str, resource=None) -> dict:
     return resource.users().messages().get(userId="me", id=msg_id).execute()
 
 
+def get_message_headers(msg_id: str, resource=None) -> dict:
+    """Fetch sender/subject metadata only; never returns the message body."""
+    resource = resource or gmail_resource()
+    record_gmail_call()
+    return (
+        resource.users()
+        .messages()
+        .get(
+            userId="me",
+            id=msg_id,
+            format="metadata",
+            metadataHeaders=[
+                "From",
+                "To",
+                "Subject",
+                "List-Unsubscribe",
+                "Precedence",
+                "List-Id",
+                "Auto-Submitted",
+            ],
+        )
+        .execute()
+    )
+
+
 def _dry_run_result(action: str, **fields) -> dict:
     return {"dry_run": True, "action": action, **fields}
 
