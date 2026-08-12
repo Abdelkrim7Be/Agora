@@ -4150,39 +4150,81 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 }
 .notification-popover-list li span { color: var(--muted); font-size: 11px; }
 
-.notification-list { list-style: none; margin: 0; padding: 0; }
+.notification-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
 .notification-select-row {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
   gap: 8px;
-  border-bottom: 1px solid var(--outline);
 }
 
 .notification-select-row > input {
-  margin-top: 16px;
+  margin-top: 18px;
   justify-self: center;
-}
-
-.notification-select-row .notification-item {
-  border-bottom: none;
 }
 
 .notification-item {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 12px 4px;
-  border-bottom: 1px solid var(--outline);
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-subtle);
+  transition: box-shadow .15s ease, border-color .15s ease;
 }
-.notification-item:last-child { border-bottom: none; }
-.notification-item.unread { background: color-mix(in srgb, var(--primary) 4%, transparent); }
-.notification-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.notification-title { cursor: default; }
+
+.notification-item:hover { box-shadow: var(--shadow-raised, 0 6px 18px rgba(0,0,0,.1)); }
+
+/* A quiet accent, not a rail — severity already reads from the icon's own
+   color; the border just keeps an unread card from blending into the rest. */
+.notification-item.unread {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--outline));
+  background: color-mix(in srgb, var(--primary) 3%, var(--surface));
+}
+
+.notification-severity-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--surface-low);
+  color: var(--muted);
+}
+.notification-severity-icon .material-symbols-outlined { font-size: 20px; }
+.notification-severity-icon.ok { color: var(--secondary); background: var(--secondary-bg); }
+.notification-severity-icon.warn { color: color-mix(in srgb, var(--tertiary) 85%, black); background: var(--tertiary-bg); }
+.notification-severity-icon.error { color: var(--danger); background: var(--danger-bg); }
+
+.notification-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.notification-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.notification-title { cursor: default; overflow-wrap: anywhere; }
 .notification-title.clickable { cursor: pointer; color: var(--primary); }
-.notification-count { color: var(--muted); font-weight: 400; }
+.notification-title.clickable:hover { text-decoration: underline; }
+.notification-count { color: var(--muted); font-weight: 400; font-size: 13px; }
+
+.notification-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex: 0 0 auto;
+}
+
+.notification-body p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .notification-time { font-size: 11px; color: var(--muted); }
-.notification-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.notification-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
 .memory-card-title {
   display: flex;
