@@ -288,6 +288,7 @@ export default function CategoriesPage() {
       instructions: instructionsFromForm(form),
       requireApproval: form.requireApproval,
       externalSendAllowed: form.externalSendAllowed,
+      existingYaml: yamlText,
     });
     let nextYaml = appendWorkflowBlock(yamlText, 'categories', categoryBlock);
     if (templateBlock) nextYaml = appendWorkflowBlock(nextYaml, 'templates', templateBlock);
