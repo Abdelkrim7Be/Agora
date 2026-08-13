@@ -29,6 +29,7 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -408,12 +409,85 @@ class InstanceGrantTest {
     }
 
     @Test
-    void admin_without_instance_owner_role_cannot_add_grant() throws Exception {
+    void admin_without_instance_owner_role_can_add_grant_for_others() throws Exception {
         String body = objectMapper.writeValueAsString(Map.of("user_id", "admin-added", "role", "viewer"));
         mockMvc.perform(post("/agent-instances/default-email-agent/grants")
                         .header("Authorization", "Bearer " + login("admin", "adminpass"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void admin_without_instance_owner_role_can_self_grant_time_boxed_access() throws Exception {
+        // Break-glass: an admin locked out of an instance (no active grant, and
+        // whoever could re-grant one is unavailable) must be able to restore their
+        // own access rather than needing direct database access.
+        String body = objectMapper.writeValueAsString(Map.of(
+                "user_id", "admin",
+                "role", "owner",
+                "expires_at", adminGrantExpiry()
+        ));
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.user_id").value("admin"))
+                .andExpect(jsonPath("$.role").value("owner"));
+    }
+
+    @Test
+    void promoting_a_user_to_admin_caps_their_existing_permanent_grant() throws Exception {
+        // "viewer" is a seeded account shared by every test in this class, so its
+        // global role is put back to "viewer" before this test returns.
+        // owner hands "viewer" a permanent approver grant (no expires_at -> null).
+        mockMvc.perform(post("/agent-instances/default-email-agent/grants")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("user_id", "viewer", "role", "approver"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.expires_at").doesNotExist());
+
+        String usersJson = mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + login("admin", "adminpass")))
+                .andReturn().getResponse().getContentAsString();
+        long viewerId = -1;
+        for (com.fasterxml.jackson.databind.JsonNode node : objectMapper.readTree(usersJson)) {
+            if ("viewer".equals(node.get("username").asText())) {
+                viewerId = node.get("id").asLong();
+            }
+        }
+        org.junit.jupiter.api.Assertions.assertNotEquals(-1, viewerId, "viewer user not found");
+
+        mockMvc.perform(put("/users/" + viewerId)
+                        .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("role", "admin"))))
+                .andExpect(status().isOk());
+
+        try {
+            String grantsJson = mockMvc.perform(get("/agent-instances/default-email-agent/grants")
+                            .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                    .andReturn().getResponse().getContentAsString();
+            com.fasterxml.jackson.databind.JsonNode grant = null;
+            for (com.fasterxml.jackson.databind.JsonNode node : objectMapper.readTree(grantsJson)) {
+                if ("viewer".equals(node.get("user_id").asText())) {
+                    grant = node;
+                }
+            }
+            org.junit.jupiter.api.Assertions.assertNotNull(grant, "viewer grant not found");
+            org.junit.jupiter.api.Assertions.assertFalse(grant.get("expires_at").isNull(),
+                    "grant should no longer be permanent after promotion to admin");
+            Instant expiresAt = Instant.parse(grant.get("expires_at").asText());
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    expiresAt.isBefore(Instant.now().plus(25, ChronoUnit.HOURS)),
+                    "grant should be capped at ~24h after promotion to admin");
+        } finally {
+            mockMvc.perform(put("/users/" + viewerId)
+                    .header("Authorization", "Bearer " + login("admin", "adminpass"))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(Map.of("role", "viewer"))));
+        }
     }
 }

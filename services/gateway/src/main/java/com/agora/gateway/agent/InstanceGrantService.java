@@ -106,6 +106,24 @@ public class InstanceGrantService {
                 .ifPresent(g -> grants.deleteById(g.getId()));
     }
 
+    /**
+     * Retroactively applies the admin-grant expiry cap. requireAdminGrantExpiry()
+     * only runs when a grant is created or edited — a user promoted to admin after
+     * already holding a permanent (or long-dated) instance grant would otherwise
+     * keep standing tenant access forever, silently defeating the cap. Only ever
+     * shrinks an expiry, never extends one.
+     */
+    public void capGrantsForNewAdmin(String userId) {
+        Instant latestAllowed = Instant.now().plus(DEFAULT_VIEWER_GRANT_HOURS, ChronoUnit.HOURS);
+        grants.findByUserIdIgnoreCase(userId).stream()
+                .filter(InstanceGrantService::active)
+                .filter(g -> g.getExpiresAt() == null || g.getExpiresAt().isAfter(latestAllowed))
+                .forEach(g -> {
+                    g.setExpiresAt(latestAllowed);
+                    grants.save(g);
+                });
+    }
+
     public static class InvalidGrantRoleException extends RuntimeException {
         public InvalidGrantRoleException(String role) {
             super("invalid grant role: " + role + ". Must be one of: owner, approver, viewer");
