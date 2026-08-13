@@ -155,7 +155,7 @@ class MailboxOverviewTest {
                                 "agent_type", "email-agent",
                                 "display_name", "Direction",
                                 "mailbox_identity", "direction@example.test",
-                                "allowed_roles", "admin"))))
+                                "allowed_roles", "finance"))))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         String restricted = objectMapper.readTree(created).get("id").asText();

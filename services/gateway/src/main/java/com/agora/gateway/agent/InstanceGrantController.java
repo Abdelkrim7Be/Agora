@@ -44,7 +44,17 @@ public class InstanceGrantController {
     }
 
     private boolean canManageGrants(Authentication auth, String instanceId) {
-        return "owner".equals(grantService.effectiveRole(instanceId, auth.getName(), jwtRole(auth)).orElse(""));
+        // Platform admin can always reach the grants endpoint, even with no active
+        // grant of their own — otherwise an admin locked out of an instance (grant
+        // expired, or the owner who could re-grant it is gone) has no way back in
+        // except a direct database edit. addGrant() still forces any grant back to
+        // an admin user through the 24h cap, so this only restores a path to
+        // request time-boxed access, never a standing one.
+        String role = jwtRole(auth);
+        if ("admin".equals(role)) {
+            return true;
+        }
+        return "owner".equals(grantService.effectiveRole(instanceId, auth.getName(), role).orElse(""));
     }
 
     @PostMapping
