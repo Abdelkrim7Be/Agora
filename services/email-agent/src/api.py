@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from langgraph.types import Command
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -1817,11 +1817,17 @@ async def get_categories() -> dict:
 
 @app.put("/categories")
 async def update_categories(body: CategoriesInput) -> dict:
-    data = yaml.safe_load(body.categories_yaml) or {}
+    try:
+        data = yaml.safe_load(body.categories_yaml) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid categories YAML: {exc}") from exc
     data.setdefault("categories", [])
     data.setdefault("templates", [])
     data.setdefault("contacts", [])
-    parsed = CategoriesConfig(**data)
+    try:
+        parsed = CategoriesConfig(**data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid categories config: {exc}") from exc
     write_instance_text("categories", body.categories_yaml, DEFAULT_CATEGORIES_PATH)
     return {
         "agent_instance_id": current_agent_instance_id(),
@@ -2910,10 +2916,16 @@ async def get_rules() -> dict:
 
 @app.put("/rules")
 async def update_rules(body: RulesInput) -> dict:
-    data = yaml.safe_load(body.rules_yaml) or {}
+    try:
+        data = yaml.safe_load(body.rules_yaml) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid rules YAML: {exc}") from exc
     if data.get("rules") is None:
         data["rules"] = []
-    parsed = RulesConfig(**data)  # validate before persisting
+    try:
+        parsed = RulesConfig(**data)  # validate before persisting
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid rules config: {exc}") from exc
     # Persist the user's raw YAML verbatim so comments/formatting survive a round-trip.
     write_instance_text("rules", body.rules_yaml, DEFAULT_RULES_PATH)
     return {
