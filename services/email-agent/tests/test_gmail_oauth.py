@@ -47,6 +47,15 @@ class _FakeFlow:
         self.fetch_code = code
 
 
+def _stub_gmail_profile(monkeypatch, oauth, email="owner@example.com"):
+    fake_service = MagicMock()
+    fake_service.users.return_value.getProfile.return_value.execute.return_value = {
+        "emailAddress": email
+    }
+    monkeypatch.setattr(oauth, "_build_service", lambda *a, **kw: fake_service)
+    return fake_service
+
+
 def test_gmail_connect_start_builds_signed_offline_consent_url(monkeypatch):
     import src.gmail_oauth as oauth
 
@@ -155,8 +164,8 @@ def test_exchange_code_rejects_mailbox_mismatch(monkeypatch, tmp_path):
         oauth.exchange_code_for_token("abc", payload)
 
 
-def test_exchange_code_skips_mailbox_check_when_no_identity(monkeypatch, tmp_path):
-    """exchange_code_for_token skips mailbox verification when mailbox_identity is empty."""
+def test_exchange_code_verifies_and_records_mailbox_when_no_identity(monkeypatch, tmp_path):
+    """exchange_code_for_token verifies the actual mailbox even without a prefilled identity."""
     import src.gmail_oauth as oauth
 
     monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
@@ -165,15 +174,42 @@ def test_exchange_code_skips_mailbox_check_when_no_identity(monkeypatch, tmp_pat
     monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
     monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+    _stub_gmail_profile(monkeypatch, oauth, "owner@example.com")
 
     state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
     payload = validate_state(state)
 
-    # No _build_service mock — would raise if called; test verifies it isn't called.
     path = oauth.exchange_code_for_token("abc", payload)
     assert path.exists()
     assert json.loads(path.read_text()) == {"token": "oauth-token"}
+    registry = json.loads((tmp_path / "connected_mailboxes.json").read_text())
+    assert registry["mailboxes"]["gmail:owner@example.com"]["agent_instance_id"] == "default-email-agent"
+
+
+def test_exchange_code_rejects_mailbox_already_connected_to_another_instance(monkeypatch, tmp_path):
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
+    monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+    _stub_gmail_profile(monkeypatch, oauth, "owner@example.com")
+
+    first = validate_state(build_state("owner@example.com", "ceo-email-agent", mailbox_identity=""))
+    second = validate_state(build_state("owner@example.com", "hr-email-agent", mailbox_identity=""))
+
+    oauth.exchange_code_for_token("abc", first)
+    with pytest.raises(ValueError, match="already connected to instance ceo-email-agent"):
+        oauth.exchange_code_for_token("def", second)
+
+    assert (tmp_path / "tokens" / "instance__ceo-email-agent.json").is_file()
+    assert not (tmp_path / "tokens" / "instance__hr-email-agent.json").exists()
 
 
 def test_revoke_gmail_token_calls_google_revoke_endpoint(monkeypatch, tmp_path):
@@ -276,6 +312,7 @@ def test_exchange_code_reports_persistence_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
     monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+    _stub_gmail_profile(monkeypatch, oauth)
 
     from contextlib import contextmanager
 
@@ -345,7 +382,9 @@ def _exchange_env(monkeypatch, tmp_path, flow_cls):
     monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
     monkeypatch.setattr(oauth, "Flow", flow_cls)
+    _stub_gmail_profile(monkeypatch, oauth)
     state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
     return oauth, validate_state(state)
 

@@ -205,6 +205,40 @@ class AgentRegistryTest {
     }
 
     @Test
+    void duplicate_active_mailbox_identity_is_rejected() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"drafts\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
+
+        String token = login("owner", "ownerpass");
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "support-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Support",
+                                "mailbox_identity", "Support@Example.com"
+                        ))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "support-copy-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Support Copy",
+                                "mailbox_identity", "support@example.com"
+                        ))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("mailbox support@example.com is already connected to instance support-email-agent (Support)"));
+    }
+
+    @Test
     void admin_can_rename_agent_instance() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
                 .willReturn(aResponse().withStatus(200)));

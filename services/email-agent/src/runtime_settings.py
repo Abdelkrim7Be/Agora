@@ -12,10 +12,12 @@ DEFAULT_RUNTIME_SETTINGS_PATH = SERVICE_ROOT / "runtime_settings.yaml"
 
 
 class RuntimeSettings(BaseModel):
-    sync_limit: int = Field(default=settings.max_emails_per_run, ge=1, le=200)
-    setup_recent_limit: int = Field(default=settings.setup_recent_limit, ge=1, le=200)
-    setup_backlog_limit: int = Field(default=settings.setup_backlog_limit, ge=1, le=200)
-    setup_sent_sample: int = Field(default=settings.setup_sent_sample, ge=1, le=200)
+    sync_limit: int = Field(default=settings.max_emails_per_run, ge=1, le=500)
+    setup_recent_limit: int = Field(default=settings.setup_recent_limit, ge=1, le=500)
+    setup_backlog_limit: int = Field(default=settings.setup_backlog_limit, ge=1, le=500)
+    setup_sent_sample: int = Field(default=settings.setup_sent_sample, ge=1, le=500)
+    # Fed whole into a single style-learning prompt, unlike the fields above (one call
+    # per message) — a small local model's context window caps this well below 500.
     style_sent_sample: int = Field(default=8, ge=1, le=50)
 
 

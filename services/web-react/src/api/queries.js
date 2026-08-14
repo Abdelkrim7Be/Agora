@@ -25,19 +25,20 @@ export function useAgentTypesQuery() {
   });
 }
 
-export function useHealthQuery(period) {
+export function useHealthQuery(period, agentInstanceId) {
   const { api } = useApi();
   const { token } = useAuth();
+  const headers = agentInstanceId ? { 'X-Agora-Agent-Instance': agentInstanceId } : undefined;
   return useQuery({
-    queryKey: ['health', period],
+    queryKey: ['health', agentInstanceId, period],
     queryFn: async () => {
       const [health, activity] = await Promise.all([
-        api('/api/agent/health'),
-        api(`/api/agent/analytics?period=${encodeURIComponent(period)}`).catch(() => null),
+        api('/api/agent/health', { headers }),
+        api(`/api/agent/analytics?period=${encodeURIComponent(period)}`, { headers }).catch(() => null),
       ]);
       return { health, activity };
     },
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(agentInstanceId),
     // A liveness board that only updates when you press a button is not a
     // liveness board. The manual refresh stays for "is it back yet?".
     refetchInterval: 15_000,
@@ -45,14 +46,19 @@ export function useHealthQuery(period) {
   });
 }
 
-export function useAuditQuery(page, limit) {
+export function useAuditQuery(page, limit, includeTechnicalNoise = false) {
   const { api } = useApi();
   const { token } = useAuth();
   const fetchSize = Math.min(limit + 1, 500);
   return useQuery({
-    queryKey: ['audit', page, limit],
+    queryKey: ['audit', page, limit, includeTechnicalNoise],
     queryFn: async () => {
-      const events = await api(`/audit?limit=${encodeURIComponent(fetchSize)}&page=${page}`);
+      const params = new URLSearchParams({
+        limit: String(fetchSize),
+        page: String(page),
+        includeTechnicalNoise: String(includeTechnicalNoise),
+      });
+      const events = await api(`/audit?${params.toString()}`);
       return { events: events.slice(0, limit), hasMore: events.length > limit };
     },
     enabled: Boolean(token),
@@ -161,6 +167,15 @@ export function useAnonymizeUser() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
     },
+  });
+}
+
+export function useDeleteUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 }
 
@@ -318,7 +333,7 @@ export function usePendingRunsQuery(page, filters = {}) {
   return useQuery({
     queryKey: ['pending-runs', instanceId, page, filters.category || '', filters.priority || '', filters.q || '', filters.since || ''],
     queryFn: () => api(`/api/agent/runs?${params.toString()}`),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId),
     refetchInterval: 30_000,
   });
 }
@@ -615,7 +630,10 @@ export function useSavePersona() {
   const { instanceId } = useInstance();
   return useMutation({
     mutationFn: (persona) => api('/api/agent/persona', { method: 'PUT', body: JSON.stringify(persona) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config', instanceId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['persona', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['config', instanceId] });
+    },
   });
 }
 
@@ -1611,5 +1629,65 @@ export function useRequeueDlqEntry() {
   return useMutation({
     mutationFn: (entryId) => api(`/api/agent/dlq/${encodeURIComponent(entryId)}/requeue`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dlq', instanceId] }),
+  });
+}
+
+// --- Reports ("Signaler un problème") ---
+
+export function useSubmitReport() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: (payload) => api('/reports', { method: 'POST', body: JSON.stringify(payload) }),
+  });
+}
+
+export function useReportsQuery(status) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['reports', status || 'all'],
+    queryFn: () => api(status ? `/reports?status=${encodeURIComponent(status)}` : '/reports'),
+    enabled: Boolean(token),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUpdateReportStatus() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }) => api(`/reports/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ status }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['reports'] }),
+  });
+}
+
+// --- Platform audit ---
+
+export function useRunPlatformAudit() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api('/audit/run', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['audit-runs'] }),
+  });
+}
+
+export function useAuditRunsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['audit-runs'],
+    queryFn: () => api('/audit/runs'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useAuditRunDetailQuery(id) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['audit-run-detail', id],
+    queryFn: () => api(`/audit/runs/${encodeURIComponent(id)}`),
+    enabled: Boolean(token) && id != null,
   });
 }

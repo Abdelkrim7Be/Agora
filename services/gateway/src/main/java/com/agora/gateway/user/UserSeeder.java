@@ -37,16 +37,26 @@ public class UserSeeder implements CommandLineRunner {
 
         var existing = users.findByUsername(username);
         if (existing.isPresent()) {
-            // Backfill only. A seeded account created before the address was
-            // configured could not be invited or reached from the team page; an
-            // account that already has one keeps it, and the password is never
-            // touched here.
+            // Backfill only, by default. A seeded account created before the
+            // address was configured could not be invited or reached from the
+            // team page; an account that already has one keeps it, and the
+            // password is never touched here — unless seedResetPassword opts
+            // into treating this account as a mirror of its env credentials
+            // (dev/demo only; see GatewayProperties).
             AppUser user = existing.get();
+            boolean changed = false;
             if (!email.isBlank() && (user.getEmail() == null || user.getEmail().isBlank())) {
                 user.setEmail(email);
-                users.save(user);
+                changed = true;
                 log.info("backfilled email for seeded user {}", username);
             }
+            if (props.isSeedResetPassword()) {
+                user.setPasswordHash(passwordEncoder.encode(password));
+                user.setEnabled(true);
+                changed = true;
+                log.info("reset password for seeded user {} (seedResetPassword)", username);
+            }
+            if (changed) users.save(user);
             return;
         }
 

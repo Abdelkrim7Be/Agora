@@ -22,6 +22,8 @@ import InstancesPage from './pages/platform/InstancesPage';
 import AgentTypesPage from './pages/platform/AgentTypesPage';
 import HealthPage from './pages/platform/HealthPage';
 import AuditPage from './pages/platform/AuditPage';
+import ReportsPage from './pages/platform/ReportsPage';
+import PlatformAuditPage from './pages/platform/PlatformAuditPage';
 import UsersPage from './pages/platform/UsersPage';
 import AccountPage from './pages/platform/AccountPage';
 import ValidationPage from './pages/workspace/ValidationPage';
@@ -151,6 +153,8 @@ export default function App() {
                             with the same name would break on hard reload / direct navigation. */}
                         <Route path="system-health" element={<HealthPage />} />
                         <Route path="access-log" element={<AuditPage />} />
+                        <Route path="report-inbox" element={<AdminOnly><ReportsPage /></AdminOnly>} />
+                        <Route path="platform-audit" element={<AdminOnly><PlatformAuditPage /></AdminOnly>} />
                         <Route path="team" element={<UsersPage />} />
                         <Route path="account" element={<AccountPage />} />
                       </Route>
@@ -188,7 +192,7 @@ export default function App() {
                         <Route path="memory" element={<MemoryPage />} />
                         <Route path="rules" element={<RulesPage />} />
                         <Route path="capabilities" element={<RequireGlobalRole view="capabilities"><CapabilitiesPage /></RequireGlobalRole>} />
-                        <Route path="permissions" element={<RequireGlobalRole view="permissions"><PermissionsPage /></RequireGlobalRole>} />
+                        <Route path="permissions" element={<PermissionsPage />} />
                         <Route path="dlq" element={<RequireGlobalRole view="dlq"><DlqPage /></RequireGlobalRole>} />
                         <Route path="costs" element={<RequireGlobalRole view="costs"><CostsPage /></RequireGlobalRole>} />
                       </Route>

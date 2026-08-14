@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -189,6 +190,61 @@ public class AgentRegistryService {
         return instances.findById(id);
     }
 
+    public List<AgentInstance> allInstances() {
+        return instances.findAll();
+    }
+
+    private static final Set<String> UNHEALTHY_COMPONENT_STATUSES = Set.of("down");
+    private static final List<String> HEALTH_COMPONENT_KEYS = List.of("agent", "poller", "security", "database", "redis");
+
+    public record InstanceAuditResult(
+            String instanceId, String displayName, boolean reachable,
+            Map<String, String> componentStatuses, int dlqPendingCount, List<String> warnings
+    ) {}
+
+    /**
+     * One instance's contribution to a platform-wide audit: component health plus
+     * unresolved DLQ count. Never throws — an unreachable instance comes back as
+     * its own bad row (`reachable=false`), not a failed audit for every instance.
+     */
+    public InstanceAuditResult auditProbe(AgentInstance instance) {
+        List<String> warnings = new ArrayList<>();
+        if ("inactive".equalsIgnoreCase(instance.getStatus())) {
+            return new InstanceAuditResult(instance.getId(), instance.getDisplayName(), true, Map.of(), 0, warnings);
+        }
+        Map<String, String> componentStatuses = new LinkedHashMap<>();
+        try {
+            JsonNode health = getJson(instance, "platform-audit", "/health");
+            for (String key : HEALTH_COMPONENT_KEYS) {
+                String status = health.path(key).path("status").asText("unknown");
+                componentStatuses.put(key, status);
+                if (UNHEALTHY_COMPONENT_STATUSES.contains(status)) {
+                    warnings.add(key + " is down");
+                } else if ("paused".equals(status)) {
+                    warnings.add(key + " is paused");
+                }
+            }
+        } catch (RuntimeException ex) {
+            return new InstanceAuditResult(instance.getId(), instance.getDisplayName(), false, Map.of(), 0,
+                    List.of("instance unreachable: " + safeMessage(ex)));
+        }
+        int dlqPending = 0;
+        try {
+            JsonNode dlq = getJson(instance, "platform-audit", "/dlq?status=dead_letter&limit=500");
+            dlqPending = dlq.path("entries").isArray() ? dlq.path("entries").size() : 0;
+            if (dlqPending > 0) {
+                warnings.add(dlqPending + " message(s) stuck in the dead-letter queue");
+            }
+        } catch (RuntimeException ex) {
+            warnings.add("could not read DLQ: " + safeMessage(ex));
+        }
+        return new InstanceAuditResult(instance.getId(), instance.getDisplayName(), true, componentStatuses, dlqPending, warnings);
+    }
+
+    private static String safeMessage(RuntimeException ex) {
+        return ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+    }
+
     public List<AgentInstance> visibleInstances(String username, String role) {
         return instances.findAll().stream()
                 .filter(instance -> canView(instance, username, role))
@@ -213,6 +269,13 @@ public class AgentRegistryService {
         GatewayProperties.AgentType type = findType(request.agentType())
                 .orElseThrow(() -> new UnknownAgentTypeException(request.agentType()));
         boolean admin = "admin".equals(role);
+        if (request.allowedRoles() != null && containsAdminRole(request.allowedRoles())) {
+            // allowed_roles grants standing, unexpiring access to every account
+            // holding that global role — the opposite of the 24h cap grants.addGrant()
+            // enforces for admin-targeted grants. Letting "admin" into this list would
+            // silently reopen that hole for every current and future admin.
+            throw new InvalidAllowedRolesException();
+        }
         if (!admin) {
             if (!EMAIL_AGENT_TYPE.equals(type.getId())) {
                 throw new ForbiddenAgentInstanceOperationException("users can only create email-agent instances");
@@ -227,6 +290,10 @@ public class AgentRegistryService {
                 : slug(request.id());
         if (instances.existsById(id)) {
             throw new DuplicateAgentInstanceException(id);
+        }
+        Optional<AgentInstance> existingMailbox = activeInstanceUsingMailbox(type.getId(), request.mailboxIdentity());
+        if (existingMailbox.isPresent()) {
+            throw new DuplicateMailboxIdentityException(request.mailboxIdentity(), existingMailbox.get());
         }
         AgentInstance instance = new AgentInstance(
                 id,
@@ -253,6 +320,22 @@ public class AgentRegistryService {
             grants.save(new AgentInstanceGrant(saved.getId(), assignedTo, "owner", username));
         }
         return saved;
+    }
+
+    private Optional<AgentInstance> activeInstanceUsingMailbox(String agentType, String mailboxIdentity) {
+        String normalizedMailbox = normalizeMailbox(mailboxIdentity);
+        if (normalizedMailbox.isBlank()) {
+            return Optional.empty();
+        }
+        return instances.findAll().stream()
+                .filter(instance -> agentType.equals(instance.getAgentType()))
+                .filter(instance -> !"inactive".equalsIgnoreCase(instance.getStatus()))
+                .filter(instance -> normalizedMailbox.equals(normalizeMailbox(instance.getMailboxIdentity())))
+                .findFirst();
+    }
+
+    private static String normalizeMailbox(String mailboxIdentity) {
+        return mailboxIdentity == null ? "" : mailboxIdentity.trim().toLowerCase(Locale.ROOT);
     }
 
     public Map<String, Object> summary(AgentInstance instance, String username) {
@@ -288,8 +371,7 @@ public class AgentRegistryService {
             return summary;
         }
 
-        summary.put("mailbox_connection", instance.getMailboxIdentity() == null || instance.getMailboxIdentity().isBlank()
-                ? "unknown" : "configured");
+        summary.put("mailbox_connection", "unknown");
         summary.put("sync_status", "unknown");
         if ("inactive".equalsIgnoreCase(instance.getStatus())) {
             summary.put("pending_drafts", 0);
@@ -297,10 +379,31 @@ public class AgentRegistryService {
             summary.put("setup_status", "unknown");
             return summary;
         }
+        putConnectionStatus(summary, instance, username);
         summary.put("pending_drafts", safePendingDrafts(instance, username));
         summary.put("today_cost_eur", safeTodayCost(instance, username));
         putSetupStatus(summary, instance, username);
         return summary;
+    }
+
+    /**
+     * Real connection + run state, not a DB-column guess. mailboxIdentity is only
+     * ever set for a legacy pinned instance, so checking it as a proxy for "is the
+     * mailbox connected" was wrong for every normal instance — this instead asks
+     * the agent the same question {@link #mailboxStatus} already answers
+     * correctly, so the instance list and the mailboxes overview agree.
+     */
+    private void putConnectionStatus(Map<String, Object> summary, AgentInstance instance, String username) {
+        try {
+            JsonNode root = getJson(instance, username, "/sync/status");
+            String connection = root.path("connection_status").asText("unknown");
+            boolean paused = root.path("paused").asBoolean(false);
+            summary.put("mailbox_connection", connection);
+            summary.put("sync_status", "connected".equals(connection) ? (paused ? "paused" : "running") : connection);
+        } catch (RuntimeException ex) {
+            // Leave the "unknown" defaults already in summary — an unreachable
+            // agent must not fail the whole instance listing.
+        }
     }
 
     /** Instance listing must not fail if the agent is unreachable — same
@@ -387,10 +490,18 @@ public class AgentRegistryService {
     }
 
     private JsonNode getJson(AgentInstance instance, String username, String path) {
+        // Every email-agent route except /health and /metrics is gated behind this
+        // shared secret (tenant_context_middleware) — without it every call here
+        // 401s and every caller (buildSummary, mailboxStatus, auditProbe) degrades
+        // silently to "unknown"/0, which is indistinguishable from a genuinely
+        // idle instance. Blank secret is a no-op on the agent side too, so this is
+        // safe to send unconditionally.
+        String secret = props.getAgentSharedSecret();
         String body = restClient.get()
                 .uri(URI.create(upstreamBase(instance.getAgentType()) + path))
                 .header("X-Agora-User", username == null ? "" : username)
                 .header("X-Agora-Agent-Instance", instance.getId())
+                .header("X-Agora-Gateway-Secret", secret == null ? "" : secret)
                 .retrieve()
                 .body(String.class);
         try {
@@ -485,6 +596,26 @@ public class AgentRegistryService {
         public AgentInstanceLimitException(int limit) {
             super("email-agent instance limit reached: " + limit);
         }
+    }
+
+    public static class DuplicateMailboxIdentityException extends RuntimeException {
+        public DuplicateMailboxIdentityException(String mailboxIdentity, AgentInstance instance) {
+            super("mailbox " + normalizeMailbox(mailboxIdentity)
+                    + " is already connected to instance "
+                    + instance.getId() + " (" + instance.getDisplayName() + ")");
+        }
+    }
+
+    public static class InvalidAllowedRolesException extends RuntimeException {
+        public InvalidAllowedRolesException() {
+            super("allowed_roles cannot include admin");
+        }
+    }
+
+    private static boolean containsAdminRole(String allowedRoles) {
+        return Arrays.stream(allowedRoles.split(","))
+                .map(String::trim)
+                .anyMatch(r -> r.equalsIgnoreCase("admin"));
     }
 
     public static class ForbiddenAgentInstanceOperationException extends RuntimeException {

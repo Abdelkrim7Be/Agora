@@ -123,7 +123,7 @@ def evaluate_alerts(health_snapshot: dict, now: datetime | None = None) -> list[
             if current_status == "down":
                 emit(
                     "component_down",
-                    f"Alerte Agora : {label} hors service",
+                    f"Alerte Agora AI : {label} hors service",
                     f"Le composant {label} de l'instance {current_agent_instance_id()} est passe a l'etat hors service."
                     f" Statut actuel: {current_status}."
                     f"{_component_detail(key, snapshot)}",
@@ -133,7 +133,7 @@ def evaluate_alerts(health_snapshot: dict, now: datetime | None = None) -> list[
             elif previous_status == "down" and current_status == "up":
                 emit(
                     "component_up",
-                    f"Resolution Agora : {label} de nouveau actif",
+                    f"Resolution Agora AI : {label} de nouveau actif",
                     f"Le composant {label} de l'instance {current_agent_instance_id()} est revenu a l'etat actif.",
                     component=key,
                     status=current_status,
@@ -160,7 +160,7 @@ def evaluate_alerts(health_snapshot: dict, now: datetime | None = None) -> list[
         if crossed and near_cap:
             emit(
                 "token_cap_near",
-                "Alerte Agora : plafond de tokens bientot atteint",
+                "Alerte Agora AI : plafond de tokens bientot atteint",
                 f"L'instance {current_agent_instance_id()} a consomme {total_tokens} tokens aujourd'hui, "
                 f"au-dela du seuil d'alerte {threshold_tokens}/{config.daily_token_cap}.",
                 total_tokens=total_tokens,
@@ -168,7 +168,7 @@ def evaluate_alerts(health_snapshot: dict, now: datetime | None = None) -> list[
         elif crossed:
             emit(
                 "token_cap_clear",
-                "Resolution Agora : consommation de tokens revenue sous le seuil",
+                "Resolution Agora AI : consommation de tokens revenue sous le seuil",
                 f"L'instance {current_agent_instance_id()} est revenue sous le seuil de tokens: "
                 f"{total_tokens}/{config.daily_token_cap} aujourd'hui.",
                 total_tokens=total_tokens,

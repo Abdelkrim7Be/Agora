@@ -29,6 +29,7 @@ def azure_app(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "token_store_backend", "file")
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens.json"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
     outlook_oauth._PKCE_VERIFIERS.clear()
     yield
 

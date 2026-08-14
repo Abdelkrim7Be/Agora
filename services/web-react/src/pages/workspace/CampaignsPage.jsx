@@ -197,6 +197,21 @@ export default function CampaignsPage() {
     }
   };
 
+  const handleUseTemplate = (template) => {
+    const currentMatches = campaignTemplateMatchesSegment(template, referenceSegment);
+    if (!currentMatches) {
+      const compatibleSegment = segments.find((s) => campaignTemplateMatchesSegment(template, s));
+      if (!compatibleSegment) {
+        setStatus(`Aucun segment ne correspond à l'audience du modèle "${template.name}".`, 'error');
+        return;
+      }
+      setSegmentId(compatibleSegment.id);
+    }
+    setTemplateName(template.name);
+    document.getElementById('new-campaign-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setStatus(`Modèle "${template.name}" chargé dans le formulaire de nouvelle campagne.`, 'ok');
+  };
+
   const handleApprove = async (campaignId) => {
     try {
       const result = await runBusy('Envoi de la campagne', () => approveCampaign.mutateAsync(campaignId));
@@ -232,7 +247,7 @@ export default function CampaignsPage() {
       <PageHeading view="campaigns" />
       <div className="notice"><strong>Campagne :</strong> envoi sortant groupé. Vous choisissez un segment de contacts, un modèle, une date éventuelle, puis la campagne attend une validation humaine avant envoi.</div>
       <div className="campaigns-grid">
-        <Card>
+        <Card id="new-campaign-card">
           <div className="card-header">
             <div><h2>Nouvelle campagne</h2><p>Ciblez un segment, voyez l'aperçu en direct, puis mettez l'envoi en file d'approbation.</p></div>
             <button
@@ -342,6 +357,9 @@ export default function CampaignsPage() {
                       </div>
                     </div>
                     <div className="directory-actions">
+                      <button type="button" onClick={() => handleUseTemplate(template)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">arrow_upward</span><span>Utiliser</span>
+                      </button>
                       <button className="danger" type="button" onClick={() => handleDeleteTemplate(template.name)}>
                         <span className="material-symbols-outlined" aria-hidden="true">delete</span><span>Supprimer</span>
                       </button>

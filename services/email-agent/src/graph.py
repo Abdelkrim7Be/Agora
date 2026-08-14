@@ -252,7 +252,7 @@ def _workflow_notify_tool_call(state: State, category_update: dict) -> dict | No
     owner = category_update.get("workflow_owner") or "unassigned"
     approver = category_update.get("workflow_approver") or "workspace approver"
     note = (
-        f"Agora workflow route: {category}.\n"
+        f"Agora AI workflow route: {category}.\n"
         f"Owner: {owner}. Approver: {approver}.\n"
         f"Original sender: {author}. Subject: {subject}.\n\n"
         "Please handle this request or reply internally with the next action."
@@ -261,7 +261,7 @@ def _workflow_notify_tool_call(state: State, category_update: dict) -> dict | No
         "name": "notify_internal",
         # No "to": tool_node supplies the recipients from current_route_targets,
         # which is resolved from this same workflow configuration.
-        "args": {"subject": f"[Agora] {category}", "note": note},
+        "args": {"subject": f"[Agora AI] {category}", "note": note},
         "id": f"workflow_notify_{uuid.uuid4().hex}",
         "type": "tool_call",
     }

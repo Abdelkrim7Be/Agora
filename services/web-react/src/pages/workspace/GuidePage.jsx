@@ -108,6 +108,14 @@ const ADMIN_SECTIONS = [
       'Coûts : consommation des modèles par période, pour suivre la dépense réelle de l’instance.',
     ],
   },
+  {
+    title: 'Signalements et audit plateforme',
+    icon: 'flag',
+    body: [
+      'N’importe quel utilisateur connecté peut signaler un problème depuis le bouton drapeau, en haut de l’écran. Les administrateurs en sont notifiés par e-mail (si un relais SMTP est configuré) et retrouvent chaque signalement dans « Signalements », avec une suggestion d’action générée par IA.',
+      '« Audit plateforme » lance en un clic une vérification de toutes les instances d’agents (santé, file d’erreurs) et de l’accès à la base de la plateforme, avec un verdict sain / avertissement / critique et un historique des audits passés.',
+    ],
+  },
 ];
 
 /** Stable anchor id from a section title, so a link survives a copy-paste. */

@@ -305,7 +305,7 @@ def _markdown_to_html(md_text: str) -> str:
 
 _HTML_SHELL = (
     '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-    'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0 auto;">'
+    'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0;">'
     "{body}"
     "</div>"
 )
@@ -352,6 +352,8 @@ def members_for_group(group: Group, agent_instance_id: str | None = None) -> lis
 
 
 def render_for_member(template: CampaignTemplate, member: GroupMember) -> RenderedEmail:
+    from src.signature import append_signature
+
     values = _member_values(member)
     unresolved = sorted(
         {
@@ -361,7 +363,7 @@ def render_for_member(template: CampaignTemplate, member: GroupMember) -> Render
         }
     )
     subject = render_text(template.subject, values)
-    body_md = render_text(template.body_markdown, values)
+    body_md = append_signature(render_text(template.body_markdown, values))
     html_body = _HTML_SHELL.format(body=_markdown_to_html(body_md))
     return RenderedEmail(
         email=member.email,

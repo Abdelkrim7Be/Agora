@@ -139,9 +139,19 @@ public class AgentRegistryController {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", ex.getMessage()));
     }
 
+    @ExceptionHandler(AgentRegistryService.DuplicateMailboxIdentityException.class)
+    ResponseEntity<Map<String, String>> duplicateMailboxIdentity(AgentRegistryService.DuplicateMailboxIdentityException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", ex.getMessage()));
+    }
+
     @ExceptionHandler(AgentRegistryService.ForbiddenAgentInstanceOperationException.class)
     ResponseEntity<Map<String, String>> forbiddenAgentInstanceOperation(AgentRegistryService.ForbiddenAgentInstanceOperationException ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentRegistryService.InvalidAllowedRolesException.class)
+    ResponseEntity<Map<String, String>> invalidAllowedRoles(AgentRegistryService.InvalidAllowedRolesException ex) {
+        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
     }
 
     private String role(Authentication auth) {

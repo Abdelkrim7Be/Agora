@@ -93,8 +93,8 @@ export default function CostsPage() {
       <div className="cost-layout">
         <div>
           <h2 className="section-title">Par modèle</h2>
-          <div className="table-wrap">
-            <table className="data-table">
+          <div className="table-wrap cost-table-wrap">
+            <table className="data-table cost-table">
               <thead><tr><th>Modèle</th><th>Appels</th><th>Entrée</th><th>Sortie</th><th>Total</th><th>EUR</th></tr></thead>
               <tbody>{costRows(summary?.by_model, 'Aucun coût par modèle enregistré.', 'model')}</tbody>
             </table>
@@ -102,8 +102,8 @@ export default function CostsPage() {
         </div>
         <div>
           <h2 className="section-title">Par nœud</h2>
-          <div className="table-wrap">
-            <table className="data-table">
+          <div className="table-wrap cost-table-wrap">
+            <table className="data-table cost-table">
               <thead><tr><th>Nœud</th><th>Appels</th><th>Entrée</th><th>Sortie</th><th>Total</th><th>EUR</th></tr></thead>
               <tbody>{costRows(summary?.by_node, 'Aucun coût par nœud enregistré.', 'node')}</tbody>
             </table>
@@ -112,8 +112,8 @@ export default function CostsPage() {
       </div>
       <div className="cost-recent">
         <h2 className="section-title">Appels récents</h2>
-        <div className="table-wrap">
-          <table className="data-table">
+        <div className="table-wrap cost-table-wrap cost-recent-table-wrap">
+          <table className="data-table cost-table cost-recent-table">
             <thead>
               <tr><th>Heure</th><th>Nœud</th><th>Modèle</th><th>Run</th><th>Tokens in/out/total</th><th>EUR</th></tr>
             </thead>
@@ -130,16 +130,17 @@ export default function CostsPage() {
               )) : <tr><td colSpan={6} className="empty-cell">Aucune entrée de coût enregistrée.</td></tr>}
             </tbody>
           </table>
-          <TablePager
-            page={entryPager.page}
-            pageCount={entryPager.pageCount}
-            total={entryPager.total}
-            size={entryPager.size}
-            onPage={entryPager.setPage}
-            onSize={entryPager.setSize}
-            unit="appels"
-          />
         </div>
+        <TablePager
+          className="cost-table-pager"
+          page={entryPager.page}
+          pageCount={entryPager.pageCount}
+          total={entryPager.total}
+          size={entryPager.size}
+          onPage={entryPager.setPage}
+          onSize={entryPager.setSize}
+          unit="appels"
+        />
       </div>
     </>
   );

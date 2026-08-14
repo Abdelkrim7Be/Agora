@@ -10,6 +10,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState({ message: '', kind: '' });
   const [submitting, setSubmitting] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -79,14 +80,24 @@ export default function LoginPage() {
           </label>
           <label>
             <span>Mot de passe</span>
-            <input
-              aria-label="Mot de passe"
-              type="password"
-              placeholder="Mot de passe"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+            <div className="password-field">
+              <input
+                aria-label="Mot de passe"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Mot de passe"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                className="ghost icon-button password-toggle"
+                aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                onClick={() => setShowPassword((current) => !current)}
+              >
+                <span aria-hidden="true">{showPassword ? '🙈' : '👁️'}</span>
+              </button>
+            </div>
           </label>
           <button className="primary" type="submit" disabled={submitting}>
             <span>{submitting ? 'Connexion…' : 'Accéder à la plateforme'}</span>

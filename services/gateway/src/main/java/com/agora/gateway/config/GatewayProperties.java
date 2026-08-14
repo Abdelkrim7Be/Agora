@@ -25,10 +25,23 @@ public class GatewayProperties {
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
     private Credentials admin = new Credentials();
+    /**
+     * Dev/demo convenience only — never set in a real deployment.
+     *
+     * The seeder normally leaves an existing seeded account's password alone
+     * forever, so a stale local Postgres volume drifts out of sync with
+     * whatever {@code GATEWAY_*_PASSWORD} says today and the documented demo
+     * credentials silently stop working. With this on, boot re-syncs a seeded
+     * account's password (and re-enables it) to match its env credentials
+     * every time — the account becomes a mirror of the env vars, not a
+     * once-created row nobody remembers the password of.
+     */
+    private boolean seedResetPassword = false;
     /** Public base URL of the web app; invitation links are built from it. */
     private String appUrl = "http://localhost:5173";
     private long inviteExpiryHours = 48;
     private Smtp smtp = new Smtp();
+    private Llm llm = new Llm();
 
     public String getAppUrl() { return appUrl; }
     public void setAppUrl(String appUrl) { this.appUrl = appUrl; }
@@ -38,6 +51,9 @@ public class GatewayProperties {
 
     public Smtp getSmtp() { return smtp; }
     public void setSmtp(Smtp smtp) { this.smtp = smtp; }
+
+    public Llm getLlm() { return llm; }
+    public void setLlm(Llm llm) { this.llm = llm; }
 
     public Upstream getUpstream() { return upstream; }
     public void setUpstream(Upstream upstream) { this.upstream = upstream; }
@@ -71,6 +87,9 @@ public class GatewayProperties {
 
     public Credentials getAdmin() { return admin; }
     public void setAdmin(Credentials admin) { this.admin = admin; }
+
+    public boolean isSeedResetPassword() { return seedResetPassword; }
+    public void setSeedResetPassword(boolean seedResetPassword) { this.seedResetPassword = seedResetPassword; }
 
     public static class Upstream {
         private String emailAgentUrl = "http://localhost:8000";
@@ -294,6 +313,27 @@ public class GatewayProperties {
 
         public String getFrom() { return from; }
         public void setFrom(String from) { this.from = from; }
+    }
+
+    /**
+     * The same local-first Ollama endpoint every other service in this stack talks
+     * to (OpenAI-compatible). Used only for a best-effort "suggested action" on a
+     * user report — never on a path anything else depends on, so a slow or absent
+     * model degrades to no suggestion rather than a failed request.
+     */
+    public static class Llm {
+        private String baseUrl = "http://ollama:11434/v1";
+        private String model = "qwen2.5:3b-8k";
+        private int timeoutSeconds = 20;
+
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
+
+        public int getTimeoutSeconds() { return timeoutSeconds; }
+        public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
     }
 
     public static class Credentials {

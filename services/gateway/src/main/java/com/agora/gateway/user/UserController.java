@@ -1,5 +1,6 @@
 package com.agora.gateway.user;
 
+import com.agora.gateway.agent.InstanceGrantService;
 import com.agora.gateway.audit.AuditService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -34,6 +35,7 @@ public class UserController {
     private final InvitationService invitations;
     private final InvitationMailer mailer;
     private final UserAnonymizationService anonymization;
+    private final InstanceGrantService grants;
     private final SecureRandom random = new SecureRandom();
 
     public UserController(UserRepository users,
@@ -41,13 +43,15 @@ public class UserController {
                           AuditService auditService,
                           InvitationService invitations,
                           InvitationMailer mailer,
-                          UserAnonymizationService anonymization) {
+                          UserAnonymizationService anonymization,
+                          InstanceGrantService grants) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
         this.invitations = invitations;
         this.mailer = mailer;
         this.anonymization = anonymization;
+        this.grants = grants;
     }
 
     public record UserResponse(
@@ -64,11 +68,12 @@ public class UserController {
             String displayName
     ) {
         static UserResponse from(AppUser u, UserInvitation invitation) {
+            UserInvitation visibleInvitation = u.isEnabled() ? null : invitation;
             Instant now = Instant.now();
-            boolean pending = invitation != null && invitation.isUsable(now);
-            boolean expired = invitation != null && !invitation.isConsumed() && invitation.isExpired(now);
+            boolean pending = visibleInvitation != null && visibleInvitation.isUsable(now);
+            boolean expired = visibleInvitation != null && !visibleInvitation.isConsumed() && visibleInvitation.isExpired(now);
             return new UserResponse(u.getId(), u.getUsername(), u.getEmail(), u.getRole(), u.getDepartment(),
-                    u.isEnabled(), pending, expired, invitation != null ? invitation.getExpiresAt() : null,
+                    u.isEnabled(), pending, expired, visibleInvitation != null ? visibleInvitation.getExpiresAt() : null,
                     u.isMfaEnabled(), u.getDisplayName());
         }
     }
@@ -199,12 +204,21 @@ public class UserController {
             return ResponseEntity.badRequest().body(java.util.Map.of("error", "invalid role: " + req.role()));
         }
         return users.findById(id).map(u -> {
+            boolean promotedToAdmin = !"admin".equals(u.getRole()) && "admin".equals(role);
             u.setRole(role);
             u.setDepartment(req.department());
             if (req.email() != null) {
                 u.setEmail(req.email().isBlank() ? null : req.email().strip());
             }
             users.save(u);
+            if (promotedToAdmin) {
+                // Any instance grant this user already held (e.g. a permanent owner
+                // grant from before they were an admin) must retroactively fall under
+                // the same 24h cap admin-targeted grants get going forward — otherwise
+                // promoting someone to admin is a way to hand them standing tenant
+                // access forever.
+                grants.capGrantsForNewAdmin(u.getUsername());
+            }
             audit(auth, "update_user", "/users/" + id, "success");
             return ResponseEntity.ok(UserResponse.from(u, currentInvitation(u)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
@@ -291,6 +305,30 @@ public class UserController {
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /**
+     * Purge an already-anonymized account's row. Only reachable once
+     * {@code /anonymize} has already scrubbed it — deleting a live account
+     * belongs to anonymize, not this.
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> purge(@PathVariable Long id, Authentication auth) {
+        return users.findById(id).map(u -> {
+            if (!u.getUsername().equals(UserAnonymizationService.pseudonymFor(id))) {
+                return ResponseEntity.badRequest().body(Map.of("error", "user must be anonymized before it can be deleted"));
+            }
+            anonymization.purge(u, auth != null ? auth.getName() : null, actorRole(auth));
+            return ResponseEntity.ok(Map.of("status", "deleted"));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    private static String actorRole(Authentication auth) {
+        return auth != null
+                ? auth.getAuthorities().stream().findFirst().map(Object::toString)
+                        .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
+                        .orElse(null)
+                : null;
+    }
+
     private ResponseEntity<?> setEnabled(Long id, boolean enabled, Authentication auth, String action) {
         return users.findById(id).map(u -> {
             if (!enabled && auth != null && u.getUsername().equals(auth.getName())) {
@@ -310,11 +348,6 @@ public class UserController {
 
     private void audit(Authentication auth, String action, String path, String outcome) {
         String actor = auth != null ? auth.getName() : null;
-        String actorRole = auth != null
-                ? auth.getAuthorities().stream().findFirst().map(Object::toString)
-                        .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
-                        .orElse(null)
-                : null;
-        auditService.record(actor, actorRole, action, "POST", path, null, outcome);
+        auditService.record(actor, actorRole(auth), action, "POST", path, null, outcome);
     }
 }

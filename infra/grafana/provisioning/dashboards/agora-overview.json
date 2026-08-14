@@ -2,28 +2,53 @@
   "annotations": {
     "list": []
   },
+  "description": "Platform-wide health, gateway JVM/HTTP, security decisions, and email-agent operational counters.",
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "links": [],
   "panels": [
+    {"gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "id": 100, "title": "Aperçu plateforme", "type": "row"},
+
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
-      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 4, "x": 0, "y": 1},
       "id": 1,
-      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "auto", "wideLayout": true},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "12.3.0",
-      "targets": [{"expr": "up{job=\"email-agent\"}", "refId": "A"}],
-      "title": "Email Agent Up",
+      "targets": [{"expr": "up{job=\"gateway\"}", "refId": "A"}],
+      "title": "Gateway",
       "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
-      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 4, "x": 4, "y": 1},
       "id": 2,
-      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "auto", "wideLayout": true},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "12.3.0",
+      "targets": [{"expr": "up{job=\"email-agent\"}", "refId": "A"}],
+      "title": "Email Agent",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 4, "x": 8, "y": 1},
+      "id": 3,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "12.3.0",
+      "targets": [{"expr": "up{job=\"security\"}", "refId": "A"}],
+      "title": "Security",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 10}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 4, "x": 12, "y": 1},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "12.3.0",
       "targets": [{"expr": "sum(agora_dlq_depth)", "refId": "A"}],
       "title": "DLQ Depth",
@@ -32,9 +57,9 @@
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 5}]}}, "overrides": []},
-      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
-      "id": 3,
-      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "auto", "wideLayout": true},
+      "gridPos": {"h": 6, "w": 4, "x": 16, "y": 1},
+      "id": 5,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "12.3.0",
       "targets": [{"expr": "sum(agora_active_run_depth)", "refId": "A"}],
       "title": "Pending Approvals",
@@ -42,43 +67,200 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
-      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
-      "id": 4,
+      "description": "Access denied by the security policy interpreter, last 5 minutes.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.1}]}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 4, "x": 20, "y": 1},
+      "id": 6,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "12.3.0",
+      "targets": [{"expr": "sum(rate(agora_security_authorize_total{decision=\"deny\"}[5m]))", "refId": "A"}],
+      "title": "Security Denials/s",
+      "type": "stat"
+    },
+
+    {"gridPos": {"h": 1, "w": 24, "x": 0, "y": 7}, "id": 101, "title": "Gateway — HTTP & JVM", "type": "row"},
+
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "id": 10,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "sum(rate(http_server_requests_seconds_count{job=\"gateway\"}[5m])) by (uri)", "legendFormat": "{{uri}}", "refId": "A"}],
+      "title": "Requêtes / sec par route",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "5xx responses as a percentage of total gateway requests.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "id": 11,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"expr": "rate(http_server_requests_seconds_count[5m])", "refId": "A"}],
-      "title": "Gateway Requests / sec",
+      "targets": [{"expr": "100 * sum(rate(http_server_requests_seconds_count{job=\"gateway\", status=~\"5..\"}[5m])) / sum(rate(http_server_requests_seconds_count{job=\"gateway\"}[5m]))", "legendFormat": "taux d'erreur 5xx", "refId": "A"}],
+      "title": "Taux d'erreur gateway",
       "type": "timeseries"
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
-      "id": 5,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "id": 12,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{job=\"gateway\"}[5m])) by (le))", "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"gateway\"}[5m])) by (le))", "legendFormat": "p95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job=\"gateway\"}[5m])) by (le))", "legendFormat": "p99", "refId": "C"}
+      ],
+      "title": "Latence gateway (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "JVM heap used as a share of the configured max.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 70}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 16},
+      "id": 13,
+      "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "pluginVersion": "12.3.0",
+      "targets": [{"expr": "100 * sum(jvm_memory_used_bytes{job=\"gateway\", area=\"heap\"}) / sum(jvm_memory_max_bytes{job=\"gateway\", area=\"heap\"})", "refId": "A"}],
+      "title": "JVM Heap utilisé",
+      "type": "gauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 16},
+      "id": 14,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, uri))", "refId": "A"}],
-      "title": "Gateway Latency p95",
+      "targets": [{"expr": "rate(jvm_gc_pause_seconds_sum{job=\"gateway\"}[5m])", "legendFormat": "{{action}} / {{cause}}", "refId": "A"}],
+      "title": "Pauses GC (temps cumulé / s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "HikariCP pool: active connections against the configured max.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 16},
+      "id": 15,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "hikaricp_connections_active{job=\"gateway\"}", "legendFormat": "actives", "refId": "A"},
+        {"expr": "hikaricp_connections_idle{job=\"gateway\"}", "legendFormat": "inactives", "refId": "B"},
+        {"expr": "hikaricp_connections_pending{job=\"gateway\"}", "legendFormat": "en attente", "refId": "C"}
+      ],
+      "title": "Pool de connexions base de données",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 70}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16},
+      "id": 16,
+      "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "pluginVersion": "12.3.0",
+      "targets": [{"expr": "100 * process_cpu_usage{job=\"gateway\"}", "refId": "A"}],
+      "title": "CPU gateway",
+      "type": "gauge"
+    },
+
+    {"gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}, "id": 102, "title": "Sécurité", "type": "row"},
+
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "Every /authorize decision the policy interpreter made, by outcome.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"}, "overrides": [
+        {"matcher": {"id": "byName", "options": "deny"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+        {"matcher": {"id": "byName", "options": "hitl"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]},
+        {"matcher": {"id": "byName", "options": "allow"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}
+      ]},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
+      "id": 20,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "stacking": {"mode": "normal"},
+      "targets": [{"expr": "sum(rate(agora_security_authorize_total[5m])) by (decision)", "legendFormat": "{{decision}}", "refId": "A"}],
+      "title": "Décisions d'autorisation / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "Which tool actions get denied or sent to human review most.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "custom": {"align": "auto", "cellOptions": {"type": "auto"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 25},
+      "id": 21,
+      "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Value"}]},
+      "targets": [{"expr": "sum(increase(agora_security_authorize_total{decision=~\"deny|hitl\"}[1h])) by (action, decision)", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Actions refusées ou soumises à validation (1h)",
+      "transformations": [{"id": "organize", "options": {"renameByName": {"Value": "occurrences"}}}],
+      "type": "table"
+    },
+
+    {"gridPos": {"h": 1, "w": 24, "x": 0, "y": 33}, "id": 103, "title": "Email Agent", "type": "row"},
+
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 34},
+      "id": 30,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "agora_dlq_depth", "legendFormat": "{{agent_instance_id}}", "refId": "A"}],
+      "title": "File d'erreurs (tendance)",
       "type": "timeseries"
     },
     {
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
-      "id": 6,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 34},
+      "id": 31,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"expr": "rate(agora_llm_calls_total[5m])", "refId": "A"}],
-      "title": "LLM Calls / sec",
+      "targets": [{"expr": "agora_active_run_depth", "legendFormat": "{{agent_instance_id}}", "refId": "A"}],
+      "title": "Actions en attente d'approbation (tendance)",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "Gmail API call volume against the per-instance budget.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 34},
+      "id": 32,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "sum(rate(gmail_api_calls_total[5m])) by (instance)", "legendFormat": "{{instance}}", "refId": "A"}],
+      "title": "Appels API Gmail / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "Gmail per-instance call budget threshold crossed, last hour.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 42},
+      "id": 33,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "12.3.0",
+      "targets": [{"expr": "sum(increase(gmail_budget_alerts_total[1h]))", "refId": "A"}],
+      "title": "Alertes budget Gmail (1h)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "description": "The local model failed over to a fallback model — worth knowing if it happens often.",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "custom": {"align": "auto", "cellOptions": {"type": "auto"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 18, "x": 6, "y": 42},
+      "id": 34,
+      "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Value"}]},
+      "targets": [{"expr": "sum(increase(agora_llm_failover_total[6h])) by (role, from_model, to_model)", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Bascules LLM (6h)",
+      "transformations": [{"id": "organize", "options": {"renameByName": {"Value": "occurrences"}}}],
+      "type": "table"
     }
   ],
   "refresh": "15s",
   "schemaVersion": 42,
-  "tags": ["agora"],
+  "tags": ["agora", "agora-ai"],
   "templating": {"list": []},
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
-  "title": "Agora Overview",
+  "title": "Agora AI",
   "uid": "agora-overview",
-  "version": 1
+  "version": 3
 }
