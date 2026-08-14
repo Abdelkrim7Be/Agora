@@ -10,6 +10,8 @@ const NAV_ITEMS = [
   { to: '/instances', icon: 'deployed_code', key: 'nav.instances' },
   { to: '/agent-types', icon: 'smart_toy', key: 'nav.agentTypes' },
   { to: '/system-health', icon: 'monitor_heart', key: 'nav.health', minRole: 'admin' },
+  { to: '/platform-audit', icon: 'health_and_safety', key: 'nav.platformAudit', minRole: 'admin' },
+  { to: '/report-inbox', icon: 'flag', key: 'nav.reports', minRole: 'admin' },
   { to: '/access-log', icon: 'receipt_long', key: 'nav.audit', minRole: 'admin' },
   { to: '/team', icon: 'group', key: 'nav.users', minRole: 'admin' },
   { to: '/account', icon: 'account_circle', key: 'nav.account' },

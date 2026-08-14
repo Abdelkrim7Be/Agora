@@ -122,8 +122,7 @@ public class ProxyController {
         String requestedAgentInstance = request.getHeader(AGENT_INSTANCE_HEADER);
         String agentInstance = selectAgentInstance(requestedAgentInstance, username, jwtRole);
         if (agentInstance == null) {
-            auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                    downstreamPath, null, "denied");
+            recordDeniedAuditIfRelevant(username, jwtRole, deriveAction(request), request, downstreamPath);
             writeForbidden(response);
             return;
         }
@@ -134,8 +133,7 @@ public class ProxyController {
         } else {
             Optional<String> effectiveRoleOpt = grantService.effectiveRole(agentInstance, username, jwtRole);
             if (effectiveRoleOpt.isEmpty()) {
-                auditService.record(username, jwtRole, "agent_instance_access", request.getMethod(),
-                        downstreamPath, null, "denied");
+                recordDeniedAuditIfRelevant(username, jwtRole, "agent_instance_access", request, downstreamPath);
                 writeForbidden(response);
                 return;
             }
@@ -145,8 +143,7 @@ public class ProxyController {
         if (username != null) {
             String tier = deriveTier(downstreamPath, request.getMethod());
             if (!grantService.isAuthorized(effectiveRole, tier)) {
-                auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                        downstreamPath, null, "denied");
+                recordDeniedAuditIfRelevant(username, jwtRole, deriveAction(request), request, downstreamPath);
                 writeForbidden(response);
                 return;
             }
@@ -278,6 +275,13 @@ public class ProxyController {
         int queryStart = downstreamPath.indexOf('?');
         String path = queryStart >= 0 ? downstreamPath.substring(0, queryStart) : downstreamPath;
         return !POLLED_STATUS_PATHS.contains(path);
+    }
+
+    private void recordDeniedAuditIfRelevant(String username, String jwtRole, String action,
+                                             HttpServletRequest request, String downstreamPath) {
+        if (shouldRecordForwardedAudit(request, downstreamPath)) {
+            auditService.record(username, jwtRole, action, request.getMethod(), downstreamPath, null, "denied");
+        }
     }
 
     private boolean shouldRecordAdminMailboxAccess(HttpServletRequest request, String downstreamPath) {

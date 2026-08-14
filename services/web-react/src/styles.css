@@ -318,6 +318,37 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   gap: 8px;
 }
 
+.password-field {
+  position: relative;
+  display: flex;
+}
+
+.password-field input {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  min-height: auto;
+  width: 28px;
+  min-width: 28px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.password-toggle:hover:not(:disabled) {
+  background: transparent;
+  border: none;
+  color: var(--text);
+}
+
 /* Field names are machine-facing labels, so they take the mono treatment the
    rest of the app already uses for stat headers and table columns — not a
    bolded body font, which is what made them read as generic. */
@@ -362,7 +393,7 @@ input:focus,
 textarea:focus,
 select:focus {
   border-color: var(--primary);
-  background: var(--field-bg-focus);
+  background-color: var(--field-bg-focus);
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
@@ -475,6 +506,31 @@ button.ghost {
   background: var(--surface-container);
   box-shadow: var(--shadow-panel);
   padding: 20px;
+}
+
+.modal-panel.wide {
+  width: min(760px, 100%);
+}
+
+.audit-run-detail-json {
+  max-height: 50vh;
+  overflow: auto;
+  background: var(--surface-high);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: var(--space-3) 0;
+}
+
+.data-table tr.row-clickable {
+  cursor: pointer;
+}
+
+.data-table tr.row-clickable:hover {
+  background: var(--surface-high);
 }
 
 .modal-header {
@@ -757,6 +813,33 @@ p {
 
 .toolbar-spacer { flex: 1 1 auto; }
 
+.toolbar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height-sm);
+  padding: 0 11px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toolbar-toggle:hover {
+  border-color: var(--outline-strong);
+  background: var(--accent-bg);
+}
+
+.toolbar-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  min-height: 15px;
+}
+
 .counter {
   display: inline-flex;
   min-height: 28px;
@@ -983,6 +1066,35 @@ p {
   border-color: color-mix(in srgb, var(--tertiary) 45%, transparent);
 }
 
+.status-pill.compact {
+  min-height: 22px;
+  padding: 2px 9px;
+  font-size: 11px;
+  gap: 5px;
+}
+.status-pill.compact .material-symbols-outlined { font-size: 13px; }
+.status-pill.compact::before { display: none; }
+
+.audit-component-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.audit-result { margin-top: var(--space-3); }
+
+.audit-result-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface-lowest);
+}
+
 .status-pill.error {
   color: var(--danger);
   background: var(--danger-bg);
@@ -1027,6 +1139,17 @@ p {
   gap: 6px;
 }
 
+/* Grid auto-placement was dropping these three into the implicit second row —
+   .attachment-upload landed in the 112px label column instead of the content
+   column, squeezing "Joindre un fichier" onto two lines with the whole rest
+   of the row's width sitting empty beside it. Pin all three to column 2 so
+   they stack under the toggle, in the same column as every other field. */
+.attachment-toggle,
+.attachment-upload,
+.attachment-chip-list {
+  grid-column: 2;
+}
+
 .attachment-toggle {
   display: flex;
   align-items: center;
@@ -1038,9 +1161,9 @@ p {
 
 .attachment-upload {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
 }
 
 .attachment-upload input[type="file"] {
@@ -1167,6 +1290,10 @@ pre {
 
 .audit-toolbar input { flex: 1 1 260px; }
 
+.audit-noise-toggle { flex: 0 0 auto; }
+
+.audit-hidden-count { color: var(--muted); }
+
 .instance-admin-access-row {
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
@@ -1234,6 +1361,71 @@ pre {
 }
 
 .data-table td { background: var(--surface); }
+.data-table .col-center { text-align: center; }
+
+.audit-table { table-layout: fixed; }
+
+.audit-table th:nth-child(1),
+.audit-table td:nth-child(1) {
+  width: 168px;
+  white-space: nowrap;
+}
+
+.audit-table th:nth-child(2),
+.audit-table td:nth-child(2) { width: 108px; }
+
+.audit-table th:nth-child(3),
+.audit-table td:nth-child(3) { width: 108px; }
+
+.audit-table th:nth-child(5),
+.audit-table td:nth-child(5) { width: 82px; }
+
+.audit-table th:nth-child(6),
+.audit-table td:nth-child(6) { width: 150px; }
+
+.audit-table th:nth-child(7),
+.audit-table td:nth-child(7) { width: 82px; }
+
+.audit-table th:nth-child(8),
+.audit-table td:nth-child(8) { width: 118px; }
+
+.audit-table td:nth-child(4),
+.audit-table td:nth-child(6) {
+  overflow-wrap: anywhere;
+}
+
+.audit-table td:nth-child(8) .status-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-path-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font: 500 12px/16px var(--font-mono);
+}
+
+.audit-path-cell > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-path-copy {
+  flex: 0 0 auto;
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  opacity: .55;
+}
+.audit-path-copy:hover { opacity: 1; }
+.audit-path-copy .material-symbols-outlined { font-size: 15px; }
 
 .data-table tr:hover td { background: color-mix(in srgb, var(--accent-bg) 46%, var(--surface)); }
 
@@ -1416,11 +1608,57 @@ pre {
 
 .cost-recent { margin-top: 18px; }
 
-/* These two tables only ever hold short numeric columns (5-6 cols), unlike
-   the 900px default sized for wide tables like the audit log. Drop the floor
-   entirely so each table shrinks to its own natural content width instead
-   of both being forced to the same oversized minimum. */
-.cost-recent .data-table { min-width: 0; }
+.cost-table-wrap {
+  overflow-x: hidden;
+}
+
+.cost-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.cost-table th,
+.cost-table td {
+  padding: 11px 12px;
+  overflow-wrap: anywhere;
+}
+
+.cost-table th:first-child,
+.cost-table td:first-child {
+  width: 28%;
+}
+
+.cost-table th:not(:first-child),
+.cost-table td:not(:first-child) {
+  text-align: right;
+}
+
+.cost-recent-table th:first-child,
+.cost-recent-table td:first-child {
+  width: 18%;
+}
+
+.cost-recent-table th:nth-child(4),
+.cost-recent-table td:nth-child(4),
+.cost-recent-table th:nth-child(5),
+.cost-recent-table td:nth-child(5) {
+  width: 22%;
+}
+
+.cost-recent-table-wrap {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.cost-table-pager {
+  margin-top: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--outline);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-subtle);
+}
 
 /* Four separate bordered cards in a row is the most-generated block there is.
    These four numbers are one reading of one system, so they are one panel with
@@ -1760,9 +1998,11 @@ pre {
 
 .signature-preview img {
   display: block;
+  justify-self: start;
   max-width: min(240px, 100%);
   max-height: 110px;
   object-fit: contain;
+  margin-left: 3px;
 }
 
 @media (max-width: 760px) {
@@ -1975,9 +2215,13 @@ body:not(.workspace-mode) .instance-context { display: none; }
 
 .instance-card,
 .type-card {
-  min-height: 220px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.instance-card {
+  gap: 12px;
 }
 
 .type-card .chip-row {
@@ -1993,7 +2237,7 @@ body:not(.workspace-mode) .instance-context { display: none; }
     0 0 16px color-mix(in srgb, var(--secondary) 35%, transparent),
     var(--shadow-subtle);
 }
-.compact-summary { margin-top: 14px; }
+.compact-summary { margin-top: 0; }
 
 .platform-dashboard-grid {
   display: grid;
@@ -2316,25 +2560,63 @@ button.is-busy .material-symbols-outlined {
   min-width: 0;
 }
 
-.instance-heading h2,
-.instance-heading .meta {
+.instance-heading h2 {
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.instance-heading .meta,
+.instance-meta,
+.instance-primary-meta {
+  min-width: 0;
+}
+
+.instance-meta {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.instance-primary-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.instance-identity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .instance-card .card-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+  gap: 12px;
+  margin-bottom: 0;
 }
 
 .instance-actions {
-  flex: 0 0 auto;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(5, 38px);
+  justify-content: start;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
 }
 
 .instance-actions button {
   width: 38px;
   min-width: 38px;
+  height: 38px;
   padding-inline: 0;
 }
 
@@ -3423,6 +3705,46 @@ body.workspace-mode #workspace-sidebar-context { display: grid; }
   min-height: 20px;
 }
 
+.chips-input-wrap {
+  position: relative;
+}
+
+.chips-suggestion-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: grid;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.chips-suggestion-menu button {
+  justify-content: flex-start;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.chips-suggestion-menu button:hover,
+.chips-suggestion-menu button:focus-visible {
+  background: var(--surface-high);
+}
+
+.chips-suggestion-menu button[aria-selected="true"] {
+  color: var(--muted);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -3869,9 +4191,71 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   display: grid;
   gap: 8px;
   align-content: start;
+  background: var(--surface);
+  box-shadow: var(--shadow-subtle);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+
+.platform-role-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--outline));
+  box-shadow: var(--shadow-raised, 0 6px 18px rgba(0,0,0,.1));
+  transform: translateY(-1px);
 }
 
 .platform-role-card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+.platform-role-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.platform-role-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--accent-bg);
+  color: var(--primary);
+  font-size: 20px;
+}
+
+.platform-role-icon.tone-error { background: var(--danger-bg); color: var(--danger); }
+.platform-role-icon.tone-warn { background: var(--tertiary-bg); color: var(--tertiary); }
+.platform-role-icon.tone-ok { background: var(--secondary-bg); color: var(--secondary); }
+
+.platform-role-count {
+  color: var(--muted);
+  font: 500 11px/16px var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.platform-role-label { font: 650 17px/1.2 var(--font-display); }
+
+.platform-role-grants {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.platform-role-grants li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.platform-role-grants .material-symbols-outlined {
+  font-size: 15px;
+  color: var(--secondary);
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
 
 .memory-tabs {
   display: grid;
@@ -3957,31 +4341,41 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
 .data-error-banner strong { color: var(--danger); }
 .data-error-banner p { margin: 4px 0 0; color: var(--text); }
 
-.data-error-list {
-  margin: var(--space-2) 0 0;
-  padding-left: 18px;
-  color: var(--muted);
-  font-size: 12px;
+.data-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
-.data-error-list code {
+.data-error-detail-list {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.data-error-detail-list li {
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-control);
+  background: var(--surface-lowest);
+}
+
+.data-error-detail-list code {
   font-family: var(--font-mono);
-  color: var(--text);
-}
-
-.data-error-detail {
-  margin-top: 2px;
-}
-
-.data-error-detail summary {
-  cursor: pointer;
-  color: var(--muted);
   font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
 }
 
-.data-error-detail code {
-  display: block;
-  margin-top: 3px;
+.data-error-detail-list p {
+  margin: 4px 0 0;
+  font-size: 13px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -4173,6 +4567,32 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   background: var(--primary);
 }
 .notification-popover-list li span { color: var(--muted); font-size: 11px; }
+
+.report-popover-wrap { position: relative; }
+.report-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-panel);
+  z-index: 50;
+}
+.report-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+.report-popover-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
 
 .notification-list {
   list-style: none;

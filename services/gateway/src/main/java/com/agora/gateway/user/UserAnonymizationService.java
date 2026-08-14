@@ -66,6 +66,23 @@ public class UserAnonymizationService {
         return "deleted-user-" + id;
     }
 
+    /**
+     * Drop an already-anonymized account's row entirely.
+     *
+     * Safe only past anonymization: by then the row carries no identifying
+     * fields, its grants and invitations are already revoked, and everything
+     * else that referenced it (instances, audit events) was repointed at the
+     * pseudonym as plain text, not a foreign key — so removing the row orphans
+     * nothing. Invitation rows are left as-is; {@link UserInvitationRepository}
+     * has no delete on purpose.
+     */
+    @Transactional
+    public void purge(AppUser user, String actor, String actorRole) {
+        Long id = user.getId();
+        users.delete(user);
+        auditService.record(actor, actorRole, "purge_user", "DELETE", "/users/" + id, null, "success");
+    }
+
     @Transactional
     public Result anonymize(AppUser user) {
         String previousUsername = user.getUsername();

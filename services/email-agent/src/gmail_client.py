@@ -531,7 +531,7 @@ def render_rich_email_html(body: str) -> str:
     rendered = _size_signature_image(rendered)
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0 auto;">'
+        'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0;">'
         f"{rendered}"
         "</div>"
     )
@@ -818,7 +818,9 @@ def create_draft(
     )
 
 
-def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
+def forward_message(
+    message_id: str, to: str, note: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Forward a Gmail message to a recipient, optionally with a note."""
     if effective_dry_run():
         return _dry_run_result("forward_message", message_id=message_id, to=to)
@@ -835,10 +837,12 @@ def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
         f"To: {_header_value(original, 'To', 'Unknown Recipient')}\n\n"
         f"{_extract_message_part(original.get('payload', {}))}"
     )
-    return _send_email_message(to=to, subject=subject, body=body, resource=resource)
+    return _send_email_message(to=to, subject=subject, body=body, resource=resource, attachments=attachments)
 
 
-def notify_internal_message(to: str | list[str], subject: str, note: str, resource=None) -> dict:
+def notify_internal_message(
+    to: str | list[str], subject: str, note: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Send an internal-only workflow notification.
 
     Unlike forward_message, this never re-fetches or re-sends the original
@@ -849,10 +853,12 @@ def notify_internal_message(to: str | list[str], subject: str, note: str, resour
     if effective_dry_run():
         return _dry_run_result("notify_internal_message", to=to, subject=subject)
     resource = resource or gmail_resource()
-    return _send_email_message(to=to, subject=subject, body=note, resource=resource)
+    return _send_email_message(to=to, subject=subject, body=note, resource=resource, attachments=attachments)
 
 
-def reply_all_message(message_id: str, body: str, resource=None) -> dict:
+def reply_all_message(
+    message_id: str, body: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Reply to all participants on a Gmail message's thread."""
     if effective_dry_run():
         return _dry_run_result("reply_all_message", message_id=message_id)
@@ -880,6 +886,7 @@ def reply_all_message(message_id: str, body: str, resource=None) -> dict:
         thread_id=original.get("threadId"),
         extra_headers=extra_headers,
         resource=resource,
+        attachments=attachments,
     )
 
 

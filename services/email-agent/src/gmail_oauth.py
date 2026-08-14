@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import SERVICE_ROOT, settings
+from src.connected_mailboxes import claim_mailbox, release_mailbox
 from src.gmail_client import GMAIL_SCOPES
 from src.oauth_state import build_state, sign_state, validate_state  # noqa: F401 — re-exported
 from src.token_store import (
@@ -98,7 +99,7 @@ def build_authorization_url(state: str) -> str:
     return authorization_url
 
 
-def _verify_mailbox(credentials: Any, expected_mailbox: str) -> str:
+def _verify_mailbox(credentials: Any, expected_mailbox: str | None = None) -> str:
     """Return the actual authorized email, raising if it does not match expected.
 
     Fails closed: if the profile call itself fails we raise rather than storing
@@ -112,9 +113,10 @@ def _verify_mailbox(credentials: Any, expected_mailbox: str) -> str:
         actual = (profile.get("emailAddress") or "").strip().lower()
     except Exception as exc:
         raise ValueError(f"Could not verify authorized mailbox: {exc}") from exc
-    if actual != expected_mailbox:
+    expected = (expected_mailbox or "").strip().lower()
+    if expected and actual != expected:
         raise ValueError(
-            f"OAuth authorized '{actual}' but expected '{expected_mailbox}'. "
+            f"OAuth authorized '{actual}' but expected '{expected}'. "
             "Re-authorize with the correct Google account."
         )
     return actual
@@ -142,7 +144,7 @@ def _explain_token_fetch_error(exc: Exception) -> str:
         return (
             "Google returned different permissions than the agent requested, usually "
             "because this account already granted an older, broader scope to the same "
-            "OAuth client. Revoke Agora at myaccount.google.com/permissions, then "
+            "OAuth client. Revoke Agora AI at myaccount.google.com/permissions, then "
             "connect again."
         )
     if "access_denied" in lowered:
@@ -162,12 +164,10 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
 
     _assert_scopes_sufficient(flow.credentials)
 
-    # When the OAuth state carried an explicit mailbox identity, verify the account
-    # Google actually authorized matches. Fail closed — never store a token for the
-    # wrong mailbox. Skip the check when no mailbox was specified (legacy single-user).
+    # Always verify the account Google actually authorized. When the OAuth state
+    # carried an explicit mailbox identity, also require an exact match.
     expected_mailbox = (state_payload.get("mailbox_identity") or "").strip().lower()
-    if expected_mailbox:
-        _verify_mailbox(flow.credentials, expected_mailbox)
+    actual_mailbox = _verify_mailbox(flow.credentials, expected_mailbox or None)
 
     token_json = flow.credentials.to_json()
     user_id = state_payload["user_id"]
@@ -182,6 +182,11 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
             f"Gmail authorized but the token could not be stored ({exc}). "
             "Check the token store volume and encryption key, then reconnect."
         ) from exc
+    try:
+        claim_mailbox("gmail", actual_mailbox, user_id, agent_instance_id)
+    except Exception:
+        delete_token(user_id, agent_instance_id)
+        raise
     if not getattr(flow.credentials, "refresh_token", "unknown"):
         print(
             f"oauth: WARNING — no refresh_token returned for {agent_instance_id}; "
@@ -231,4 +236,5 @@ def revoke_gmail_token(
             print(f"token: Google revocation request failed (local token still deleted): {exc}")
 
     delete_token(user_id, agent_instance_id)
+    release_mailbox("gmail", agent_instance_id)
     return True

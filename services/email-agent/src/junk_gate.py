@@ -64,12 +64,12 @@ _BULK_SUBDOMAINS = {
     "deals", "offers", "message", "messages", "inbox",
 }
 
-# Agora's own component-health alert mail (alerts.py). The admin recipient is
+# Agora AI's own component-health alert mail (alerts.py). The admin recipient is
 # frequently the same mailbox the agent monitors — in that case the alert
 # lands right back in the inbox it was sent from and gets triaged like any
 # other message. Not a policy choice: this is always noise, so it is checked
 # unconditionally, ahead of the switchable heuristics below.
-_SYSTEM_ALERT_SUBJECT_PREFIXES = ("Alerte Agora :", "Resolution Agora :")
+_SYSTEM_ALERT_SUBJECT_PREFIXES = ("Alerte Agora AI :", "Resolution Agora AI :")
 
 # Bulk-sending platforms: mail from these is campaign traffic whatever the
 # local part looks like.

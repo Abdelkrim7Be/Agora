@@ -172,7 +172,7 @@ def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, f
     patch_provider(
         monkeypatch,
         email_tools,
-        notify_internal_message=lambda to, subject, note: sent_to.append(to) or {"id": "sent-notify"},
+        notify_internal_message=lambda to, subject, note, attachments=None: sent_to.append(to) or {"id": "sent-notify"},
     )
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
 

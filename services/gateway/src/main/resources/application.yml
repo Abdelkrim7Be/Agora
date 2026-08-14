@@ -62,6 +62,13 @@ gateway:
     username: ${GATEWAY_SMTP_USERNAME:}
     password: ${GATEWAY_SMTP_PASSWORD:}
     from: ${GATEWAY_SMTP_FROM:}
+  llm:
+    # Same local-first Ollama endpoint the rest of the stack uses. Best-effort
+    # only: an unreachable model degrades a report to "no suggestion", never a
+    # failed request.
+    base-url: ${GATEWAY_LLM_BASE_URL:http://ollama:11434/v1}
+    model: ${GATEWAY_LLM_MODEL:qwen2.5:3b-8k}
+    timeout-seconds: ${GATEWAY_LLM_TIMEOUT_SECONDS:20}
   agent-types:
     - id: email-agent
       display-name: Email Agent
@@ -130,3 +137,7 @@ gateway:
     username: ${GATEWAY_ADMIN_USERNAME:}
     password: ${GATEWAY_ADMIN_PASSWORD:}
     email: ${GATEWAY_ADMIN_EMAIL:}
+  # Dev/demo only — never set true in a real deployment. Re-syncs a seeded
+  # account's password to its env credentials on every boot instead of
+  # leaving a stale Postgres volume permanently out of sync with .env.
+  seed-reset-password: ${GATEWAY_SEED_RESET_PASSWORD:false}

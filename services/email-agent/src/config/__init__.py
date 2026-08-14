@@ -190,6 +190,7 @@ class Settings:
     gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
     # Per-instance sync observability state (connection status, last success/failure, etc.).
     gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
+    connected_mailboxes_path: str = os.getenv("AGENT_CONNECTED_MAILBOXES_PATH", "logs/connected_mailboxes.json")
     # Uploaded media (signature images, contact photos) — compose mounts /app/data/media.
     media_dir: str = os.getenv("AGENT_MEDIA_DIR", "logs/instances")
     # local (default, dev/single-VPS) | s3 (OVH Object Storage / any S3-compatible bucket in prod).

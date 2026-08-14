@@ -9,7 +9,7 @@ import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { currentUsername } from '../../utils/jwt';
-import { agentTypeLabel, instanceIdentity, instanceSummaryFields } from '../../utils/format';
+import { agentTypeLabel, instanceSummaryFields } from '../../utils/format';
 import {
   useAgentInstancesQuery,
   useAgentTypesQuery,
@@ -236,7 +236,7 @@ export default function InstancesPage() {
             const active = isInstanceActive(instance);
             const health = summary.service_health || status || 'unknown';
             const typeLabel = agentTypeLabel(instance.agent_type, typesQuery.data || []);
-            const identity = instanceIdentity(instance);
+            const identity = instance.mailbox_identity || '';
             const canOpen = active && Boolean(instance.effective_role);
             const openTitle = !active
               ? 'Activez cette instance avant de l’ouvrir'
@@ -247,12 +247,12 @@ export default function InstancesPage() {
               <Card key={instance.id} className={`instance-card ${active ? '' : 'inactive'}`}>
                 <div className="card-header">
                   <div className="instance-heading">
-                    <h2>{instance.display_name || instance.id}</h2>
+                    <h2 title={instance.display_name || instance.id}>{instance.display_name || instance.id}</h2>
                     <div className="instance-meta">
                       <div className="instance-primary-meta">
                         <span>{typeLabel}</span>
-                        <span className="meta-separator" aria-hidden="true">·</span>
-                        <span className="instance-identity" title={identity}>{identity}</span>
+                        {identity ? <span className="meta-separator" aria-hidden="true">·</span> : null}
+                        {identity ? <span className="instance-identity" title={identity}>{identity}</span> : null}
                       </div>
                       <div className="instance-status-row">
                         <StatusBadge status={status} />
@@ -260,62 +260,62 @@ export default function InstancesPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="card-actions instance-actions">
-                    <button
-                      className="primary icon-button"
-                      type="button"
-                      disabled={!canOpen}
-                      title={openTitle}
-                      aria-label={openTitle}
-                      onClick={() => handleOpen(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">open_in_new</span>
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!canManage}
-                      title={renameTitle}
-                      aria-label={renameTitle}
-                      onClick={() => handleRename(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">edit</span>
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!canManage || !active}
-                      title={active ? 'Tester la boîte connectée' : 'Activez l’instance pour la tester'}
-                      aria-label={`Tester ${instance.display_name || instance.id}`}
-                      onClick={() => handleTest(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">network_check</span>
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!canManage}
-                      title={canManage
-                        ? (active ? 'Suspendre l’instance' : 'Réactiver l’instance')
-                        : 'Administration requise'}
-                      aria-label={`${active ? 'Suspendre' : 'Réactiver'} ${instance.display_name || instance.id}`}
-                      onClick={() => handleToggleActive(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">
-                        {active ? 'pause_circle' : 'play_circle'}
-                      </span>
-                    </button>
-                    <button
-                      className="danger icon-button"
-                      type="button"
-                      disabled={!canManage}
-                      title={deleteTitle}
-                      aria-label={deleteTitle}
-                      onClick={() => handleDelete(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">delete</span>
-                    </button>
-                  </div>
+                </div>
+                <div className="card-actions instance-actions">
+                  <button
+                    className="primary icon-button"
+                    type="button"
+                    disabled={!canOpen}
+                    title={openTitle}
+                    aria-label={openTitle}
+                    onClick={() => handleOpen(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">open_in_new</span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!canManage}
+                    title={renameTitle}
+                    aria-label={renameTitle}
+                    onClick={() => handleRename(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">edit</span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!canManage || !active}
+                    title={active ? 'Tester la boîte connectée' : 'Activez l’instance pour la tester'}
+                    aria-label={`Tester ${instance.display_name || instance.id}`}
+                    onClick={() => handleTest(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">network_check</span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!canManage}
+                    title={canManage
+                      ? (active ? 'Suspendre l’instance' : 'Réactiver l’instance')
+                      : 'Administration requise'}
+                    aria-label={`${active ? 'Suspendre' : 'Réactiver'} ${instance.display_name || instance.id}`}
+                    onClick={() => handleToggleActive(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">
+                      {active ? 'pause_circle' : 'play_circle'}
+                    </span>
+                  </button>
+                  <button
+                    className="danger icon-button"
+                    type="button"
+                    disabled={!canManage}
+                    title={deleteTitle}
+                    aria-label={deleteTitle}
+                    onClick={() => handleDelete(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">delete</span>
+                  </button>
                 </div>
                 <div className="summary-grid compact-summary">
                   {instanceSummaryFields(instance, summary).map(([label, value]) => (

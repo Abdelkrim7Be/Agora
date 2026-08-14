@@ -1,15 +1,106 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useStatus } from '../../contexts/StatusContext';
 import { gatewayUrl } from '../../api/client';
-import { useUnreadCountQuery, useNotificationsQuery, useMarkNotificationRead } from '../../api/queries';
+import { useUnreadCountQuery, useNotificationsQuery, useMarkNotificationRead, useSubmitReport } from '../../api/queries';
 import { roleLabelFr } from '../../utils/format';
 import { currentUsername } from '../../utils/jwt';
 
+const EMPTY_REPORT = { subject: '', description: '', severity: 'medium' };
+
+function ReportIssueButton() {
+  const { instanceId } = useParams();
+  const location = useLocation();
+  const { setStatus } = useStatus();
+  const submitReport = useSubmitReport();
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(EMPTY_REPORT);
+
+  const submit = async () => {
+    if (!form.subject.trim() || !form.description.trim()) {
+      setStatus('Sujet et description requis pour signaler un problème.', 'error');
+      return;
+    }
+    try {
+      await submitReport.mutateAsync({
+        subject: form.subject.trim(),
+        description: form.description.trim(),
+        severity: form.severity,
+        contextInstanceId: instanceId || null,
+        contextPage: location.pathname,
+      });
+      setStatus('Signalement envoyé. Un administrateur va le consulter.', 'ok');
+      setForm(EMPTY_REPORT);
+      setOpen(false);
+    } catch (error) {
+      setStatus(`Impossible d’envoyer le signalement : ${error.message}`, 'error');
+    }
+  };
+
+  return (
+    <div className="report-popover-wrap">
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Signaler un problème"
+        title="Signaler un problème"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="material-symbols-outlined" aria-hidden="true">flag</span>
+      </button>
+      {open ? (
+        <div className="report-popover" role="dialog" aria-label="Signaler un problème">
+          <div className="notification-popover-header">
+            <strong>Signaler un problème</strong>
+            <button type="button" className="ghost icon-button" aria-label="Fermer" onClick={() => setOpen(false)}>
+              <span className="material-symbols-outlined" aria-hidden="true">close</span>
+            </button>
+          </div>
+          <div className="report-popover-body">
+            <label>Sujet
+              <input
+                value={form.subject}
+                onChange={(event) => setForm({ ...form, subject: event.target.value })}
+                placeholder="Le brouillon ne s’envoie pas"
+                autoFocus
+              />
+            </label>
+            <label>Description
+              <textarea
+                rows={4}
+                value={form.description}
+                onChange={(event) => setForm({ ...form, description: event.target.value })}
+                placeholder="Ce que vous avez fait, ce qui s’est passé"
+              />
+            </label>
+            <label>Gravité
+              <select value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}>
+                <option value="low">Faible</option>
+                <option value="medium">Moyenne</option>
+                <option value="high">Élevée</option>
+              </select>
+            </label>
+            <button className="primary" type="button" disabled={submitReport.isPending} onClick={submit}>
+              <span className="material-symbols-outlined" aria-hidden="true">send</span>
+              <span>{submitReport.isPending ? 'Envoi…' : 'Envoyer'}</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function NotificationBell() {
   const { instanceId } = useParams();
+  if (!instanceId) return null;
+  return <InstanceNotificationBell instanceId={instanceId} />;
+}
+
+function InstanceNotificationBell({ instanceId }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const unreadQuery = useUnreadCountQuery();
@@ -17,9 +108,6 @@ function NotificationBell() {
   const markRead = useMarkNotificationRead();
   const unreadCount = unreadQuery.data?.unread_count ?? 0;
   const newest = (notificationsQuery.data?.notifications || []).slice(0, 10);
-
-  if (!instanceId) return null;
-
   return (
     <div className="notification-bell-wrap">
       <button
@@ -96,6 +184,7 @@ export default function Topbar() {
         <input aria-label="Rechercher dans la vue" placeholder="Rechercher dans la vue" />
       </div>
       <div className="auth-actions" aria-label="Contrôles de session">
+        {signedIn ? <ReportIssueButton /> : null}
         {signedIn ? <NotificationBell /> : null}
         {signedIn ? (
           <div className="identity-chip" title={`${displayName} · connecté`}>

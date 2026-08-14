@@ -21,5 +21,9 @@ roles:
     temperature: 0.3
     max_tokens: 1100
   reason: "openai:qwen3:4b-4k"
-  memory_style: "openai:qwen3:4b-4k"
+  # Style learning digests up to several full sent-mail samples in one call and
+  # routinely exceeds a 4k context (observed: 8 samples -> ~8.3k tokens). Runs
+  # once at setup, not on the per-email hot path, so the extra VRAM swap here
+  # is an acceptable tradeoff (unlike triage/draft, see comment above).
+  memory_style: "openai:qwen3:4b-8k"
 fallbacks: {}

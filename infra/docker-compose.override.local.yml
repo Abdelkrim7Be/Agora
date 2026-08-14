@@ -5,7 +5,7 @@
 # message is built. The security service enforces the same pair at policy level
 # (see SECURITY_POLICY_PATH below) — this is the layer underneath it.
 x-outbound-allowlist: &outbound_allowlist
-  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com"
+  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com,abdelkrimbellagnech99@gmail.com"
 
 # Docker GPU passthrough is not configured on this machine, so an Ollama running
 # inside Compose falls back to CPU and a draft takes minutes. The host runs Ollama
@@ -47,6 +47,10 @@ services:
       AGENT_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
       AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
       AGENT_NOTIFY_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+      # Wide startup analysis for demo instances: scan deep into the mailbox and
+      # triage the full unread backlog on connect, not just the newest 20.
+      AGENT_SETUP_RECENT_LIMIT: "500"
+      AGENT_SETUP_BACKLOG_LIMIT: "500"
     # The base file waits for ollama-init, which no longer runs — without this the
     # agent would block forever on a dependency that is behind a profile.
     depends_on: !override

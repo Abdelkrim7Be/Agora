@@ -14,7 +14,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '^/(api/|auth/|audit|users|me|agents|agent-instances|mailboxes|health)': {
+      '^/(api/|auth/|audit|users|me|agents|agent-instances|mailboxes|health|reports)': {
         target: gatewayProxyTarget,
         changeOrigin: true,
       },

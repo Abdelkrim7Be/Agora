@@ -87,14 +87,47 @@ async function withSessionRetry(gatewayBase, token, path, send) {
   return send(refreshed);
 }
 
+// FastAPI validation errors send `detail` as a list of {loc, msg, type}
+// objects (or, less often, a single object) rather than a string — surface
+// something readable instead of the default "[object Object]" stringification.
+function formatDetail(detail) {
+  if (!detail || typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        const field = Array.isArray(item?.loc) ? item.loc[item.loc.length - 1] : null;
+        return field ? `${field} : ${item.msg}` : item?.msg;
+      })
+      .filter(Boolean)
+      .join(' ; ') || null;
+  }
+  return detail.msg || JSON.stringify(detail);
+}
+
+// Reverse proxies (nginx, cloud load balancers) answer outages with an HTML
+// error page, not JSON. Left unhandled, that raw markup — full of literal
+// "<html>" tags and HTML comments — ends up as the error message shown to the
+// user, which is neither readable nor something a non-technical person can
+// act on.
+function friendlyGatewayMessage(status) {
+  if (status === 502 || status === 504) {
+    return "Le service est momentanément indisponible. Réessayez dans quelques instants.";
+  }
+  if (status === 503) {
+    return "Le service redémarre. Réessayez dans quelques instants.";
+  }
+  return null;
+}
+
 export async function responseError(response, signOut) {
   const text = await response.text();
   let message = text || `${response.status} ${response.statusText}`;
   try {
     const parsed = JSON.parse(text);
-    message = parsed.error || parsed.detail || message;
+    message = parsed.error || formatDetail(parsed.detail) || message;
   } catch (_error) {
-    // Keep raw
+    message = friendlyGatewayMessage(response.status) || message;
   }
   if (response.status === 401 || message === 'unauthorized') {
     if (typeof signOut === 'function') signOut();

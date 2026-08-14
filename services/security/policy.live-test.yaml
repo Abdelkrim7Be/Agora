@@ -1,10 +1,10 @@
 # Capability policy for live end-to-end mail tests.
 #
 # Same shape as policy.yaml, with one difference that matters: every send-style
-# tool carries an address-level allow list holding only the two test mailboxes.
-# Live tests run with AGENT_DRY_RUN=false against a real Gmail account whose
-# inbox also contains mail from real third parties, so a domain allow list is
-# not enough — both test mailboxes are @gmail.com, and allowing that domain
+# tool carries an address-level allow list holding only the three test mailboxes.
+# Live tests run with AGENT_DRY_RUN=false against real Gmail accounts whose
+# inboxes also contain mail from real third parties, so a domain allow list is
+# not enough — all three test mailboxes are @gmail.com, and allowing that domain
 # would permit writing to any Gmail user the agent happens to read.
 #
 # Point the security service at this file with SECURITY_POLICY_PATH. Never use
@@ -19,6 +19,7 @@ _test_recipients: &test_recipients
   allow_addresses:
     - agora.test.inbox@gmail.com
     - abdelkrimbellagnech28@gmail.com
+    - abdelkrimbellagnech99@gmail.com
   allow_domains: []
   deny_domains: []
   deny_addresses: []

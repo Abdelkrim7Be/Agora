@@ -180,15 +180,21 @@ export default function SignaturePage() {
           <strong>Signature d’e-mail</strong>
           <label className="toggle-row">
             <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-            <span>Ajouter à chaque e-mail</span>
+            <span>{form.mode === 'ask_each_time' ? 'Gestion de la signature activée' : 'Ajouter à chaque e-mail'}</span>
           </label>
           <label>
             <span>Mode</span>
-            <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+            <select
+              value={form.mode}
+              onChange={(e) => setForm({ ...form, mode: e.target.value, enabled: true })}
+            >
               {(query.data?.available_modes || Object.keys(MODE_LABELS)).map((mode) => (
                 <option key={mode} value={mode}>{MODE_LABELS[mode] || mode}</option>
               ))}
             </select>
+            {form.mode === 'ask_each_time' ? (
+              <small>Le choix (avec ou sans signature) apparaît lors de la validation de chaque brouillon.</small>
+            ) : null}
           </label>
           {query.data?.detected_block ? (
             <p className="setup-step-detail">Une signature a été détectée dans vos e-mails envoyés lors de la configuration initiale.</p>

@@ -18,6 +18,7 @@ import {
   useSetUserPassword,
   useResetUserMfa,
   useAnonymizeUser,
+  useDeleteUser,
   useAgentInstancesQuery,
   useAgentTypesQuery,
   useInstanceGrantsQuery,
@@ -36,24 +37,32 @@ const PLATFORM_ROLES = [
   {
     key: 'admin',
     label: 'Administrateur',
+    icon: 'admin_panel_settings',
+    tone: 'error',
     summary: 'Administration de la plateforme : comptes, instances, coûts, file d’erreurs, audit.',
     grants: ['Toutes les routes plateforme (/users, /audit, /api/agent/costs, /api/agent/dlq, /api/agent/capabilities)', 'Lecture et administration de toute instance'],
   },
   {
     key: 'owner',
     label: 'Propriétaire',
+    icon: 'verified_user',
+    tone: 'primary',
     summary: 'Autorité complète sur les instances qu’il crée ou auxquelles il est autorisé : configuration, envoi, approbation.',
     grants: ['Écriture sur l’instance (config, règles, cas métier, signature, persona)', 'Approuver / rejeter / répondre'],
   },
   {
     key: 'approver',
     label: 'Validateur',
+    icon: 'fact_check',
+    tone: 'warn',
     summary: 'Peut approuver, rejeter ou répondre aux actions proposées dans les instances où il est autorisé — pas de configuration.',
     grants: ['Approuver / rejeter / répondre', 'Lecture de l’instance'],
   },
   {
     key: 'viewer',
     label: 'Lecteur',
+    icon: 'visibility',
+    tone: 'ok',
     summary: 'Accès en lecture seule aux instances autorisées — aucune approbation, aucune écriture.',
     grants: ['Lecture de l’instance et des surfaces plateforme autorisées'],
   },
@@ -80,6 +89,7 @@ export default function UsersPage() {
   const setUserPassword = useSetUserPassword();
   const resetUserMfa = useResetUserMfa();
   const anonymizeUser = useAnonymizeUser();
+  const deleteUser = useDeleteUser();
   const instancesQuery = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const grantsQuery = useInstanceGrantsQuery(instancesQuery.data || [], true);
@@ -253,6 +263,23 @@ export default function UsersPage() {
     }
   };
 
+  // Purge: only reachable once anonymized, so this just drops an already-scrubbed row.
+  const handleDelete = async (user) => {
+    const confirmed = await confirmDialog({
+      title: `Supprimer définitivement ${user.username}`,
+      message: 'Le compte anonymisé sera supprimé de la liste. Le journal d’audit conserve son pseudonyme.',
+      confirmLabel: 'Supprimer',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await deleteUser.mutateAsync(user.id);
+      setStatus(`${user.username} supprimé.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de supprimer le compte : ${error.message}`, 'error');
+    }
+  };
+
   const handleToggle = async (user) => {
     const enabling = !user.enabled;
     if (!enabling && user.username === username) {
@@ -385,7 +412,9 @@ export default function UsersPage() {
                     </td>
                     <td>
                       <span className={`status-pill ${onboarding.tone}`.trim()}>{onboarding.label}</span>
-                      {user.invitationExpiresAt ? <small className="muted">Expire {formatDateTimeFr(user.invitationExpiresAt)}</small> : null}
+                      {!user.enabled && user.invitationExpiresAt ? (
+                        <small className="muted">Lien expire {formatDateTimeFr(user.invitationExpiresAt)}</small>
+                      ) : null}
                     </td>
                     <td>
                       <span className={`status-pill ${user.mfaEnabled ? 'ok' : ''}`.trim()}>
@@ -394,6 +423,17 @@ export default function UsersPage() {
                     </td>
                     <td>
                       <div className="actions">
+                        {anonymized ? (
+                          <button
+                            type="button"
+                            className="danger"
+                            aria-label={`Supprimer ${user.username || 'utilisateur'}`}
+                            onClick={() => handleDelete(user)}
+                          >
+                            Supprimer
+                          </button>
+                        ) : (
+                        <>
                         <button type="button" onClick={() => handleUpdateUser(user)}>
                           Enregistrer
                         </button>
@@ -417,7 +457,6 @@ export default function UsersPage() {
                         >
                           {label}
                         </button>
-                        {anonymized ? null : (
                           <button
                             type="button"
                             className="danger"
@@ -428,6 +467,7 @@ export default function UsersPage() {
                           >
                             Anonymiser
                           </button>
+                        </>
                         )}
                       </div>
                     </td>
@@ -620,14 +660,22 @@ export default function UsersPage() {
           {PLATFORM_ROLES.map((role) => {
             const count = users.filter((user) => (user.role || 'viewer') === role.key).length;
             return (
-              <div className="platform-role-card" key={role.key}>
-                <div className="card-tags">
-                  <span className="status-pill">{role.label}</span>
-                  <span className="counter">{count} compte{count === 1 ? '' : 's'}</span>
+              <div className={`platform-role-card tone-${role.tone}`} key={role.key}>
+                <div className="platform-role-head">
+                  <span className={`platform-role-icon tone-${role.tone}`}>
+                    <span className="material-symbols-outlined" aria-hidden="true">{role.icon}</span>
+                  </span>
+                  <span className="platform-role-count">{count} compte{count === 1 ? '' : 's'}</span>
                 </div>
+                <strong className="platform-role-label">{role.label}</strong>
                 <p>{role.summary}</p>
-                <ul className="security-reasons">
-                  {role.grants.map((grant, index) => <li key={index}>{grant}</li>)}
+                <ul className="platform-role-grants">
+                  {role.grants.map((grant, index) => (
+                    <li key={index}>
+                      <span className="material-symbols-outlined" aria-hidden="true">check</span>
+                      <span>{grant}</span>
+                    </li>
+                  ))}
                 </ul>
               </div>
             );

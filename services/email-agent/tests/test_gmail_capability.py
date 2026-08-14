@@ -171,7 +171,9 @@ def test_forward_email_live_path_invokes_gmail_helper_after_approval(monkeypatch
     patch_provider(
         monkeypatch,
         email_tools,
-        forward_message=lambda message_id, to, note: calls.append({"message_id": message_id, "to": to, "note": note})
+        forward_message=lambda message_id, to, note, attachments=None: calls.append(
+            {"message_id": message_id, "to": to, "note": note}
+        )
         or {"id": "sent-forward"},
     )
 
@@ -197,7 +199,9 @@ def test_reply_all_live_path_invokes_gmail_helper_after_approval(monkeypatch):
     patch_provider(
         monkeypatch,
         email_tools,
-        reply_all_message=lambda message_id, body: calls.append({"message_id": message_id, "body": body})
+        reply_all_message=lambda message_id, body, attachments=None: calls.append(
+            {"message_id": message_id, "body": body}
+        )
         or {"id": "sent-reply"},
     )
 
@@ -245,7 +249,9 @@ def test_notify_internal_live_path_invokes_gmail_helper_after_approval(monkeypat
     patch_provider(
         monkeypatch,
         email_tools,
-        notify_internal_message=lambda to, subject, note: calls.append({"to": to, "subject": subject, "note": note})
+        notify_internal_message=lambda to, subject, note, attachments=None: calls.append(
+            {"to": to, "subject": subject, "note": note}
+        )
         or {"id": "sent-notify"},
     )
 
