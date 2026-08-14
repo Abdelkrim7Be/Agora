@@ -43,6 +43,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ../platform-core
       - run: python -m pip install -e ".[dev]"
       - run: pytest tests/ -q
       - run: python -m eval.run_eval --max-attack-success-rate 0.0
