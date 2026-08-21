@@ -391,8 +391,10 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+    # No host port. Prometheus already stays internal-only, and publishing
+    # Grafana put a second door on the host that skips the TLS ingress
+    # entirely — the one thing infra/tests asserts must never happen. Local
+    # dev republishes it in docker-compose.override.local.yml.
     networks:
       - agora
 
