@@ -3,7 +3,9 @@ package com.agora.gateway;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,7 +33,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * Its own class because the cache is disabled everywhere else: a figure cached
  * by one test must never be served to the next.
+ *
+ * Ordered by method name: the suspend test leaves the seeded instance inactive,
+ * and an inactive instance reports a canned summary without calling upstream at
+ * all — so the fan-out test has to run first to see a fan-out.
  */
+@TestMethodOrder(MethodOrderer.MethodName.class)
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {

@@ -55,7 +55,8 @@ public class AgentRegistryController {
         // in parallel keeps the listing at roughly one instance's latency.
         return service.visibleInstances(username, role).parallelStream()
                 .map(instance -> AgentInstanceResponse.from(instance, service.summary(instance, username),
-                        grants.effectiveRole(instance.getId(), username, role).orElse("")))
+                        grants.effectiveRole(instance.getId(), username, role).orElse(""),
+                        grants.contentRole(instance.getId(), username).orElse("")))
                 .toList();
     }
 
@@ -114,9 +115,9 @@ public class AgentRegistryController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         List<AdminAccessResponse> rows = auditRepository
-                .findByActionAndPathOrderByTimestampDesc(
-                        "admin_mailbox_access",
+                .findByPathAndActionInOrderByTimestampDesc(
                         "/agent-instances/" + instanceId,
+                        List.of("admin_mailbox_access", "mailbox_content_access"),
                         PageRequest.of(0, 20))
                 .stream()
                 .map(AdminAccessResponse::from)
@@ -195,13 +196,18 @@ public class AgentRegistryController {
             String icon,
             @JsonProperty("created_at") Instant createdAt,
             @JsonProperty("effective_role") String effectiveRole,
+            @JsonProperty("content_role") String contentRole,
             Map<String, Object> summary
     ) {
         static AgentInstanceResponse from(AgentInstance instance, Map<String, Object> summary, String effectiveRole) {
+            return from(instance, summary, effectiveRole, effectiveRole);
+        }
+
+        static AgentInstanceResponse from(AgentInstance instance, Map<String, Object> summary, String effectiveRole, String contentRole) {
             return new AgentInstanceResponse(instance.getId(), instance.getAgentType(), instance.getDisplayName(),
                     instance.getMailboxIdentity(), instance.getDescription(), instance.getStatus(),
                     instance.getBasePath(), instance.getAllowedRoles(), instance.getCreatedBy(),
-                    instance.getColor(), instance.getIcon(), instance.getCreatedAt(), effectiveRole, summary);
+                    instance.getColor(), instance.getIcon(), instance.getCreatedAt(), effectiveRole, contentRole, summary);
         }
     }
 

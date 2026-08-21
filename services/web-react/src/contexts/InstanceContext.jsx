@@ -48,12 +48,24 @@ export function InstanceProvider({ children }) {
     setInstanceId(fallback.id);
   }, [instances]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const currentInstanceRole = currentInstance?.effective_role || "viewer";
+  const currentInstanceRole = currentInstance?.effective_role || "";
+  const currentInstanceContentRole = currentInstance?.content_role || "";
 
   const hasRole = (minimum) => roleAtLeast(currentInstanceRole, minimum);
+  const hasContentRole = (minimum) => roleAtLeast(currentInstanceContentRole, minimum);
 
   return (
-    <InstanceContext.Provider value={{ instanceId, setInstanceId, instances, setInstances, currentInstance, currentInstanceRole, hasRole }}>
+    <InstanceContext.Provider value={{
+      instanceId,
+      setInstanceId,
+      instances,
+      setInstances,
+      currentInstance,
+      currentInstanceRole,
+      currentInstanceContentRole,
+      hasRole,
+      hasContentRole,
+    }}>
       {children}
     </InstanceContext.Provider>
   );
