@@ -31,6 +31,7 @@ public class AgentRegistryService {
     private final GatewayProperties props;
     private final AgentInstanceRepository instances;
     private final AgentInstanceGrantRepository grants;
+    private final InstanceGrantService grantService;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     /**
@@ -68,11 +69,12 @@ public class AgentRegistryService {
     private record ManifestCacheEntry(GatewayProperties.AgentType type, Instant expiresAt) {}
 
     public AgentRegistryService(GatewayProperties props, AgentInstanceRepository instances,
-                                AgentInstanceGrantRepository grants, RestClient.Builder builder,
-                                ObjectMapper objectMapper) {
+                                AgentInstanceGrantRepository grants, InstanceGrantService grantService,
+                                RestClient.Builder builder, ObjectMapper objectMapper) {
         this.props = props;
         this.instances = instances;
         this.grants = grants;
+        this.grantService = grantService;
         this.restClient = builder.build();
         this.objectMapper = objectMapper;
     }
@@ -303,12 +305,10 @@ public class AgentRegistryService {
                 request.description(),
                 request.status() == null || request.status().isBlank() ? "active" : request.status(),
                 type.getBasePath(),
-                // Private by default. allowed_roles grants access to every account
-                // holding that global role, so defaulting it to "owner" meant a
-                // second owner-role user could read this mailbox by naming the
-                // instance in X-Agora-Agent-Instance — verified reading another
-                // tenant's real inbox. Only an admin may deliberately widen it;
-                // everyone else gets creator + explicit grants + admin.
+                // Private by default. allowed_roles grants platform visibility
+                // only; mailbox-content access still requires creator ownership
+                // or an explicit per-instance grant. Only an admin may
+                // deliberately widen who can see that the instance exists.
                 admin && request.allowedRoles() != null && !request.allowedRoles().isBlank() ? request.allowedRoles() : "",
                 username,
                 request.color() == null || request.color().isBlank() ? type.getColor() : request.color(),
@@ -380,8 +380,13 @@ public class AgentRegistryService {
             return summary;
         }
         putConnectionStatus(summary, instance, username);
-        summary.put("pending_drafts", safePendingDrafts(instance, username));
-        summary.put("today_cost_eur", safeTodayCost(instance, username));
+        if (hasContentAccess(instance, username)) {
+            summary.put("pending_drafts", safePendingDrafts(instance, username));
+            summary.put("today_cost_eur", safeTodayCost(instance, username));
+        } else {
+            summary.put("pending_drafts", 0);
+            summary.put("today_cost_eur", 0.0);
+        }
         putSetupStatus(summary, instance, username);
         return summary;
     }
@@ -461,8 +466,14 @@ public class AgentRegistryService {
             status.put("connection_status", "unknown");
             status.put("error", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
         }
-        status.put("pending_drafts", safePendingDrafts(instance, username));
+        status.put("pending_drafts", hasContentAccess(instance, username)
+                ? safePendingDrafts(instance, username)
+                : 0);
         return status;
+    }
+
+    private boolean hasContentAccess(AgentInstance instance, String username) {
+        return grantService.contentRole(instance.getId(), username).isPresent();
     }
 
     private static String nullableText(JsonNode node) {

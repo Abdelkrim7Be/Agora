@@ -58,6 +58,39 @@ public class InstanceGrantService {
     }
 
     /**
+     * Resolve the role allowed to read the mailbox itself, as opposed to seeing
+     * that the instance exists and administering it. Two steps of effectiveRole()
+     * deliberately do not carry over:
+     *
+     *   - allowedRoles. Naming a global role there is a visibility setting, and
+     *     letting it double as message access meant any other account holding
+     *     that role could read the mailbox by naming the instance in
+     *     X-Agora-Agent-Instance.
+     *   - a grant held by a platform admin. Admins can grant themselves one to
+     *     get an instance unstuck; that is an operations path, not a licence to
+     *     read someone's mail, and the attempt is audited as a denial.
+     *
+     * What is left is the creator plus whoever the creator deliberately
+     * delegated to.
+     */
+    public Optional<String> contentRole(String agentInstanceId, String userId) {
+        Optional<AgentInstance> instance = instances.findById(agentInstanceId);
+        if (instance.isPresent()) {
+            if (userId != null && userId.equals(instance.get().getCreatedBy())) return Optional.of("owner");
+            if (isPlatformAdmin(userId)) return Optional.empty();
+            Optional<AgentInstanceGrant> grant = grants.findByAgentInstanceIdAndUserId(agentInstanceId, userId);
+            if (grant.isPresent() && active(grant.get())) return Optional.of(grant.get().getRole());
+        }
+        return Optional.empty();
+    }
+
+    private boolean isPlatformAdmin(String userId) {
+        return users.findByUsername(userId)
+                .map(user -> "admin".equalsIgnoreCase(user.getRole()))
+                .orElse(false);
+    }
+
+    /**
      * True when the effective role is sufficient for the requested operation tier.
      * "write" requires owner; "approve" requires approver or owner; "read" requires any granted role.
      */
@@ -147,10 +180,7 @@ public class InstanceGrantService {
     }
 
     private void requireAdminGrantExpiry(String userId, Instant requestedExpiresAt, Instant resolvedExpiresAt) {
-        boolean targetIsAdmin = users.findByUsername(userId)
-                .map(user -> "admin".equalsIgnoreCase(user.getRole()))
-                .orElse(false);
-        if (!targetIsAdmin) {
+        if (!isPlatformAdmin(userId)) {
             return;
         }
         Instant latestAllowed = Instant.now().plus(DEFAULT_VIEWER_GRANT_HOURS, ChronoUnit.HOURS);

@@ -153,12 +153,12 @@ class AgentRegistryTest {
                 .andExpect(jsonPath("$[0].agent_type").value("email-agent"))
                 .andExpect(jsonPath("$[0].display_name").value("Default Email Agent"))
                 .andExpect(jsonPath("$[0].effective_role").value("viewer"))
+                .andExpect(jsonPath("$[0].content_role").value(""))
                 .andExpect(jsonPath("$[0].summary.service_health").value("healthy"))
-                .andExpect(jsonPath("$[0].summary.pending_drafts").value(2))
-                .andExpect(jsonPath("$[0].summary.today_cost_eur").value(1.25));
+                .andExpect(jsonPath("$[0].summary.pending_drafts").value(0))
+                .andExpect(jsonPath("$[0].summary.today_cost_eur").value(0.0));
 
-        wireMock.verify(getRequestedFor(urlEqualTo("/drafts"))
-                .withHeader("X-Agora-User", equalTo("viewer"))
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/drafts"))
                 .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 

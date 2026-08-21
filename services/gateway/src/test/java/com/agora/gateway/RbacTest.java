@@ -98,7 +98,7 @@ class RbacTest {
     }
 
     @Test
-    void viewer_can_read_run() throws Exception {
+    void viewer_without_content_role_cannot_read_run() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/run/abc"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -107,10 +107,9 @@ class RbacTest {
 
         mockMvc.perform(get("/api/agent/run/abc")
                         .header("Authorization", "Bearer " + login("viewer", "viewerpass")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.run_id").value("abc"));
+                .andExpect(status().isForbidden());
 
-        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/run/abc")));
+        wireMock.verify(0, getRequestedFor(urlPathEqualTo("/run/abc")));
     }
 
     @Test
@@ -1188,7 +1187,7 @@ class RbacTest {
     }
 
     @Test
-    void admin_with_instance_grant_can_read_inbox() throws Exception {
+    void admin_with_instance_grant_cannot_read_inbox() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlPathEqualTo("/inbox"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -1208,9 +1207,9 @@ class RbacTest {
 
         mockMvc.perform(get("/api/agent/inbox?limit=25")
                         .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
 
-        wireMock.verify(1, getRequestedFor(urlPathEqualTo("/inbox")));
+        wireMock.verify(0, getRequestedFor(urlPathEqualTo("/inbox")));
     }
 
     @Test

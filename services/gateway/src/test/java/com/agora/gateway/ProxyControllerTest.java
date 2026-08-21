@@ -201,6 +201,67 @@ class ProxyControllerTest {
     }
 
     @Test
+    void admin_without_instance_role_cannot_read_mailbox_content() throws Exception {
+        String instanceId = "owner-private-admin-content";
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + ownerToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", instanceId,
+                                "agent_type", "email-agent",
+                                "display_name", "Owner Private Admin Content"
+                        ))))
+                .andExpect(status().isCreated());
+
+        String token = adminToken();
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Agora-Agent-Instance", instanceId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/agent/runs?status=pending_approval")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Agora-Agent-Instance", instanceId))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/inbox")));
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/runs?status=pending_approval")));
+    }
+
+    @Test
+    void allowed_roles_visibility_does_not_grant_mailbox_content_access() throws Exception {
+        String instanceId = "allowed-owner-visible-only";
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", instanceId,
+                                "agent_type", "email-agent",
+                                "display_name", "Allowed Owner Visible Only",
+                                "allowed_roles", "owner"
+                        ))))
+                .andExpect(status().isCreated());
+
+        String token = ownerToken();
+        mockMvc.perform(get("/agent-instances")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id=='" + instanceId + "')].effective_role").value("owner"))
+                .andExpect(jsonPath("$[?(@.id=='" + instanceId + "')].content_role").value(""));
+
+        mockMvc.perform(get("/api/agent/inbox")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Agora-Agent-Instance", instanceId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/agent/runs?status=pending_approval")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Agora-Agent-Instance", instanceId))
+                .andExpect(status().isForbidden());
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/inbox")));
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/runs?status=pending_approval")));
+    }
+
+    @Test
     void admin_proxy_access_is_visible_to_instance_owner() throws Exception {
         wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/inbox"))
                 .willReturn(aResponse()
@@ -221,21 +282,24 @@ class ProxyControllerTest {
         mockMvc.perform(get("/api/agent/inbox")
                         .header("Authorization", "Bearer " + adminToken())
                         .header("X-Agora-Agent-Instance", "default-email-agent"))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
 
         assertThat(auditRepository.findAll()).anyMatch(event ->
-                "admin_mailbox_access".equals(event.getAction())
+                "mailbox_content_access".equals(event.getAction())
                         && "/agent-instances/default-email-agent".equals(event.getPath())
                         && "admin".equals(event.getUsername())
-                        && Integer.valueOf(200).equals(event.getUpstreamStatus()));
+                        && event.getUpstreamStatus() == null
+                        && "denied GET /api/agent/inbox".equals(event.getOutcome()));
 
         mockMvc.perform(get("/agent-instances/default-email-agent/admin-access")
                         .header("Authorization", "Bearer " + ownerToken()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].username").value("admin"))
                 .andExpect(jsonPath("$[0].method").value("GET"))
-                .andExpect(jsonPath("$[0].upstream_status").value(200))
-                .andExpect(jsonPath("$[0].outcome").value("GET /api/agent/inbox"));
+                .andExpect(jsonPath("$[0].upstream_status").doesNotExist())
+                .andExpect(jsonPath("$[0].outcome").value("denied GET /api/agent/inbox"));
+
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/inbox")));
     }
 
     @Test

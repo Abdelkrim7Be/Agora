@@ -11,8 +11,8 @@ const TAB_GROUPS = [
     tabs: [
       { to: 'guide', icon: 'help', label: 'Guide' },
       { to: '', end: true, icon: 'dashboard', label: 'Tableau de bord' },
-      { to: 'validation', icon: 'inbox', label: 'À valider' },
-      { to: 'inbox', icon: 'mail', label: 'Messages' },
+      { to: 'validation', icon: 'inbox', label: 'À valider', minContentRole: 'viewer' },
+      { to: 'inbox', icon: 'mail', label: 'Messages', minContentRole: 'viewer' },
       { to: 'notifications', icon: 'notifications', label: 'Notifications' },
     ],
   },
@@ -77,14 +77,15 @@ function declaredSections(agentType, types) {
 
 export default function WorkspaceSidebar() {
   const { globalRole } = useAuth();
-  const { instanceId, currentInstance, hasRole } = useInstance();
+  const { instanceId, currentInstance, hasRole, hasContentRole } = useInstance();
   const params = useParams();
   const typesQuery = useAgentTypesQuery();
-  const pendingQuery = usePendingRunsQuery(0);
+  const canReadContent = hasContentRole('viewer');
+  const pendingQuery = usePendingRunsQuery(0, {}, canReadContent);
   const unreadQuery = useUnreadCountQuery();
   const id = params.instanceId || instanceId;
   const typeLabel = agentTypeLabel(currentInstance?.agent_type, typesQuery.data || []);
-  const pendingCount = pendingQuery.data?.runs?.length ?? 0;
+  const pendingCount = canReadContent ? pendingQuery.data?.runs?.length ?? 0 : 0;
   const unreadCount = unreadQuery.data?.unread_count ?? 0;
   const declared = declaredSections(currentInstance?.agent_type, typesQuery.data);
 
@@ -106,7 +107,11 @@ export default function WorkspaceSidebar() {
 
       <nav className="workspace-tabs" aria-label="Onglets de l'espace de travail">
         {TAB_GROUPS.map((group) => {
-          const tabs = group.tabs.filter((tab) => (!tab.minRole || hasRole(tab.minRole)) && (!tab.minGlobalRole || globalRole === tab.minGlobalRole));
+          const tabs = group.tabs.filter((tab) => (
+            (!tab.minRole || hasRole(tab.minRole))
+            && (!tab.minContentRole || hasContentRole(tab.minContentRole))
+            && (!tab.minGlobalRole || globalRole === tab.minGlobalRole)
+          ));
           if (!tabs.length) return null;
           return (
             <div className="tab-group" key={group.label}>

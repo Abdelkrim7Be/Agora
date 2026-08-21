@@ -147,6 +147,13 @@ public class ProxyController {
                 writeForbidden(response);
                 return;
             }
+            if (isMailboxContentRead(downstreamPath, request.getMethod())
+                    && grantService.contentRole(agentInstance, username).isEmpty()) {
+                auditService.record(username, jwtRole, "mailbox_content_access", request.getMethod(),
+                        "/agent-instances/" + agentInstance, null, "denied " + deriveAction(request));
+                writeForbidden(response);
+                return;
+            }
         }
 
         var headerNames = request.getHeaderNames();
@@ -238,6 +245,13 @@ public class ProxyController {
             if (path.startsWith(prefix)) return "approve";
         }
         return "write";
+    }
+
+    private boolean isMailboxContentRead(String path, String method) {
+        if (!"GET".equals(method)) return false;
+        return path.equals("/api/agent/inbox")
+                || path.equals("/api/agent/runs")
+                || path.startsWith("/api/agent/run/");
     }
 
     /**

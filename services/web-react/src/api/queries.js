@@ -317,10 +317,10 @@ export function useSetUserPassword() {
 
 // --- Validation (pending-approval queue) ---
 
-export function usePendingRunsQuery(page, filters = {}) {
+export function usePendingRunsQuery(page, filters = {}, enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
-  const { instanceId } = useInstance();
+  const { instanceId, hasContentRole } = useInstance();
   const params = new URLSearchParams({
     status: 'pending_approval',
     limit: String(PENDING_PAGE_SIZE),
@@ -333,7 +333,7 @@ export function usePendingRunsQuery(page, filters = {}) {
   return useQuery({
     queryKey: ['pending-runs', instanceId, page, filters.category || '', filters.priority || '', filters.q || '', filters.since || ''],
     queryFn: () => api(`/api/agent/runs?${params.toString()}`),
-    enabled: Boolean(token) && Boolean(instanceId),
+    enabled: Boolean(token) && Boolean(instanceId) && enabled && hasContentRole('viewer'),
     refetchInterval: 30_000,
   });
 }
@@ -447,11 +447,11 @@ export const inboxQueryPath = (mailbox = 'inbox', refresh = false) => {
 export function useInboxQuery(mailbox = 'inbox', refreshNonce = 0) {
   const { api } = useApi();
   const { token } = useAuth();
-  const { instanceId } = useInstance();
+  const { instanceId, hasContentRole } = useInstance();
   return useQuery({
     queryKey: [...inboxQueryKey(instanceId, mailbox), refreshNonce],
     queryFn: () => api(inboxQueryPath(mailbox, refreshNonce > 0)),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId) && hasContentRole('viewer'),
     placeholderData: (previous) => previous,
   });
 }
@@ -484,10 +484,11 @@ export function useForceAgentOnMessage() {
 export function useRunDetailQuery(runId) {
   const { api } = useApi();
   const { token } = useAuth();
+  const { hasContentRole } = useInstance();
   return useQuery({
     queryKey: ['run-detail', runId],
     queryFn: () => api(`/api/agent/run/${runId}/detail`),
-    enabled: Boolean(token && runId),
+    enabled: Boolean(token && runId) && hasContentRole('viewer'),
   });
 }
 
