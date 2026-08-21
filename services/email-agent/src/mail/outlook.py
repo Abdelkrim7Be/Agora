@@ -36,6 +36,7 @@ from src.outbound_guard import email_addresses, enforce_outbound_allowlist
 from src.outlook_oauth import GRAPH_BASE, refresh_access_token
 from src.send_mode import effective_dry_run
 from src.state import EmailInput
+from src.utils import THREAD_BLOCK_SEPARATOR
 
 # Gmail label ids that the rest of the codebase treats as mailbox state rather
 # than user-visible labels.
@@ -315,6 +316,12 @@ class OutlookProvider:
         )
 
     # --- read ------------------------------------------------------------
+    def get_message_headers(self, msg_id: str) -> dict:
+        # Graph does not have Gmail's exact metadataHeaders mode in this provider.
+        # The sensitivity no-body guarantee is Gmail-specific; Outlook keeps the
+        # existing full fetch behavior until a native metadata path is added.
+        return self.get_message(msg_id)
+
     def get_message(self, msg_id: str) -> dict:
         message = self._request("GET", f"/me/messages/{msg_id}?$select={self.FULL_FIELDS}")
         if message.get("hasAttachments"):
@@ -359,7 +366,7 @@ class OutlookProvider:
             if len(body) > max_chars_per_message:
                 body = body[:max_chars_per_message] + "\n…[truncated]"
             blocks.append(f"From: {author}\nDate: {date}\n\n{body}")
-        return "\n\n---\n\n".join(blocks)
+        return THREAD_BLOCK_SEPARATOR.join(blocks)
 
     def fetch_sender_correspondence(
         self,
@@ -547,9 +554,14 @@ class OutlookProvider:
         self._request("POST", "/me/sendMail", json=payload)
         return {"status": "sent", "to": to, "subject": subject}
 
-    def send_message(self, to: str, subject: str, body: str) -> dict:
+    def send_message(
+        self, to: str, subject: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
         if effective_dry_run():
             return _dry_run_result("send_message", to=to, subject=subject)
+        if attachments:
+            # Attachment passthrough is Gmail-only for now — see docs/mail-providers.md.
+            raise NotImplementedError("Outlook send attachments are not yet supported.")
         return self._send_mail(to, subject, body)
 
     def send_html_message(
@@ -560,10 +572,18 @@ class OutlookProvider:
         return self._send_mail(to, subject, text, html=html)
 
     def create_draft(
-        self, to: str, subject: str, body: str, thread_id: str | None = None
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> dict:
         if effective_dry_run():
             return _dry_run_result("create_draft", to=to, subject=subject)
+        if attachments:
+            # Attachment passthrough is Gmail-only for now — see docs/mail-providers.md.
+            raise NotImplementedError("Outlook draft attachments are not yet supported.")
         # Drafts never leave the mailbox, but the allowlist still applies: a draft
         # is one click from a send, and this mirrors the Gmail policy.
         enforce_outbound_allowlist(to)
@@ -596,20 +616,33 @@ class OutlookProvider:
         self._request("POST", f"/me/messages/{draft_id}/send")
         return {"status": "sent", "id": draft_id, "action": action}
 
-    def forward_message(self, message_id: str, to: str, note: str) -> dict:
+    def forward_message(
+        self, message_id: str, to: str, note: str, attachments: list[dict] | None = None
+    ) -> dict:
         if effective_dry_run():
             return _dry_run_result("forward_message", message_id=message_id, to=to)
+        if attachments:
+            # Attachment passthrough is Gmail-only for now — see docs/mail-providers.md.
+            raise NotImplementedError("Outlook forward attachments are not yet supported.")
         enforce_outbound_allowlist(to)
         return self._reply_draft(message_id, "createForward", note, to=to)
 
-    def notify_internal_message(self, to: str | list[str], subject: str, note: str) -> dict:
+    def notify_internal_message(
+        self, to: str | list[str], subject: str, note: str, attachments: list[dict] | None = None
+    ) -> dict:
         if effective_dry_run():
             return _dry_run_result("notify_internal_message", to=to, subject=subject)
+        if attachments:
+            raise NotImplementedError("Outlook notify attachments are not yet supported.")
         return self._send_mail(to, subject, note)
 
-    def reply_all_message(self, message_id: str, body: str) -> dict:
+    def reply_all_message(
+        self, message_id: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
         if effective_dry_run():
             return _dry_run_result("reply_all_message", message_id=message_id)
+        if attachments:
+            raise NotImplementedError("Outlook reply-all attachments are not yet supported.")
         # reply-all takes no explicit recipient list, so the allowlist is checked
         # against the recipients Graph derived — the same gap the Gmail path
         # closes inside its send helper.

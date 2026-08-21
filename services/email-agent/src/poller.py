@@ -82,7 +82,7 @@ from src.automation import (
     record_digest_item,
     workflow_sla_snapshot,
 )
-from src.config import load_config, settings
+from src.config import load_config, settings, validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
 from src.runtime_settings import load_runtime_settings
 from src.memory import ORIGIN_LEARNED, namespace, wrap_preferences
 from src.style_learning import analyze_style, build_style_text
@@ -92,12 +92,14 @@ from src.mail import get_provider
 from src.categories import classify_category, load_categories
 from src.junk_config import load_junk
 from src.junk_gate import is_junk
+from src.sensitivity_config import SensitivityConfig, load_sensitivity
+from src.sensitivity_gate import is_sensitive
 from src.graph import overall_workflow, reload_config
 from src.migrate import upgrade_to_head
 from src.postgres import validate_runtime_role
 from src.run_lock import try_claim_message
 from src.notifications import notify_overdue_approval, notify_pending_approval
-from src.dlq import record_dead_letter, setup_dlq
+from src.dlq import claim_dead_letter, record_dead_letter, setup_dlq
 from src.metrics import inc_counter
 from src.health import aggregate_health
 from src.alerts import evaluate_alerts
@@ -133,6 +135,29 @@ def _http_status_code(exc: Exception) -> int | None:
         return int(status) if status is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _sensitivity_active(config: SensitivityConfig | None = None) -> bool:
+    config = config or load_sensitivity(agent_instance_id=current_agent_instance_id())
+    return bool(config.enabled and config.has_rules())
+
+
+def _notify_sensitive_message(provider, email_input: dict, reason: str) -> None:
+    recipient = (settings.alert_admin_recipient_default or "").strip()
+    if not settings.notify_enabled or not recipient:
+        return
+    subject = f"Email sensible à traiter manuellement : {email_input.get('subject') or '(sans objet)'}"
+    note = (
+        "Un email a été reconnu comme sensible et n'a pas été ouvert par l'agent.\n\n"
+        f"Expéditeur : {email_input.get('author') or 'inconnu'}\n"
+        f"Sujet : {email_input.get('subject') or '(sans objet)'}\n"
+        f"Raison : {reason}\n\n"
+        "Ouvrez la boîte mail directement pour le traiter."
+    )
+    try:
+        provider.notify_internal_message(recipient, subject, note)
+    except Exception as exc:
+        print(f"poller: sensitive-mail notification failed: {exc}")
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -540,10 +565,44 @@ async def _process_message_locked(
     if existing:
         if existing["status"] == "pending_approval":
             return (msg_id, existing["status"], existing["run_id"])
+        if existing["status"] == "sensitive_hold":
+            return (msg_id, "skipped", existing["run_id"])
         if existing["status"] != "security_hold":
             provider.mark_as_read(msg_id)
             return (msg_id, "skipped", existing["run_id"])
         retry_run_id = existing["run_id"]
+
+    sensitivity_config = load_sensitivity(agent_instance_id=current_agent_instance_id())
+    if message is None and _sensitivity_active(sensitivity_config):
+        header_message = provider.get_message_headers(msg_id)
+        header_labels = header_message.get("labelIds")
+        if header_labels is not None and ("INBOX" not in header_labels or "UNREAD" not in header_labels):
+            return (msg_id, "skipped", "")
+        header_input = {
+            **provider.to_email_input(header_message),
+            "agent_instance_id": current_agent_instance_id(),
+            "email_thread": "",
+        }
+        sensitive, sensitive_reason = is_sensitive(header_input, sensitivity_config)
+        if sensitive:
+            run_id = str(uuid.uuid4())
+            email_input = {
+                **header_input,
+                "category": "sensitive_manual",
+                "category_display_name": "Sensible - traitement manuel",
+                "sensitive_reason": sensitive_reason,
+            }
+            upsert_run(
+                run_id,
+                "sensitive_hold",
+                email_input=email_input,
+                classification="notify",
+                pending_action=None,
+                agent_instance_id=current_agent_instance_id(),
+            )
+            _notify_sensitive_message(provider, email_input, sensitive_reason)
+            print(f"poller: sensitivity-gated {msg_id} ({sensitive_reason})")
+            return (msg_id, "sensitive_hold", run_id)
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
     if message is None:
@@ -593,6 +652,23 @@ async def _process_message_locked(
                 f"poller: {msg_id} claimed by category '{claimed_category}' but "
                 f"junk-gated anyway ({junk_reason})"
             )
+    # An automation rule the owner wrote explicitly outranks the generic junk
+    # heuristic. Both agree the mail is bulk; only the rule says where to file it.
+    # Without this the shipped starter rules were dead on arrival: "archive
+    # promotions" keys on CATEGORY_PROMOTIONS, which is exactly what the junk gate
+    # drops first, so the label was never applied and the mail never left the inbox.
+    junk_rule_plan = build_rule_plan(gate_input, rules_config) if junk else None
+    # A rule that matched but asks for nothing is not a reason to pay for the full
+    # pipeline on bulk mail — it would fall straight through to the triage LLM.
+    if junk_rule_plan and not (junk_rule_plan["tool_calls"] or junk_rule_plan["terminal_status"]):
+        junk_rule_plan = None
+    if junk and junk_rule_plan:
+        print(
+            f"poller: {msg_id} is automated ({junk_reason}) but matches "
+            f"{', '.join(junk_rule_plan['matched_rules'])}; applying the rule instead"
+        )
+        junk = False
+
     if junk:
         run_id = str(uuid.uuid4())
         upsert_run(
@@ -771,15 +847,31 @@ def _unique_refs(refs: list[dict]) -> list[dict]:
     return unique
 
 
+# Run statuses that make a message a no-op for the main loop: it is either
+# finished or parked on a person. Only `security_hold` is missing, and that on
+# purpose — held runs are retried, by `retry_security_holds`, not here.
+_SETTLED_RUN_STATUSES = ("pending_approval", "completed", "notify", "failed")
+
+
 def _messages_awaiting_approval() -> set[str]:
-    """Gmail ids of this instance's runs already parked on a human decision."""
+    """Gmail ids this instance has already settled — nothing left for the loop.
+
+    history.list replays *changes*, not current state, so a message delivered
+    and then processed keeps reappearing in every window until the baseline
+    moves past it. With a truncated window the baseline never moves, so the same
+    already-finished messages were re-listed forever while new mail waited
+    outside the window. They are dropped before the cut, so the budget goes to
+    messages that can still do something.
+    """
     try:
-        pending = list_runs(
-            status="pending_approval",
-            user_id=None,
-            agent_instance_id=current_agent_instance_id(),
-            limit=500,
-        )
+        pending = []
+        for status in _SETTLED_RUN_STATUSES:
+            pending.extend(list_runs(
+                status=status,
+                user_id=None,
+                agent_instance_id=current_agent_instance_id(),
+                limit=500,
+            ))
     except Exception as exc:
         # Never let a registry hiccup stop detection; worst case is the old
         # behavior of re-fetching mail that will be deduped downstream anyway.
@@ -805,10 +897,37 @@ async def _discover_unread_refs(
     """
     refs: list[dict] | None = None
     truncated = False
+
+    # Mail already parked on a human keeps its UNREAD flag on purpose, so it
+    # reappears in every window forever. It has to be dropped BEFORE the window
+    # is truncated, not after.
+    #
+    # It used to be filtered further down, once the batch had already been cut
+    # to `max_results`. history.list returns changes oldest-first, so a mailbox
+    # holding twenty pending approvals spent its entire window budget on them,
+    # discarded them, processed nothing — and because a truncated window
+    # deliberately does not advance the baseline, asked for the exact same
+    # window again next cycle. Nothing ever drained it: a pending approval only
+    # clears when a person acts, and until then every message that arrived
+    # afterwards was invisible. The mailbox stopped taking new mail for good,
+    # while the poller looked busy.
+    awaiting_human = _messages_awaiting_approval()
+
+    def _ready(items: list[dict]) -> list[dict]:
+        # Deduplicated, minus anything already waiting on a person.
+        unique = _unique_refs(items)
+        if not awaiting_human:
+            return unique
+        return [ref for ref in unique if ref["id"] not in awaiting_human]
+
     baseline = get_last_history_id()
     if baseline:
         try:
-            history_refs = provider.fetch_changes_since(baseline)
+            # history.list reports one record per change, so the same message
+            # shows up several times in a window where it was e.g. delivered and
+            # then labelled. Deduplicating before the cut also stops those
+            # duplicates from eating the budget.
+            history_refs = _ready(provider.fetch_changes_since(baseline))
             truncated = len(history_refs) > max_results
             refs = history_refs[:max_results]
         except Exception as exc:
@@ -820,7 +939,7 @@ async def _discover_unread_refs(
     except Exception:
         next_baseline = ""
     if refs is None:
-        refs = provider.fetch_unread(max_results)
+        refs = _ready(provider.fetch_unread(max_results))
     elif not refs:
         # An empty history window means "nothing changed since the baseline",
         # which is not the same as "nothing is waiting". Anything that became
@@ -829,21 +948,10 @@ async def _discover_unread_refs(
         # diff forever after. This mailbox sat on unread mail for hours that way.
         # A full unread list is one call, and the run registry dedups whatever it
         # returns, so reconcile whenever the incremental path comes back empty.
-        refs = provider.fetch_unread(max_results)
+        refs = _ready(provider.fetch_unread(max_results))
 
-    # history.list reports one record per change, so the same message shows up
-    # several times in a window where it was e.g. delivered and then labelled.
-    refs = _unique_refs(refs)
-
-    # Mail already waiting on a human keeps its UNREAD flag on purpose, so every
-    # cycle rediscovers it forever. _process_message_locked would return it
-    # untouched anyway, but only after the batch below has fetched its full body:
-    # a mailbox holding twenty pending approvals re-downloaded twenty messages a
-    # minute, indefinitely, against the same Gmail quota that sends draw on.
-    # Drop them here instead, where it costs one registry read for the batch.
-    awaiting_human = _messages_awaiting_approval()
-    if awaiting_human:
-        refs = [ref for ref in refs if ref["id"] not in awaiting_human]
+    if prefetch and _sensitivity_active():
+        prefetch = False
 
     # Batch the full-message fetch when a cycle has more than 3 messages: one HTTP
     # round-trip per 50 instead of one per message. Failure falls back to the
@@ -1077,6 +1185,12 @@ async def maybe_seed_style_profile(instance_id: str, store, provider) -> None:
         print(f"poller: {instance_id} style auto-seed skipped: {exc}")
 
 
+def _mailbox_sync_dlq_entry_id(instance_id: str) -> str:
+    """Deterministic, so repeat failures on the same instance upsert one row
+    instead of flooding the DLQ with a fresh entry every poll cycle."""
+    return f"mailbox-sync-{instance_id}"
+
+
 async def poll_active_instances_once(
     graph,
     instance_ids: list[str] | None = None,
@@ -1116,6 +1230,21 @@ async def poll_active_instances_once(
                 except Exception as exc:
                     print(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))
+                    # A mailbox-level failure (OAuth, network) never reaches per-message
+                    # dead-lettering — no message was even fetched — so it was invisible
+                    # to the DLQ view even though it's exactly the kind of thing an admin
+                    # checking DLQ wants to see. Not requeueable (no email_input to run):
+                    # dlq_requeue rejects this reason, and the reviewer reconnects the
+                    # mailbox instead. A deterministic entry_id upserts one row per
+                    # instance instead of a fresh entry every poll cycle a broken
+                    # mailbox stays broken — it can run for hours between reconnects.
+                    record_dead_letter({
+                        "entry_id": _mailbox_sync_dlq_entry_id(instance_id),
+                        "reason": "mailbox_sync_failure",
+                        "error": str(exc),
+                        "agent_instance_id": instance_id,
+                        "payload": {"instance_id": instance_id},
+                    })
                     results[instance_id] = []
                     if _note_gmail_rate_limit(exc):
                         break
@@ -1125,6 +1254,14 @@ async def poll_active_instances_once(
                 if outcomes:
                     print(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
                 record_success("polling")
+                # Close out any mailbox_sync_failure entry this instance left open —
+                # a no-op when there isn't one (claim only succeeds from "dead_letter").
+                claim_dead_letter(
+                    _mailbox_sync_dlq_entry_id(instance_id),
+                    "dead_letter",
+                    "resolved",
+                    agent_instance_id=instance_id,
+                )
             finally:
                 await _run_instance_maintenance(instance_id)
     return results
@@ -1176,6 +1313,9 @@ async def sweep_active_instances_once(
 
 async def run_forever() -> None:
     """Poll the inbox every poll_interval_minutes against the durable graph."""
+    validate_model_redaction()
+    validate_gmail_webhook_config()
+    validate_live_send_config()
     validate_token_security()
     # With push webhooks on, polling is only a safety net — run it slowly.
     interval_minutes = (

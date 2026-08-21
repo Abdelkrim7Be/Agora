@@ -1,0 +1,177 @@
+/* ==========================================================================
+   Agora AI — design tokens
+   One source of truth. Nothing outside this file declares a raw colour.
+
+   Palette: "verdigris control room".
+     ink       #101E28  text, dark shell
+     slate     #51636D  secondary text, unreached rail segments
+     paper     #E9ECE9  page ground (cool, green-leaning neutral)
+     verdigris #0B6E5F  primary action + approved
+     brass     #B4762A  awaiting a human decision
+     rust      #A8352C  blocked / rejected
+
+   Each hue carries exactly one meaning. Verdigris is the primary because the
+   product's primary act is approving, so the button and the resulting state
+   are the same colour on purpose.
+
+   The ground sits a full step below the panels rather than a half step, so a
+   card is read by its edge instead of by a shadow. That is why --shadow-subtle
+   is almost nothing: the hairline carries the separation, not a blur.
+   ========================================================================== */
+:root {
+  color-scheme: light;
+
+  /* --- surfaces ---------------------------------------------------------- */
+  --background: #e9ece9;
+  --surface: #ffffff;
+  --surface-container: #ffffff;
+  --surface-lowest: #f5f7f5;
+  --surface-low: #eef1ee;
+  --surface-high: #e2e7e4;
+  --surface-highest: #d3dad6;
+
+  /* --- text and lines ---------------------------------------------------- */
+  --text: #101e28;
+  --muted: #51636d;
+  --outline: #ccd4d0;
+  --outline-strong: #7c8b90;
+
+  /* --- fields ------------------------------------------------------------
+     A field is read by its fill first and its edge second, so the border is
+     softer than --outline. It still clears 3:1 against the fill, because a
+     control whose boundary you cannot see is a control you cannot find. */
+  --field-bg: #eef1ef;
+  --field-bg-focus: #ffffff;
+  --field-border: #bcc6c1;
+  --field-placeholder: #8a979c;
+
+  /* --- verdigris: primary action, and the "approved" state ---------------- */
+  --primary: #0b6e5f;
+  --primary-strong: #085649;
+  --primary-text: #ffffff;
+  --accent: #0b6e5f;
+  --accent-bg: #e2edea;
+  --secondary: #0b6e5f;
+  --secondary-bg: #e2edea;
+
+  /* --- brass: awaiting a decision ---------------------------------------- */
+  --tertiary: #b4762a;
+  --tertiary-bg: #f7eedf;
+
+  /* --- rust: blocked or rejected ----------------------------------------- */
+  --danger: #a8352c;
+  --danger-bg: #f8e9e7;
+
+  /* --- verdict rail (signature element) ---------------------------------- */
+  --rail-width: 3px;
+  --rail-passed: var(--primary);
+  --rail-current: var(--tertiary);
+  --rail-blocked: var(--danger);
+  --rail-idle: var(--surface-highest);
+
+  /* --- shape: three radii, no others ------------------------------------- */
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-pill: 999px;
+  --radius: var(--radius-card);
+
+  /* Three control heights, not one.
+     A single 44px height lined fields and buttons up, but it also made every
+     toolbar action as heavy as a form submit — a page with six refresh buttons
+     read as six decisions. Size carries rank now: `sm` for the actions that sit
+     above a table, the default for anything inside a form, `lg` for the one
+     button that commits the page.
+     Fields keep the default height so a field and the button beside it still
+     line up, which was the point of unifying them in the first place. */
+  --control-height-sm: 32px;
+  --control-height: 38px;
+  --control-height-lg: 44px;
+
+  /* Horizontal padding paired with each height. */
+  --control-pad-sm: 0 10px;
+  --control-pad: 0 14px;
+  --control-pad-lg: 0 20px;
+
+  /* Field padding stays vertical-symmetric: textareas grow, so they cannot
+     use a fixed height and need real padding. */
+  --field-pad: 8px 14px;
+
+  /* --- spacing: 4px base ------------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* --- layout ------------------------------------------------------------ */
+  --sidebar: 276px;
+  --gutter: 24px;
+
+  /* --- elevation: hairlines separate, blur is reserved for true overlays -- */
+  --shadow-subtle: 0 1px 0 rgba(16, 30, 40, .03);
+  --shadow-panel: 0 22px 60px rgba(16, 30, 40, .12);
+  --focus-ring: rgba(11, 110, 95, .18);
+
+  /* --- overlays ----------------------------------------------------------- */
+  --scrim: rgba(16, 30, 40, .28);
+  --inset-line: rgba(16, 30, 40, .14);
+
+  /* --- type roles --------------------------------------------------------- */
+  --font-display: "Archivo", "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Source Sans 3", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-heading: var(--font-display);
+
+  /* Archivo carries a lot of weight per stem, so headings sit at 600-700 rather
+     than 800 — at 800 it reads blocky and editorial instead of calm. Tracking is
+     pulled in to compensate for the lighter weight at display sizes. */
+  --tracking-display: -.022em;
+  --tracking-heading: -.012em;
+  --tracking-label: .08em;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0c161c;
+  --surface: #132029;
+  --surface-container: #132029;
+  --surface-lowest: #0f1a21;
+  --surface-low: #1a2831;
+  --surface-high: #23343e;
+  --surface-highest: #2e424e;
+
+  --text: #e8edef;
+  --muted: #9db0bb;
+  --outline: #2a3d49;
+  --outline-strong: #6e838f;
+
+  /* Dark inverts the depth: the field sits a step *above* the panel. A field
+     darker than its panel reads as a hole punched in the surface. */
+  --field-bg: #1a2831;
+  --field-bg-focus: #1f303b;
+  --field-border: #334855;
+  --field-placeholder: #7b8f9b;
+
+  --primary: #3fa793;
+  --primary-strong: #5fc0ac;
+  --primary-text: #04211c;
+  --accent: #3fa793;
+  --accent-bg: rgba(63, 167, 147, .14);
+  --secondary: #3fa793;
+  --secondary-bg: rgba(63, 167, 147, .14);
+
+  --tertiary: #dca24e;
+  --tertiary-bg: rgba(220, 162, 78, .14);
+
+  --danger: #e2726a;
+  --danger-bg: rgba(226, 114, 106, .14);
+
+  --shadow-subtle: 0 1px 0 rgba(0, 0, 0, .18);
+  --shadow-panel: 0 24px 60px rgba(0, 0, 0, .38);
+  --focus-ring: rgba(63, 167, 147, .22);
+  --scrim: rgba(4, 10, 14, .56);
+  --inset-line: rgba(0, 0, 0, .28);
+}

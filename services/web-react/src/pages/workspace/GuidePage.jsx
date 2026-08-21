@@ -15,12 +15,12 @@ const EVERYDAY_SECTIONS = [
     ],
   },
   {
-    title: 'Validation et brouillons',
+    title: 'À valider',
     icon: 'inbox',
     body: [
-      'Rien ne part sans vous. Un brouillon vous attend dans Validation : vous pouvez l’accepter, le modifier avant envoi, demander une nouvelle version en expliquant ce qui ne va pas, ou l’ignorer.',
+      'Rien ne part sans vous. Un brouillon vous attend dans « À valider » : vous pouvez l’accepter, le modifier avant envoi, demander une nouvelle version en expliquant ce qui ne va pas, ou l’ignorer.',
       'Chaque correction est apprise : modifier un brouillon ajuste le style des suivants, en ignorer un ajuste le tri.',
-      'Brouillons regroupe tout ce qui est en attente, avec filtres par cas métier, priorité, texte et date.',
+      'Cette page regroupe tout ce qui est en attente, avec filtres par cas métier, priorité, texte et date.',
     ],
   },
   {
@@ -108,11 +108,28 @@ const ADMIN_SECTIONS = [
       'Coûts : consommation des modèles par période, pour suivre la dépense réelle de l’instance.',
     ],
   },
+  {
+    title: 'Signalements et audit plateforme',
+    icon: 'flag',
+    body: [
+      'N’importe quel utilisateur connecté peut signaler un problème depuis le bouton drapeau, en haut de l’écran. Les administrateurs en sont notifiés par e-mail (si un relais SMTP est configuré) et retrouvent chaque signalement dans « Signalements », avec une suggestion d’action générée par IA.',
+      '« Audit plateforme » lance en un clic une vérification de toutes les instances d’agents (santé, file d’erreurs) et de l’accès à la base de la plateforme, avec un verdict sain / avertissement / critique et un historique des audits passés.',
+    ],
+  },
 ];
+
+/** Stable anchor id from a section title, so a link survives a copy-paste. */
+function sectionId(title) {
+  return 'guide-' + String(title)
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
 
 function GuideSection({ section }) {
   return (
-    <section className="guide-section">
+    <section className="guide-section" id={sectionId(section.title)}>
       <h3>
         <span className="material-symbols-outlined" aria-hidden="true">{section.icon}</span>
         <span>{section.title}</span>
@@ -124,15 +141,49 @@ function GuideSection({ section }) {
   );
 }
 
+/**
+ * Contents, not tabs.
+ *
+ * A guide is scanned, not stepped through: you arrive knowing roughly what you
+ * are after and want to see whether it is covered. Tabs hide every section but
+ * one, so the reader has to open each in turn to find out what exists. A list
+ * of anchors shows the whole map and jumps.
+ */
+function GuideContents({ groups }) {
+  return (
+    <nav className="guide-contents" aria-label="Sommaire du guide">
+      {groups.map((group) => (
+        <div key={group.label}>
+          <span className="label-mono">{group.label}</span>
+          <ul>
+            {group.sections.map((section) => (
+              <li key={section.title}>
+                <a href={`#${sectionId(section.title)}`}>{section.title}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
 export default function GuidePage() {
   const { currentInstance, hasRole } = useInstance();
   const { globalRole } = useAuth();
   const isAdmin = (globalRole || '').toLowerCase() === 'admin';
   const isOwner = hasRole('owner');
 
+  const groups = [
+    { label: 'Au quotidien', sections: EVERYDAY_SECTIONS },
+    ...(isOwner || isAdmin ? [{ label: 'Configurer l’agent', sections: OWNER_SECTIONS }] : []),
+    ...(isAdmin ? [{ label: 'Administration', sections: ADMIN_SECTIONS }] : []),
+  ];
+
   return (
-    <div className="guide-page">
+    <div className="guide-page guide-layout">
       <PageHeading view="guide" />
+      <GuideContents groups={groups} />
       <Card>
         <div className="card-header">
           <div>

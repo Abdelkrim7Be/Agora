@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hmac
 import html
 import json
+import logging
 import os
 import re
 import threading
@@ -21,13 +23,17 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from langgraph.types import Command
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from src.config import settings
+logger = logging.getLogger(__name__)
+
+from src.config import settings, validate_gateway_shared_secret, validate_gmail_webhook_config, validate_live_send_config, validate_model_redaction
 from src.cost_tracker import list_costs, setup_cost_tracker, summarize as summarize_costs
 from src.trace import list_traces, setup_trace_store
 from src.dlq import claim_dead_letter, get_dead_letter, list_dead_letters, record_dead_letter, setup_dlq
 from src.metrics import render_metrics
+from src.manifest import build_manifest
+from src.image_fetch import ImageFetchError, fetch_image_bytes
 from src.categories import (
     CategoriesConfig,
     Category,
@@ -54,6 +60,7 @@ from src.capabilities import current_email_id, current_gmail_thread_id, hitl_app
 from src.graph import overall_workflow, reload_config
 from src.instance_config import read_instance_text, write_instance_text
 from src.junk_config import JunkConfig, load_junk, save_junk, suggest_junk_senders
+from src.sensitivity_config import SensitivityConfig, load_sensitivity, save_sensitivity
 from src.poller import gmail_rate_limit_pause_remaining, poll_history, poll_once, process_message_with_retry
 from src.memory import (
     ORIGIN_DEFAULT,
@@ -74,6 +81,7 @@ from src.roles import (
     update_role,
 )
 from src.contacts import (
+    AUDIENCE_VALUES,
     Contact,
     ContactCategoryError,
     ContactConflictError,
@@ -101,6 +109,7 @@ from src.run_registry import get_run as get_run_record
 from src.run_registry import delete_runs, find_run_by_email, list_runs, setup_run_registry, upsert_run
 from src.gmail_sync import get_last_history_id, history_id_is_newer, set_last_history_id, setup_gmail_sync
 from src.health import aggregate_health
+from src.shared_cache import cache_delete_prefix, cache_get_json, cache_set_json
 from src.alerts import AlertSettings, load_alert_settings, save_alert_settings
 from src.retention import RetentionSettings, load_retention_settings, preview_retention, run_retention, save_retention_settings
 from src.runtime_settings import RuntimeSettings, load_runtime_settings, save_runtime_settings
@@ -177,6 +186,9 @@ from src.media import (
     save_signature_image,
     signature_image_inline,
 )
+from src.run_attachments import AttachmentLimitError
+from src.run_attachments import save_attachment as save_run_attachment
+from src.run_attachments import staged_attachments as staged_run_attachments
 from src.ai_assist import TONES, adjust_tone, summarize_thread
 from src.memory_summary import MEMORY_KINDS, memory_items, remove_item, summarize_kind
 from src.persona import Persona, compiled_preview, load_persona, save_persona, suggest_persona
@@ -217,6 +229,10 @@ async def _watch_renewal_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_model_redaction()
+    validate_gateway_shared_secret()
+    validate_gmail_webhook_config()
+    validate_live_send_config()
     validate_token_security()
     upgrade_to_head()
     validate_runtime_role()
@@ -276,12 +292,24 @@ def _request_agent_instance_id(request: Request) -> str | None:
     return request.headers.get("x-agora-agent-instance")
 
 
+def _gateway_secret_is_valid(request: Request) -> bool:
+    expected = settings.gateway_shared_secret.strip()
+    if not expected:
+        return True
+    actual = request.headers.get("x-agora-gateway-secret", "")
+    return hmac.compare_digest(actual, expected)
+
+
+def _bypasses_gateway_secret(path: str) -> bool:
+    return path in {"/health", "/metrics"}
+
+
 def _require_instance_role(request: Request, min_role: str) -> None:
     """Defense-in-depth: verify the gateway-stamped instance role is sufficient.
 
     The gateway resolves and stamps X-Agora-Instance-Role before forwarding.
-    When the header is absent (direct call bypassing the gateway) no check is applied —
-    the gateway is the authoritative enforcement layer; this is an additional guard only.
+    The gateway resolves and stamps this after authenticating itself with the
+    shared gateway secret checked by tenant_context_middleware.
     Roles: owner > approver > viewer.
     """
     ROLE_TIER = {"owner": 3, "approver": 2, "viewer": 1}
@@ -306,6 +334,12 @@ def _require_dept_access(request: Request, record: dict | None) -> None:
 
 @app.middleware("http")
 async def tenant_context_middleware(request: Request, call_next):
+    if not _bypasses_gateway_secret(request.url.path) and not _gateway_secret_is_valid(request):
+        return Response(
+            content='{"detail":"gateway authentication required"}',
+            status_code=401,
+            media_type="application/json",
+        )
     with user_context(_request_user_id(request)):
         with agent_instance_context(_request_agent_instance_id(request)):
             return await call_next(request)
@@ -365,6 +399,12 @@ class CampaignPrepareInput(BaseModel):
 class ContactInput(BaseModel):
     email: str
     name: str | None = None
+    # Validated here, not only on the domain `Contact`. An unknown audience used
+    # to pass this model as a free string and then raise inside the handler,
+    # which FastAPI turns into a 500 — a client mistake reported as a server
+    # fault, with no indication of the accepted values. Kept as a validator
+    # rather than a Literal so the domain model's normalization still applies:
+    # "Client " remains valid input.
     audience: str
     fields: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
@@ -374,6 +414,14 @@ class ContactInput(BaseModel):
     priority: str | None = None
     category_source: str = "manual"
     category_confidence: float | None = None
+
+    @field_validator("audience")
+    @classmethod
+    def _known_audience(cls, value: str) -> str:
+        cleaned = str(value).strip().lower()
+        if cleaned not in AUDIENCE_VALUES:
+            raise ValueError(f"audience must be one of: {', '.join(AUDIENCE_VALUES)}")
+        return cleaned
 
 
 class SegmentInput(BaseModel):
@@ -446,6 +494,17 @@ class JunkInput(BaseModel):
     sender_heuristics: bool | None = None
 
 
+class SensitivityInput(BaseModel):
+    """Known-sensitive mail settings edited from the UI (metadata-only gate)."""
+
+    enabled: bool | None = None
+    allowed_senders: list[str] | None = None
+    allowed_domains: list[str] | None = None
+    blocked_senders: list[str] | None = None
+    blocked_domains: list[str] | None = None
+    subject_keywords: list[str] | None = None
+
+
 class RuleToggleInput(BaseModel):
     name: str
     enabled: bool
@@ -506,10 +565,12 @@ class RoleInput(BaseModel):
 
 
 class RuntimeSettingsInput(BaseModel):
-    sync_limit: int = Field(ge=1, le=100)
-    setup_recent_limit: int = Field(ge=1, le=200)
-    setup_backlog_limit: int = Field(ge=1, le=100)
-    setup_sent_sample: int = Field(ge=1, le=200)
+    sync_limit: int = Field(ge=1, le=500)
+    setup_recent_limit: int = Field(ge=1, le=500)
+    setup_backlog_limit: int = Field(ge=1, le=500)
+    setup_sent_sample: int = Field(ge=1, le=500)
+    # Fed whole into a single style-learning prompt, unlike the fields above (one call
+    # per message) — a small local model's context window caps this well below 500.
     style_sent_sample: int = Field(ge=1, le=50)
 
 
@@ -819,12 +880,34 @@ async def _stream_run_response(response: RunResponse):
     yield _sse_event("end", {"run_id": response.run_id, "status": response.status})
 
 
+def _record_decision_failure(run_id: str, action: str, exc: Exception, record: dict | None) -> None:
+    """File an API-path failure in the DLQ.
+
+    Best effort by design: a DLQ write that raises must never turn a failed
+    action into a second, different failure.
+    """
+    try:
+        record_dead_letter({
+            "message_id": (record or {}).get("email_id") or run_id,
+            "reason": f"decision_failed:{action}",
+            "error": f"{type(exc).__name__}: {exc}",
+            "payload": {"run_id": run_id, "action": action},
+        })
+    except Exception as dlq_exc:  # pragma: no cover - defensive
+        print(f"api: could not record the DLQ entry for run {run_id}: {dlq_exc}")
+
+
 def _pending_response_after_decision_error(run_id: str, exc: Exception, action: str) -> RunResponse | None:
     record = get_run_record(
         run_id,
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
     )
+    # The dead-letter queue only ever heard from the poller, so a failure on this
+    # path — an approval, a rejection, a redraft — left no trace anywhere the
+    # operator looks. The failure page said "no DLQ entries" while the action had
+    # visibly just failed in front of them.
+    _record_decision_failure(run_id, action, exc, record)
     if not record or record.get("status") != "pending_approval":
         return None
     print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
@@ -953,18 +1036,100 @@ def _execute_pending_action(run_id: str, args_override: dict | None = None) -> R
     return response
 
 
+ORPHANED_RUN_DETAIL = (
+    "This run's conversation state is gone, so it can no longer be approved, "
+    "edited or resumed. It has been marked as expired."
+)
+
+
+def _mark_run_orphaned(record: dict) -> None:
+    """Registry says pending, checkpointer has nothing — retire the row.
+
+    The two stores can drift (a storage-backend switch, a pruned checkpoint DB,
+    a restore from an older dump). Left alone, the run keeps showing up in the
+    approval queue as a card whose every button 404s, forever. Marking it here
+    means the person sees one honest "expirée" state instead.
+    """
+    try:
+        upsert_run(
+            record["run_id"],
+            "orphaned",
+            email_input=_record_email_input(record),
+            classification=record.get("classification"),
+            pending_action=None,
+            user_id=record.get("user_id"),
+            agent_instance_id=record.get("agent_instance_id") or current_agent_instance_id(),
+            created_at=record.get("created_at"),
+        )
+    except Exception as exc:  # pragma: no cover - defensive, never break the request
+        logger.warning("run %s could not be marked orphaned: %s", record.get("run_id"), exc)
+
+
+async def _run_has_state(graph, run_id: str) -> bool:
+    state = await graph.aget_state(_thread_config(run_id))
+    return bool(state.values)
+
+
 async def _require_run(graph, run_id: str) -> dict:
-    if get_run_record(
+    record = get_run_record(
         run_id,
         user_id=None,
         agent_instance_id=current_agent_instance_id(),
-    ) is None:
+    )
+    if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
     config = _thread_config(run_id)
-    state = await graph.aget_state(config)
-    if not state.values:
-        raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+    if not await _run_has_state(graph, run_id):
+        if record.get("status") in ACTIVE_RUN_STATUSES:
+            _mark_run_orphaned(record)
+        raise HTTPException(status_code=410, detail=ORPHANED_RUN_DETAIL)
     return config
+
+
+_reconciled_instances: set[str] = set()
+
+
+async def _ensure_orphans_reconciled(graph) -> None:
+    """Reconcile once per instance per process, on the first queue read.
+
+    Doing this at startup instead would have to guess the instance list; the
+    first listing request already carries the tenant context we need.
+    """
+    instance_id = current_agent_instance_id()
+    if instance_id in _reconciled_instances:
+        return
+    _reconciled_instances.add(instance_id)
+    try:
+        retired = await reconcile_orphaned_runs(graph)
+    except Exception as exc:  # pragma: no cover - never fail a listing over this
+        logger.warning("orphan reconciliation failed for %s: %s", instance_id, exc)
+        return
+    if retired:
+        logger.warning("marked %s run(s) orphaned on %s: no checkpoint state", retired, instance_id)
+
+
+async def reconcile_orphaned_runs(graph, limit: int = 500) -> int:
+    """Retire queued runs whose checkpoint no longer exists. Runs at startup so
+    the approval queue never opens on cards that cannot be acted on."""
+    orphaned = 0
+    for status in ACTIVE_RUN_STATUSES:
+        for record in list_runs(
+            status=status,
+            user_id=None,
+            agent_instance_id=current_agent_instance_id(),
+            limit=limit,
+        ):
+            run_id = record.get("run_id")
+            if not run_id:
+                continue
+            try:
+                has_state = await _run_has_state(graph, run_id)
+            except Exception:  # pragma: no cover - a probe failure is not proof of absence
+                continue
+            if not has_state:
+                _mark_run_orphaned(record)
+                orphaned += 1
+    return orphaned
 
 
 def _require_pending(run_id: str) -> None:
@@ -1106,6 +1271,16 @@ async def health() -> dict:
     return {"status": "ok", "storage_backend": settings.storage_backend, **components}
 
 
+@app.get("/manifest")
+async def manifest() -> dict:
+    """Agent self-description, read by the gateway's agent registry.
+
+    Unauthenticated and tenant-free on purpose: it describes the agent type, so
+    there is nothing here that belongs to a user. See `src/manifest.py`.
+    """
+    return build_manifest()
+
+
 
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics(request: Request) -> PlainTextResponse:
@@ -1149,6 +1324,11 @@ async def dlq_requeue(request: Request, entry_id: str) -> dict:
     entry = get_dead_letter(entry_id, agent_instance_id=current_agent_instance_id())
     if entry is None:
         raise HTTPException(status_code=404, detail="DLQ entry not found")
+    if entry.get("reason") == "mailbox_sync_failure":
+        raise HTTPException(
+            status_code=400,
+            detail="A mailbox connection failure has no email to replay — reconnect the mailbox instead.",
+        )
     claimed = claim_dead_letter(
         entry_id,
         "dead_letter",
@@ -1639,11 +1819,17 @@ async def get_categories() -> dict:
 
 @app.put("/categories")
 async def update_categories(body: CategoriesInput) -> dict:
-    data = yaml.safe_load(body.categories_yaml) or {}
+    try:
+        data = yaml.safe_load(body.categories_yaml) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid categories YAML: {exc}") from exc
     data.setdefault("categories", [])
     data.setdefault("templates", [])
     data.setdefault("contacts", [])
-    parsed = CategoriesConfig(**data)
+    try:
+        parsed = CategoriesConfig(**data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid categories config: {exc}") from exc
     write_instance_text("categories", body.categories_yaml, DEFAULT_CATEGORIES_PATH)
     return {
         "agent_instance_id": current_agent_instance_id(),
@@ -1666,6 +1852,10 @@ class CategoryUpdateInput(BaseModel):
     template: str | None = None
     require_approval: bool = False
     external_send_allowed: bool = True
+    # Which tools this workflow may execute. None keeps the policy's own action
+    # set; a list replaces it. Narrows only — it cannot grant a tool that
+    # security/policy.yaml denies.
+    allowed_actions: list[str] | None = None
 
 
 class CategoryProposalActionInput(BaseModel):
@@ -1856,6 +2046,7 @@ async def update_category_endpoint(name: str, body: CategoryUpdateInput, request
             cat.route_to = body.route_to
             cat.require_approval = body.require_approval
             cat.external_send_allowed = body.external_send_allowed
+            cat.allowed_actions = body.allowed_actions
             if body.instructions:
                 cat.instructions = CategoryInstructions(**body.instructions)
             else:
@@ -2688,6 +2879,34 @@ async def update_junk(request: Request, body: JunkInput) -> dict:
     }
 
 
+@app.get("/sensitivity")
+async def get_sensitivity(request: Request) -> dict:
+    """Sensitivity-gate settings for this instance."""
+    _require_instance_role(request, "viewer")
+    config = load_sensitivity(agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "sensitivity": config.model_dump(),
+    }
+
+
+@app.put("/sensitivity")
+async def update_sensitivity(request: Request, body: SensitivityInput) -> dict:
+    """Patch sensitivity-gate settings; omitted fields keep their current value."""
+    _require_instance_role(request, "owner")
+    current = load_sensitivity(agent_instance_id=current_agent_instance_id())
+    patch = body.model_dump(exclude_none=True)
+    for key in ("allowed_senders", "allowed_domains", "blocked_senders", "blocked_domains", "subject_keywords"):
+        if key in patch:
+            patch[key] = [item.strip().lower() for item in patch[key] if item and item.strip()]
+    updated = SensitivityConfig(**{**current.model_dump(), **patch})
+    save_sensitivity(updated, agent_instance_id=current_agent_instance_id())
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "sensitivity": updated.model_dump(),
+    }
+
+
 @app.get("/rules")
 async def get_rules() -> dict:
     rules_yaml = read_instance_text("rules", DEFAULT_RULES_PATH) or "enabled: false\n"
@@ -2699,10 +2918,16 @@ async def get_rules() -> dict:
 
 @app.put("/rules")
 async def update_rules(body: RulesInput) -> dict:
-    data = yaml.safe_load(body.rules_yaml) or {}
+    try:
+        data = yaml.safe_load(body.rules_yaml) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid rules YAML: {exc}") from exc
     if data.get("rules") is None:
         data["rules"] = []
-    parsed = RulesConfig(**data)  # validate before persisting
+    try:
+        parsed = RulesConfig(**data)  # validate before persisting
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid rules config: {exc}") from exc
     # Persist the user's raw YAML verbatim so comments/formatting survive a round-trip.
     write_instance_text("rules", body.rules_yaml, DEFAULT_RULES_PATH)
     return {
@@ -3171,6 +3396,36 @@ async def upload_signature_image(request: Request, file: UploadFile = File(...))
     }
 
 
+class SignatureImageUrlInput(BaseModel):
+    url: str
+
+
+@app.post("/signature/image/from-url")
+async def import_signature_image(request: Request, body: SignatureImageUrlInput) -> dict:
+    """Store a signature image given its address.
+
+    A URL left as a URL renders as a remote `<img>`, which most mail clients
+    block — so the logo the owner chose never appeared for the recipient.
+    Fetching it once here turns it into the same inline `cid:` part an upload
+    produces, which always displays.
+
+    See `src/image_fetch.py` for why this refuses non-public addresses.
+    """
+    _require_instance_role(request, "owner")
+    try:
+        data = await asyncio.to_thread(fetch_image_bytes, body.url)
+        stored = await asyncio.to_thread(save_signature_image, data)
+    except (ImageFetchError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_instance_id": current_agent_instance_id(),
+        "stored": True,
+        "filename": stored.key.rsplit("/", 1)[-1],
+        "size": stored.size,
+        "source_url": body.url,
+    }
+
+
 @app.get("/signature/image")
 async def get_signature_image() -> Response:
     found = await asyncio.to_thread(signature_image_inline)
@@ -3401,6 +3656,7 @@ async def runs(
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     user_dept = _request_user_dept(request)
+    await _ensure_orphans_reconciled(request.app.state.graph)
     # Fetch extra limit so we can filter post-db and check has_more, wait, list_runs in json/postgres needs to return all if we filter post-db.
     # To keep pagination working properly, we'll fetch an un-paginated chunk, filter it, and then paginate in python.
     all_runs = await asyncio.to_thread(
@@ -3647,38 +3903,116 @@ async def delete_memory(request: Request) -> dict:
 # mailbox drops the entry so the next read is authoritative.
 _INBOX_CACHE: dict[tuple, tuple[float, list[dict]]] = {}
 _INBOX_CACHE_TTL_SECONDS = float(os.getenv("AGENT_INBOX_CACHE_TTL_SECONDS", "60"))
+# How long an expired listing may still be shown while a fresh one is fetched.
+# Past the TTL the entry is stale, not wrong: the messages are still the ones in
+# the mailbox, only the "is there anything newer" answer has aged. Blocking the
+# view on a live Gmail round trip to find out is what made opening Messages feel
+# like the app had hung — and the poller invalidates this cache every cycle, so
+# that round trip was landing on ordinary visits, not rare ones.
+_INBOX_STALE_SECONDS = float(os.getenv("AGENT_INBOX_STALE_SECONDS", "900"))
 _INBOX_CACHE_LOCK = threading.Lock()
+_INBOX_REFRESHING: set[tuple] = set()
 
 
-def _inbox_cache_get(key: tuple) -> list[dict] | None:
+def _inbox_cache_key(key: tuple) -> str:
+    """Redis key for a cache tuple: (user_id, agent_instance_id, mailbox, limit)."""
+    return "agora:inbox:" + ":".join(str(part) for part in key)
+
+
+def _inbox_cache_prefix(user_id: str | None, agent_instance_id: str | None) -> str:
+    return f"agora:inbox:{user_id}:{agent_instance_id}:"
+
+
+def _inbox_cache_get(key: tuple) -> tuple[list[dict] | None, bool]:
+    """Return (messages, is_stale). Stale means "show this now, refresh behind"."""
     if _INBOX_CACHE_TTL_SECONDS <= 0:
-        return None
+        return None, False
+    # Shared first: the poller mutates the mailbox in its own process, and only a
+    # shared entry can be invalidated by whichever process did the mutating.
+    shared = cache_get_json(_inbox_cache_key(key))
+    if shared is not None:
+        return shared, False
     with _INBOX_CACHE_LOCK:
         entry = _INBOX_CACHE.get(key)
         if entry is None:
-            return None
+            return None, False
         stored_at, messages = entry
-        if (time.time() - stored_at) > _INBOX_CACHE_TTL_SECONDS:
+        age = time.time() - stored_at
+        if age > _INBOX_STALE_SECONDS:
             _INBOX_CACHE.pop(key, None)
-            return None
-        return messages
+            return None, False
+        return messages, age > _INBOX_CACHE_TTL_SECONDS
 
 
 def _inbox_cache_put(key: tuple, messages: list[dict]) -> None:
     if _INBOX_CACHE_TTL_SECONDS <= 0:
         return
+    # The shared copy expires at the TTL; the local one is kept for the whole
+    # stale window so an expired entry is still there to serve immediately.
+    cache_set_json(_inbox_cache_key(key), messages, _INBOX_CACHE_TTL_SECONDS)
     with _INBOX_CACHE_LOCK:
         _INBOX_CACHE[key] = (time.time(), [dict(message) for message in messages])
 
 
 def _inbox_cache_clear(user_id: str | None = None, agent_instance_id: str | None = None) -> None:
     """Drop cached listings after the mailbox is mutated."""
+    cache_delete_prefix(
+        "agora:inbox:" if user_id is None and agent_instance_id is None
+        else _inbox_cache_prefix(user_id, agent_instance_id)
+    )
     with _INBOX_CACHE_LOCK:
         if user_id is None and agent_instance_id is None:
             _INBOX_CACHE.clear()
             return
         for key in [k for k in _INBOX_CACHE if k[0] == user_id and k[1] == agent_instance_id]:
             _INBOX_CACHE.pop(key, None)
+
+
+def _sent_row(item: dict) -> dict:
+    """One row of the sent mailbox, shaped like an inbox row so the view is shared."""
+    return {
+        "id": item.get("id"),
+        "thread_id": item.get("thread_id"),
+        "from": item.get("to", ""),
+        "to": item.get("to", ""),
+        "subject": item.get("subject", ""),
+        "snippet": item.get("body", "")[:240],
+        "date": item.get("date", ""),
+        "unread": False,
+        "mailbox": "sent",
+    }
+
+
+def _schedule_inbox_refresh(cache_key: tuple, mailbox: str, limit: int) -> None:
+    """Re-read the mailbox behind a stale response, once per key at a time."""
+    with _INBOX_CACHE_LOCK:
+        if cache_key in _INBOX_REFRESHING:
+            return
+        _INBOX_REFRESHING.add(cache_key)
+
+    user_id, instance_id, _, _ = cache_key
+
+    async def refresh() -> None:
+        try:
+            with user_context(user_id), agent_instance_context(instance_id):
+                provider = get_provider()
+                if mailbox == "sent":
+                    fresh = await asyncio.to_thread(provider.fetch_sent, limit)
+                    messages = [_sent_row(item) for item in fresh if item.get("id")]
+                else:
+                    messages = await asyncio.to_thread(provider.list_inbox, limit)
+                    for message in messages:
+                        message["mailbox"] = "inbox"
+                _inbox_cache_put(cache_key, messages)
+        except Exception as exc:
+            # A failed refresh leaves the stale entry in place, which is the
+            # whole point: the view keeps working while the mailbox is away.
+            logger.warning("background inbox refresh failed for %s: %s", instance_id, exc)
+        finally:
+            with _INBOX_CACHE_LOCK:
+                _INBOX_REFRESHING.discard(cache_key)
+
+    asyncio.create_task(refresh())
 
 
 def _fallback_inbox_messages(runs: list[dict], limit: int) -> list[dict]:
@@ -3734,29 +4068,19 @@ async def inbox(
     user_id = current_user_id()
     user_dept = _request_user_dept(request)
     cache_key = (user_id, current_agent_instance_id(), mailbox, limit)
-    cached = None if refresh else _inbox_cache_get(cache_key)
+    cached, is_stale = (None, False) if refresh else _inbox_cache_get(cache_key)
     if cached is not None:
         messages = [dict(message) for message in cached]
+        if is_stale:
+            # Hand back what we have and go find out what changed, rather than
+            # making the person wait on Google to be told mostly the same thing.
+            _schedule_inbox_refresh(cache_key, mailbox, limit)
     else:
         try:
             provider = get_provider()
             if mailbox == "sent":
                 sent = await asyncio.to_thread(provider.fetch_sent, limit)
-                messages = [
-                    {
-                        "id": item.get("id"),
-                        "thread_id": item.get("thread_id"),
-                        "from": item.get("to", ""),
-                        "to": item.get("to", ""),
-                        "subject": item.get("subject", ""),
-                        "snippet": item.get("body", "")[:240],
-                        "date": item.get("date", ""),
-                        "unread": False,
-                        "mailbox": "sent",
-                    }
-                    for item in sent
-                    if item.get("id")
-                ]
+                messages = [_sent_row(item) for item in sent if item.get("id")]
             else:
                 messages = await asyncio.to_thread(provider.list_inbox, limit)
                 for message in messages:
@@ -3939,14 +4263,26 @@ async def get_run(request: Request, run_id: str) -> RunResponse:
 
 @app.get("/run/{run_id}/detail")
 async def get_run_detail(request: Request, run_id: str) -> dict:
+    """Read-only view of one run.
+
+    Deliberately does not require graph state. Plenty of runs never have any:
+    a message stopped by the junk gate is filed straight into the registry
+    without ever reaching the graph, so demanding a checkpoint here answered
+    "this run has expired" for runs that had simply never needed one. What the
+    registry knows — sender, subject, verdict, why it was gated — is the whole
+    point of the page, and it is always there.
+    """
     graph = request.app.state.graph
-    config = await _require_run(graph, run_id)
-    state = await graph.aget_state(config)
-    detail = _run_detail(state.values, run_id)
-    detail["trace"] = list_traces(run_id=run_id, agent_instance_id=current_agent_instance_id(), limit=500)
     record = get_run_record(
         run_id, user_id=None, agent_instance_id=current_agent_instance_id()
     )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Unknown run_id: {run_id}")
+
+    state = await graph.aget_state(_thread_config(run_id))
+    detail = _run_detail(state.values, run_id) if state.values else {"run_id": run_id, "messages": []}
+    detail["has_graph_state"] = bool(state.values)
+    detail["trace"] = list_traces(run_id=run_id, agent_instance_id=current_agent_instance_id(), limit=500)
     _require_dept_access(request, record)
     if record is not None:
         record = _annotate_run_record(record)
@@ -3966,6 +4302,11 @@ async def get_run_detail(request: Request, run_id: str) -> dict:
             "overdue_by_seconds": record.get("overdue_by_seconds"),
             "escalated_at": record.get("escalated_at"),
             "escalation_target": record.get("escalation_target"),
+            "subject": record.get("subject"),
+            "author": record.get("author"),
+            "junk_reason": record.get("junk_reason"),
+            "sensitive_reason": record.get("sensitive_reason"),
+            "decision": record.get("decision"),
         })
     return detail
 
@@ -4044,6 +4385,44 @@ async def _reject_run(graph, run_id: str) -> RunResponse:
     # old graph validation so callers still get a precise 404.
     await _require_run(graph, run_id)
     raise HTTPException(status_code=409, detail="Run is not pending approval")
+
+
+@app.post("/run/{run_id}/attachments")
+async def upload_run_attachment(
+    request: Request, run_id: str, file: UploadFile = File(...)
+) -> dict:
+    """Stage a file a reviewer wants attached to this run's pending draft/send.
+
+    The returned attachment_id is opaque to the model — it only ever reaches
+    a tool through _REVIEWER_ATTACHMENTS_KEY in an approve/edit payload, the
+    same trusted-context path _recipients uses. Files are deleted once the
+    run resolves (src/run_registry.py, discard_run_attachments).
+    """
+    _require_instance_role(request, "approver")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    _require_pending(run_id)
+    data = await file.read()
+    if len(data) > settings.max_attachment_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {settings.max_attachment_bytes} byte attachment limit.",
+        )
+    try:
+        entry = await asyncio.to_thread(
+            save_run_attachment, run_id, file.filename or "attachment", file.content_type, data
+        )
+    except AttachmentLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    return entry
+
+
+@app.get("/run/{run_id}/attachments")
+async def list_run_attachments(request: Request, run_id: str) -> dict:
+    _require_instance_role(request, "viewer")
+    record = get_run_record(run_id, user_id=None, agent_instance_id=current_agent_instance_id())
+    _require_dept_access(request, record)
+    return {"attachments": staged_run_attachments(run_id)}
 
 
 @app.post("/run/{run_id}/approve", response_model=RunResponse)

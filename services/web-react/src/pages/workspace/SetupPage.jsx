@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useApi } from '../../api/useApi';
 import { useStatus } from '../../contexts/StatusContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { SetupProgress } from '../../components/domain/SetupProgress';
 import {
   useInstanceSetupQuery,
@@ -18,8 +19,10 @@ import {
 export default function SetupPage() {
   const { instanceId, currentInstance, hasRole } = useInstance();
   const { setStatus } = useStatus();
+  const { runBusy } = useBusy();
   const { api } = useApi();
   const navigate = useNavigate();
+  const location = useLocation();
   const canManage = hasRole('owner');
   const autoStartRef = useRef('');
   const [connecting, setConnecting] = useState(false);
@@ -52,12 +55,19 @@ export default function SetupPage() {
   useEffect(() => {
     if (setup?.status !== 'ready' || !instanceId) return;
     setStatus('Configuration terminée. Les données de la boîte sont prêtes.', 'ok');
+    // WorkspaceLayout also renders this component as a loading gate over every
+    // other workspace route while setup status is still resolving (see its
+    // isGated check) — redirecting unconditionally here used to send someone
+    // deep-linking straight into e.g. /roles back to the dashboard the instant
+    // setup turned out to already be ready. Only navigate away when this really
+    // is the setup route; otherwise let the gate lift and the real route render.
+    if (!location.pathname.endsWith('/setup')) return;
     navigate('/instance/' + instanceId, { replace: true });
-  }, [setup?.status, instanceId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setup?.status, instanceId, location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStart = async () => {
     try {
-      await startSetup.mutateAsync();
+      await runBusy('Démarrage de la configuration', () => startSetup.mutateAsync());
       setStatus('Configuration démarrée.', 'ok');
     } catch (error) {
       setStatus(`Impossible de démarrer la configuration : ${error.message}`, 'error');
@@ -66,7 +76,7 @@ export default function SetupPage() {
 
   const handleRetry = async () => {
     try {
-      await retrySetup.mutateAsync();
+      await runBusy('Reprise de la configuration', () => retrySetup.mutateAsync());
       setStatus('Nouvelle tentative en cours.', 'ok');
     } catch (error) {
       setStatus(`Impossible de relancer la configuration : ${error.message}`, 'error');
@@ -75,7 +85,7 @@ export default function SetupPage() {
 
   const handleRetryStep = async (stepKey) => {
     try {
-      await retryStep.mutateAsync(stepKey);
+      await runBusy('Reprise de l’étape', () => retryStep.mutateAsync(stepKey));
       setStatus('Étape relancée.', 'ok');
     } catch (error) {
       setStatus(`Impossible de relancer l’étape : ${error.message}`, 'error');
@@ -118,7 +128,7 @@ export default function SetupPage() {
       return;
     }
     try {
-      await seedCategories.mutateAsync(payload);
+      await runBusy('Enregistrement des cas métier', () => seedCategories.mutateAsync(payload));
       setCategoriesSettled(true);
       setStatus(`${payload.length} catégorie(s) enregistrée(s). Lecture de la boîte en cours.`, 'ok');
     } catch (error) {
@@ -155,7 +165,7 @@ export default function SetupPage() {
         <div className="card-header">
           <div>
             <h2>Configuration en cours</h2>
-            <div className="meta"><span>{instanceId}</span></div>
+            <div className="meta"><span>{currentInstance?.display_name || instanceId}</span></div>
           </div>
           <div className="toolbar">
             {setup?.status === 'not_started' && canManage ? (

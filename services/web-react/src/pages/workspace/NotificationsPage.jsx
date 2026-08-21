@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
@@ -31,6 +33,7 @@ export default function NotificationsPage() {
   const notifications = (query.data?.notifications || []).filter(
     (n) => !severityFilter || n.severity === severityFilter
   );
+  const pager = usePagination(notifications);
   const allSelected = notifications.length > 0 && notifications.every((n) => selectedIds.has(n.id));
   const selectedNotifications = notifications.filter((n) => selectedIds.has(n.id));
 
@@ -121,32 +124,62 @@ export default function NotificationsPage() {
             <h2>Notifications</h2>
             <div className="meta"><span>{instanceId}</span></div>
           </div>
-          <div className="toolbar">
+          {/* Filters and single actions only. The four selection buttons used to
+              sit here too, greyed out most of the time — they now appear as a bar
+              when there is actually a selection to act on. */}
+          <div className="toolbar notifications-toolbar">
             <label className="toggle-row">
               <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
               <span>Non lues uniquement</span>
             </label>
-            <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+            <select aria-label="Filtre de sévérité" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
               <option value="">Toutes sévérités</option>
               {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
-            <button type="button" onClick={handleMarkAllRead}>Tout marquer comme lu</button>
-            <button type="button" disabled={!notifications.length} onClick={toggleAll}>{allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}</button>
-            <button type="button" disabled={!selectedNotifications.length} onClick={handleBulkRead}>Marquer la sélection comme lue</button>
-            <button type="button" className="danger" disabled={!selectedNotifications.length} onClick={handleBulkDelete}>Supprimer la sélection</button>
-            <button type="button" disabled={browserPermission === 'granted' || browserPermission === 'unsupported'} onClick={handleBrowserPermission}>
-              Notifications navigateur
+            <button type="button" onClick={handleMarkAllRead}>
+              <span className="material-symbols-outlined" aria-hidden="true">mark_email_read</span>
+              <span>Tout marquer comme lu</span>
             </button>
-            <button type="button" onClick={() => query.refetch()}>Actualiser</button>
+            <button
+              className="ghost"
+              type="button"
+              disabled={browserPermission === 'granted' || browserPermission === 'unsupported'}
+              title={browserPermission === 'granted' ? 'Déjà autorisées dans ce navigateur' : undefined}
+              onClick={handleBrowserPermission}
+            >
+              <span className="material-symbols-outlined" aria-hidden="true">notifications_active</span>
+              <span>Alertes navigateur</span>
+            </button>
+            <button className="ghost" type="button" aria-label="Actualiser" onClick={() => query.refetch()}>
+              <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
+            </button>
+            <span className="toolbar-spacer" />
+            {notifications.length ? (
+              <button className="ghost" type="button" onClick={toggleAll}>
+                {allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}
+              </button>
+            ) : null}
           </div>
         </div>
+        {/* The bulk row used to sit here permanently, carrying "select all" and a
+            sentence explaining that nothing was selected — a second full-width
+            band of chrome that was inert on almost every visit. Selecting all
+            moved up into the toolbar; the row now appears only when there is a
+            selection to act on. */}
+        {selectedNotifications.length ? (
+          <div className="bulk-bar notifications-bulk-bar">
+            <span>{selectedNotifications.length} sélectionnée(s)</span>
+            <button type="button" onClick={handleBulkRead}>Marquer comme lues</button>
+            <button className="danger" type="button" onClick={handleBulkDelete}>Supprimer</button>
+          </div>
+        ) : null}
         {query.error ? (
           <p className="empty-cell">{`Notifications indisponibles : ${query.error.message}`}</p>
         ) : !notifications.length ? (
           <p className="empty-cell">Aucune notification.</p>
         ) : (
           <ul className="notification-list">
-            {notifications.map((notification) => (
+            {pager.visible.map((notification) => (
               <li className="notification-select-row" key={notification.id}>
                 <input
                   type="checkbox"
@@ -164,6 +197,17 @@ export default function NotificationsPage() {
             ))}
           </ul>
         )}
+        {notifications.length ? (
+          <TablePager
+            page={pager.page}
+            pageCount={pager.pageCount}
+            total={pager.total}
+            size={pager.size}
+            onPage={pager.setPage}
+            onSize={pager.setSize}
+            unit="notifications"
+          />
+        ) : null}
       </Card>
     </>
   );

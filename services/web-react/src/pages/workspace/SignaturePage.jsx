@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { FileField } from '../../components/ui/FileField';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
@@ -9,7 +10,11 @@ import {
   useSaveSignature,
   useUploadSignatureImage,
   useDeleteSignatureImage,
+  useImportSignatureImageFromUrl,
 } from '../../api/queries';
+
+// Mirrors SignatureConfig.image_width's default in the email-agent.
+const DEFAULT_IMAGE_WIDTH = 420;
 
 const EMPTY_FORM = {
   enabled: false,
@@ -23,6 +28,7 @@ const EMPTY_FORM = {
   text: '',
   image_alt: 'Signature',
   image_url: '',
+  image_width: DEFAULT_IMAGE_WIDTH,
 };
 
 const MODE_LABELS = {
@@ -44,7 +50,8 @@ function structuredLines(config) {
 }
 
 export default function SignaturePage() {
-  const { instanceId, hasRole } = useInstance();
+  const { instanceId, currentInstance, hasRole } = useInstance();
+  const importImage = useImportSignatureImageFromUrl();
   const { setStatus } = useStatus();
   const { apiBlob } = useApi();
   const canManage = hasRole('owner');
@@ -86,6 +93,7 @@ export default function SignaturePage() {
       text: query.data.text || '',
       image_alt: query.data.image_alt || 'Signature',
       image_url: query.data.image_url || '',
+      image_width: query.data.image_width ?? DEFAULT_IMAGE_WIDTH,
     });
     refreshImage();
     if (!announcedInitialLoad.current) {
@@ -137,6 +145,19 @@ export default function SignaturePage() {
 
   const lines = structuredLines(form);
   const text = form.text.trim();
+  const handleImportImage = async () => {
+    try {
+      await runBusy('Import de l’image', () => importImage.mutateAsync(form.image_url.trim()));
+      // Stored as an inline part now, so the URL field has done its job and the
+      // preview must come from the stored copy, not from the remote address.
+      setForm((current) => ({ ...current, image_url: '' }));
+      await query.refetch();
+      setStatus('Image importée. Elle est désormais intégrée au message.', 'ok');
+    } catch (error) {
+      setStatus(`Import impossible : ${error.message}`, 'error');
+    }
+  };
+
   const previewImageUrl = imageObjectUrl || form.image_url.trim();
   const previewLines = lines.length ? [...lines, ...(text ? [text] : [])] : (text ? [text] : []);
 
@@ -152,22 +173,28 @@ export default function SignaturePage() {
             <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer la signature</span>
           </button>
         )}
-        <span className="counter">{instanceId}</span>
+        <span className="counter">{currentInstance?.display_name || instanceId}</span>
       </div>
       <div className="editor-grid signature-grid">
         <form className="card editor-card" onSubmit={(e) => e.preventDefault()}>
           <strong>Signature d’e-mail</strong>
           <label className="toggle-row">
             <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-            <span>Ajouter à chaque e-mail</span>
+            <span>{form.mode === 'ask_each_time' ? 'Gestion de la signature activée' : 'Ajouter à chaque e-mail'}</span>
           </label>
           <label>
             <span>Mode</span>
-            <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+            <select
+              value={form.mode}
+              onChange={(e) => setForm({ ...form, mode: e.target.value, enabled: true })}
+            >
               {(query.data?.available_modes || Object.keys(MODE_LABELS)).map((mode) => (
                 <option key={mode} value={mode}>{MODE_LABELS[mode] || mode}</option>
               ))}
             </select>
+            {form.mode === 'ask_each_time' ? (
+              <small>Le choix (avec ou sans signature) apparaît lors de la validation de chaque brouillon.</small>
+            ) : null}
           </label>
           {query.data?.detected_block ? (
             <p className="setup-step-detail">Une signature a été détectée dans vos e-mails envoyés lors de la configuration initiale.</p>
@@ -183,11 +210,55 @@ export default function SignaturePage() {
           <label><span>Texte complémentaire (optionnel)</span><textarea rows={3} spellCheck={false} placeholder="L’humain d’abord." value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} /></label>
           <div className="signature-image-row">
             <span>Logo / image</span>
-            <input ref={fileInputRef} type="file" accept="image/png,image/jpeg" data-testid="signature-image-file" onChange={handleUpload} />
+            <FileField
+              inputRef={fileInputRef}
+              accept="image/png,image/jpeg"
+              data-testid="signature-image-file"
+              label="Choisir une image"
+              onChange={handleUpload}
+            />
             {hasImage && <button type="button" className="ghost" onClick={handleDeleteImage}>Retirer l’image</button>}
           </div>
           <label><span>Texte alternatif de l’image</span><input type="text" placeholder="Logo Agora" value={form.image_alt} onChange={(e) => setForm({ ...form, image_alt: e.target.value })} /></label>
-          <label className="signature-url-fallback"><span>Ou URL d’image externe</span><input type="url" placeholder="https://exemple.com/signature.png" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} /></label>
+          <label>
+            <span>Largeur de l’image (px)</span>
+            <input
+              type="number"
+              min="48"
+              max="640"
+              step="10"
+              value={form.image_width}
+              onChange={(e) => setForm({ ...form, image_width: Number(e.target.value) || DEFAULT_IMAGE_WIDTH })}
+            />
+            <small>
+              Sans largeur, le client mail affiche l’image à sa taille d’origine — un petit
+              logo apparaît minuscule. Le corps du mail fait 640 px de large ;
+              {' '}{DEFAULT_IMAGE_WIDTH} px occupe environ les deux tiers de cette largeur. La hauteur
+              suit automatiquement les proportions de l’image — pour une signature plus haute,
+              il faut une image source plus haute.
+            </small>
+          </label>
+          <label className="signature-url-fallback">
+            <span>Ou URL d’image externe</span>
+            <div className="signature-url-row">
+              <input
+                type="url"
+                placeholder="https://exemple.com/signature.png"
+                value={form.image_url}
+                onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+              />
+              <button type="button" onClick={handleImportImage} disabled={!form.image_url.trim()}>
+                <span className="material-symbols-outlined" aria-hidden="true">download</span>
+                <span>Importer</span>
+              </button>
+            </div>
+            <small>
+              Une adresse laissée telle quelle part en image distante, que la plupart des
+              messageries bloquent par défaut. « Importer » récupère le fichier une fois et
+              l’intègre au message, comme un envoi depuis votre poste : il s’affiche alors
+              toujours.
+            </small>
+          </label>
         </form>
         <Card>
           <strong>Aperçu</strong>
@@ -198,7 +269,7 @@ export default function SignaturePage() {
           ) : (
             <div className="signature-preview">
               {previewLines.length ? <div>{previewLines.map((line, i) => <span key={i}>{line}<br /></span>)}</div> : null}
-              {previewImageUrl ? <img src={previewImageUrl} alt={form.image_alt || 'Signature'} /> : null}
+              {previewImageUrl ? <img src={previewImageUrl} alt={form.image_alt || 'Signature'} style={{ width: `${form.image_width || DEFAULT_IMAGE_WIDTH}px`, maxWidth: '100%', height: 'auto' }} /> : null}
             </div>
           )}
         </Card>

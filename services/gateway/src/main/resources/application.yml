@@ -22,10 +22,35 @@ spring:
 server:
   port: 8080
 
+management:
+  endpoints:
+    access:
+      default: read-only
+    web:
+      exposure:
+        include: health,prometheus
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
 gateway:
   upstream:
     email-agent-url: ${GATEWAY_UPSTREAM_EMAIL_AGENT_URL:http://localhost:8000}
+    # Raise this wherever the model runs on CPU: a tone rewrite or a redraft can
+    # take several minutes there, and aborting mid-inference leaves the browser
+    # on a spinner while the agent is still working on the answer.
+    response-timeout-seconds: ${GATEWAY_UPSTREAM_TIMEOUT_SECONDS:150}
   default-agent-instance: ${GATEWAY_DEFAULT_AGENT_INSTANCE:default-email-agent}
+  # Mailbox the seeded instance expects OAuth to authorize. Blank means "no
+  # expectation" — whichever mailbox the user connects is accepted. A non-blank
+  # value is compared against the address Google reports and fails closed on a
+  # mismatch, so only set it to a real address, never a placeholder.
+  default-agent-mailbox: ${GATEWAY_DEFAULT_AGENT_MAILBOX:}
   # Public base URL of the web app; invitation links are built from it.
   app-url: ${GATEWAY_APP_URL:http://localhost:5173}
   invite-expiry-hours: ${GATEWAY_INVITE_EXPIRY_HOURS:48}
@@ -37,6 +62,13 @@ gateway:
     username: ${GATEWAY_SMTP_USERNAME:}
     password: ${GATEWAY_SMTP_PASSWORD:}
     from: ${GATEWAY_SMTP_FROM:}
+  llm:
+    # Same local-first Ollama endpoint the rest of the stack uses. Best-effort
+    # only: an unreachable model degrades a report to "no suggestion", never a
+    # failed request.
+    base-url: ${GATEWAY_LLM_BASE_URL:http://ollama:11434/v1}
+    model: ${GATEWAY_LLM_MODEL:qwen2.5:3b-8k}
+    timeout-seconds: ${GATEWAY_LLM_TIMEOUT_SECONDS:20}
   agent-types:
     - id: email-agent
       display-name: Email Agent
@@ -49,6 +81,31 @@ gateway:
         - cost_observability
       base-path: /api/agent
       health-path: /health
+      manifest-path: /manifest
+      # Everything below is the offline fallback. The agent declares the same
+      # fields at `manifest-path` and that declaration wins; this is what the
+      # platform shows when the service is down or speaks a newer contract.
+      settings-schema:
+        - key: persona
+          label: Persona
+          description: Background, triage rules, response preferences and writing style.
+          path: /persona
+        - key: categories
+          label: Categories
+          description: Workflow categories, routing, policies and templates.
+          path: /categories
+        - key: rules
+          label: Rules
+          description: Deterministic automation, starter rules, digest and follow-up settings.
+          path: /rules
+        - key: capabilities
+          label: Capabilities
+          description: Enabled tools and approval gates for this agent instance.
+          path: /capabilities
+        - key: permissions
+          label: Permissions
+          description: Per-instance mailbox access grants.
+          path: /permissions
       color: "#38bdf8"
       icon: mail
   jwt:
@@ -56,6 +113,7 @@ gateway:
     ttl-minutes: ${GATEWAY_JWT_TTL_MINUTES:15}
     refresh-ttl-days: ${GATEWAY_JWT_REFRESH_TTL_DAYS:7}
     secure-cookies: ${GATEWAY_JWT_SECURE_COOKIES:true}
+  agent-shared-secret: ${GATEWAY_AGENT_SHARED_SECRET:}
   mfa:
     challenge-ttl-minutes: ${GATEWAY_MFA_CHALLENGE_TTL_MINUTES:5}
     recovery-code-count: ${GATEWAY_MFA_RECOVERY_CODE_COUNT:8}
@@ -64,12 +122,22 @@ gateway:
     window-seconds: ${GATEWAY_LOGIN_RATELIMIT_WINDOW_SECONDS:900}
     max-failures: ${GATEWAY_LOGIN_RATELIMIT_MAX_FAILURES:5}
     global-max-failures: ${GATEWAY_LOGIN_RATELIMIT_GLOBAL_MAX_FAILURES:100}
+  # Seeded accounts. The optional email is what lets the team page invite,
+  # re-invite or reach them; it is backfilled onto an account seeded before it
+  # was configured, and never overwrites an address already set.
   owner:
     username: ${GATEWAY_OWNER_USERNAME:}
     password: ${GATEWAY_OWNER_PASSWORD:}
+    email: ${GATEWAY_OWNER_EMAIL:}
   viewer:
     username: ${GATEWAY_VIEWER_USERNAME:}
     password: ${GATEWAY_VIEWER_PASSWORD:}
+    email: ${GATEWAY_VIEWER_EMAIL:}
   admin:
     username: ${GATEWAY_ADMIN_USERNAME:}
     password: ${GATEWAY_ADMIN_PASSWORD:}
+    email: ${GATEWAY_ADMIN_EMAIL:}
+  # Dev/demo only — never set true in a real deployment. Re-syncs a seeded
+  # account's password to its env credentials on every boot instead of
+  # leaving a stale Postgres volume permanently out of sync with .env.
+  seed-reset-password: ${GATEWAY_SEED_RESET_PASSWORD:false}

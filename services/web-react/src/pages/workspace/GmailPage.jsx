@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
 import { formatDateTimeFr, statusLabelFr, friendlySyncError } from '../../utils/format';
@@ -39,6 +40,7 @@ function barWidth(mode) {
 export default function GmailPage() {
   const { instanceId, currentInstance, hasRole } = useInstance();
   const { setStatus } = useStatus();
+  const { runBusy } = useBusy();
   const { confirmDialog } = useDialog();
   const { api } = useApi();
   const canManage = hasRole('owner');
@@ -79,18 +81,30 @@ export default function GmailPage() {
     if (runtimeSettings.data) setRuntimeForm(runtimeSettings.data);
   }, [runtimeSettings.data]);
 
+  const RUNTIME_FIELD_BOUNDS = {
+    sync_limit: { min: 1, max: 500 },
+    setup_recent_limit: { min: 1, max: 500 },
+    setup_backlog_limit: { min: 1, max: 500 },
+    setup_sent_sample: { min: 1, max: 500 },
+    // Fed whole into a single style-learning prompt (not one call per sample like the
+    // others above) — a small local model's context window caps this well below 500.
+    style_sent_sample: { min: 1, max: 50 },
+  };
+
   const updateRuntimeField = (field, value) => {
     const parsed = Number.parseInt(value, 10);
+    const bounds = RUNTIME_FIELD_BOUNDS[field];
+    const clamped = Number.isNaN(parsed) ? '' : Math.min(bounds.max, Math.max(bounds.min, parsed));
     setRuntimeForm((current) => ({
       ...(current || runtimeSettings.data || {}),
-      [field]: Number.isNaN(parsed) ? '' : parsed,
+      [field]: clamped,
     }));
   };
 
   const handleSaveRuntimeSettings = async () => {
     if (!runtimeForm) return;
     try {
-      await saveRuntimeSettings.mutateAsync(runtimeForm);
+      await runBusy('Enregistrement des réglages', () => saveRuntimeSettings.mutateAsync(runtimeForm));
       setStatus('Paramètres d’analyse enregistrés.', 'ok');
     } catch (error) {
       setStatus(`Impossible d’enregistrer les paramètres d’analyse : ${error.message}`, 'error');
@@ -128,7 +142,7 @@ export default function GmailPage() {
     setVisual({ mode: 'syncing', message: `Test de la connexion ${providerLabel} en cours...` });
     setStatus(`Test de la connexion ${providerLabel}...`, 'ok');
     try {
-      const result = await testConnection.mutateAsync();
+      const result = await runBusy('Test de la connexion à la boîte', () => testConnection.mutateAsync());
       if (result.ok) {
         const mailbox = result.mailbox ? ` (${result.mailbox})` : '';
         setStatus(`Connexion ${providerLabel} opérationnelle${mailbox}.`, 'ok');
@@ -147,7 +161,7 @@ export default function GmailPage() {
     setVisual({ mode: 'syncing', message: 'Synchronisation Gmail en cours. Lecture des messages non lus et préparation des validations...' });
     setStatus('Synchronisation de la boîte Gmail...', 'ok');
     try {
-      await syncNow.mutateAsync();
+      await runBusy('Synchronisation de la boîte', () => syncNow.mutateAsync());
       setStatus('Synchronisation Gmail terminée.', 'ok');
       setVisual({ mode: 'ok', message: 'Synchronisation Gmail terminée. Les brouillons et les messages sont à jour.' });
     } catch (error) {
@@ -184,7 +198,7 @@ export default function GmailPage() {
     });
     if (!confirmed) return;
     try {
-      await disconnect.mutateAsync(provider);
+      await runBusy('Déconnexion de la boîte', () => disconnect.mutateAsync(provider));
       setStatus(`${providerLabel} déconnecté. Jeton OAuth supprimé.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de déconnecter ${providerLabel} : ${error.message}`, 'error');
@@ -268,19 +282,19 @@ export default function GmailPage() {
             <div className="settings-grid">
               <label>
                 <span>Messages par synchronisation</span>
-                <input type="number" min="1" max="100" value={runtimeForm.sync_limit ?? ''} onChange={(event) => updateRuntimeField('sync_limit', event.target.value)} />
+                <input type="number" min="1" max="500" value={runtimeForm.sync_limit ?? ''} onChange={(event) => updateRuntimeField('sync_limit', event.target.value)} />
               </label>
               <label>
                 <span>E-mails récents au démarrage</span>
-                <input type="number" min="1" max="200" value={runtimeForm.setup_recent_limit ?? ''} onChange={(event) => updateRuntimeField('setup_recent_limit', event.target.value)} />
+                <input type="number" min="1" max="500" value={runtimeForm.setup_recent_limit ?? ''} onChange={(event) => updateRuntimeField('setup_recent_limit', event.target.value)} />
               </label>
               <label>
                 <span>Non lus traités au démarrage</span>
-                <input type="number" min="1" max="100" value={runtimeForm.setup_backlog_limit ?? ''} onChange={(event) => updateRuntimeField('setup_backlog_limit', event.target.value)} />
+                <input type="number" min="1" max="500" value={runtimeForm.setup_backlog_limit ?? ''} onChange={(event) => updateRuntimeField('setup_backlog_limit', event.target.value)} />
               </label>
               <label>
                 <span>Envoyés lus au démarrage</span>
-                <input type="number" min="1" max="200" value={runtimeForm.setup_sent_sample ?? ''} onChange={(event) => updateRuntimeField('setup_sent_sample', event.target.value)} />
+                <input type="number" min="1" max="500" value={runtimeForm.setup_sent_sample ?? ''} onChange={(event) => updateRuntimeField('setup_sent_sample', event.target.value)} />
               </label>
               <label>
                 <span>Envoyés pour apprendre le style</span>

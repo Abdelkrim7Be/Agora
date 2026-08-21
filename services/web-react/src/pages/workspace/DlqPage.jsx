@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
@@ -14,6 +16,7 @@ export default function DlqPage() {
   const query = useDlqQuery();
   const requeueEntry = useRequeueDlqEntry();
   const entries = query.data?.entries || [];
+  const pager = usePagination(entries);
 
   useEffect(() => {
     if (!query.data) return;
@@ -52,7 +55,7 @@ export default function DlqPage() {
             <h2>File des échecs (DLQ)</h2>
             <div className="meta"><span>Emails en échec relançables une seule fois</span></div>
           </div>
-          <button type="button" onClick={() => query.refetch()}>Actualiser</button>
+          <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</button>
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -62,27 +65,44 @@ export default function DlqPage() {
                 <tr><td colSpan={6} className="empty-cell">{`DLQ indisponible : ${query.error.message}`}</td></tr>
               ) : !entries.length ? (
                 <tr><td colSpan={6} className="empty-cell">Aucune entrée DLQ.</td></tr>
-              ) : entries.map((entry) => (
+              ) : pager.visible.map((entry) => (
                 <tr key={entry.entry_id}>
-                  <td>{entry.timestamp || '—'}</td>
+                  <td>{entry.timestamp || 'n/d'}</td>
                   <td>{entry.message_id || entry.entry_id || ''}</td>
                   <td>{entry.reason || ''}</td>
                   <td>{entry.error || ''}</td>
                   <td><span className={`status-pill ${entry.status === 'dead_letter' ? 'error' : 'warn'}`}>{statusLabelFr(entry.status)}</span></td>
                   <td>
-                    <button
-                      type="button"
-                      disabled={entry.status !== 'dead_letter' || requeuingId === entry.entry_id}
-                      onClick={() => handleRequeue(entry.entry_id)}
-                    >
-                      {requeuingId === entry.entry_id ? 'Relance...' : 'Relancer'}
-                    </button>
+                    {entry.reason === 'mailbox_sync_failure' ? (
+                      <button type="button" disabled title="Aucun e-mail à relancer — reconnectez la boîte depuis sa page de connexion.">
+                        Relancer
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={entry.status !== 'dead_letter' || requeuingId === entry.entry_id}
+                        onClick={() => handleRequeue(entry.entry_id)}
+                      >
+                        {requeuingId === entry.entry_id ? 'Relance...' : 'Relancer'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {entries.length ? (
+          <TablePager
+            page={pager.page}
+            pageCount={pager.pageCount}
+            total={pager.total}
+            size={pager.size}
+            onPage={pager.setPage}
+            onSize={pager.setSize}
+            unit="entrées"
+          />
+        ) : null}
       </Card>
     </>
   );

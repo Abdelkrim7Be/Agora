@@ -790,6 +790,16 @@ async def _step_learn_style(context: SetupContext) -> dict:
     return {"sample_count": len(context.sent_samples), "writing_style": text}
 
 
+# Tone/persona inference needs only a handful of examples, but
+# context.recent_messages carries whatever AGENT_SETUP_RECENT_LIMIT is set
+# to (200 by default) — passed through unfiltered, that reliably blew past
+# a local model's context window (10k+ tokens against a 4k window is not
+# an edge case, it is every mailbox with real volume). Capped independently
+# of the fetch limit so raising that setting for other steps can't reopen this.
+MAX_SUGGEST_RECENT_MESSAGES = 20
+MAX_SUGGEST_SENT_SAMPLES = 8
+
+
 async def _step_suggest_persona(context: SetupContext) -> dict:
     from src.persona import load_persona, suggest_persona
 
@@ -801,7 +811,10 @@ async def _step_suggest_persona(context: SetupContext) -> dict:
     from src import graph as graph_module
 
     suggestion = await _to_thread_with_timeout(
-        suggest_persona, context.sent_samples, context.recent_messages, graph_module.llm,
+        suggest_persona,
+        context.sent_samples[:MAX_SUGGEST_SENT_SAMPLES],
+        context.recent_messages[:MAX_SUGGEST_RECENT_MESSAGES],
+        graph_module.llm,
         step_label="persona suggestion",
     )
     return {"suggestion": suggestion.model_dump()}
@@ -951,7 +964,51 @@ async def _step_triage_backlog(context: SetupContext) -> dict:
     return {"backlog_enqueued": enqueued}
 
 
+async def _seed_default_memory(context: SetupContext) -> list[str]:
+    """Write the config-derived preferences into the store at the end of setup.
+
+    `get_memory` writes the config default lazily, on first read — and the first
+    read only happens when the agent processes an email. So a freshly created
+    instance showed an empty Memory page until some mail arrived, which reads as
+    "the agent has not been configured" rather than "the agent is using the
+    defaults you set". Seeding here makes the instance's starting position
+    visible the moment setup finishes.
+
+    Anything already written (by the style step, or by a human) is left alone.
+    """
+    if context.store is None:
+        return []
+
+    from src.config import load_config
+    from src.memory import ORIGIN_DEFAULT, namespace, wrap_preferences
+
+    cfg = load_config()
+    defaults = {
+        "triage_preferences": cfg.agent.triage_instructions,
+        "response_preferences": cfg.agent.response_preferences,
+    }
+
+    seeded: list[str] = []
+    for key, content in defaults.items():
+        if not content:
+            continue
+        ns = namespace(key, context.user_id, context.agent_instance_id)
+        existing = await context.store.aget(ns, "user_preferences")
+        if existing is not None:
+            continue
+        await context.store.aput(ns, "user_preferences", wrap_preferences(content, ORIGIN_DEFAULT))
+        seeded.append(key)
+    return seeded
+
+
 async def _step_finalize(context: SetupContext) -> dict:
+    seeded_memory: list[str] = []
+    try:
+        seeded_memory = await _seed_default_memory(context)
+    except Exception as exc:
+        # Never fail setup over this: the lazy path in get_memory still applies.
+        print(f"instance_setup: memory seeding failed: {exc}")
+
     try:
         from src.notification_store import create_notification
 
@@ -965,7 +1022,7 @@ async def _step_finalize(context: SetupContext) -> dict:
         )
     except Exception as exc:
         print(f"instance_setup: notification emission failed: {exc}")
-    return {}
+    return {"seeded_memory": seeded_memory}
 
 
 STEP_HANDLERS: dict[str, Callable[[SetupContext], Awaitable[dict]]] = {

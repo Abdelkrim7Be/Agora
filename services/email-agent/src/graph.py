@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 import os
 import threading
@@ -25,14 +26,17 @@ import re as _re
 from src.automation import load_rules as load_automation_rules, suggest_rule_from_correction
 from src.capabilities import (
     approval_required,
+    current_email_attachments,
     current_email_id,
     current_gmail_thread_id,
     current_reply_to,
     current_route_targets,
+    current_uploaded_attachments,
     hitl_approved,
     load_capabilities,
     tools_by_name,
 )
+from src.run_attachments import load_attachments as load_uploaded_attachments
 from src.config import load_config, settings
 from src.cost_tracker import llm_invoke_config, totals_for_run_node
 from src.categories import auto_draft_tool_call, classify_category, load_categories, unresolved_vars
@@ -42,7 +46,9 @@ from src.llm import get_llm
 from src.memory import UserPreferences, get_memory, namespace, update_memory
 from src.roles import list_roles, resolve_role
 from src.security_client import audit_output, authorize_action
+from src.shared_cache import cache_get_json, cache_set_json
 from src.signature import apply_signature_to_args, strip_signature
+from src.tenant import current_agent_instance_id, current_user_id
 from src.prompts import (
     MEMORY_UPDATE_INSTRUCTIONS_REINFORCEMENT,
     agent_system_prompt,
@@ -246,7 +252,7 @@ def _workflow_notify_tool_call(state: State, category_update: dict) -> dict | No
     owner = category_update.get("workflow_owner") or "unassigned"
     approver = category_update.get("workflow_approver") or "workspace approver"
     note = (
-        f"Agora workflow route: {category}.\n"
+        f"Agora AI workflow route: {category}.\n"
         f"Owner: {owner}. Approver: {approver}.\n"
         f"Original sender: {author}. Subject: {subject}.\n\n"
         "Please handle this request or reply internally with the next action."
@@ -255,7 +261,7 @@ def _workflow_notify_tool_call(state: State, category_update: dict) -> dict | No
         "name": "notify_internal",
         # No "to": tool_node supplies the recipients from current_route_targets,
         # which is resolved from this same workflow configuration.
-        "args": {"subject": f"[Agora] {category}", "note": note},
+        "args": {"subject": f"[Agora AI] {category}", "note": note},
         "id": f"workflow_notify_{uuid.uuid4().hex}",
         "type": "tool_call",
     }
@@ -705,6 +711,13 @@ def _trim_history(messages: list) -> list:
     return head + tail
 
 
+def _prompt_memory(content: str) -> str:
+    limit = settings.memory_prompt_max_chars
+    if limit <= 0 or len(content) <= limit:
+        return content
+    return content[:limit].rstrip() + "\n[truncated]"
+
+
 def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
     try:
         return llm_obj.invoke(messages, config=invoke_config)
@@ -716,15 +729,19 @@ def _invoke_llm(llm_obj, messages: list, invoke_config: dict):
 
 def llm_call(state: State, store: BaseStore, config=None):
     """LLM decides which tool to call to handle the email."""
-    response_prefs = get_memory(
-        store,
-        namespace("response_preferences"),
-        agent_config.agent.response_preferences,
+    response_prefs = _prompt_memory(
+        get_memory(
+            store,
+            namespace("response_preferences"),
+            agent_config.agent.response_preferences,
+        )
     )
-    writing_style = get_memory(
-        store,
-        namespace("writing_style"),
-        agent_config.agent.writing_style_default,
+    writing_style = _prompt_memory(
+        get_memory(
+            store,
+            namespace("writing_style"),
+            agent_config.agent.writing_style_default,
+        )
     )
     
     reply_language = "Veuillez rédiger la réponse en français (fr-FR)."
@@ -921,6 +938,25 @@ def _blocked_tool_message(name: str, reason: str, tool_call_id: str) -> dict:
 SEND_TOOL_NAMES = {"write_email", "forward_email", "reply_all"}
 
 
+def _send_action_id(name: str, state: State, tool_call: dict) -> str:
+    """The id the security service counts a send against.
+
+    Rate-limit slots are reserved when an action is *granted*, before the human
+    has approved it, and released never. A draft the reviewer sent back for
+    changes had therefore already spent the run's send budget, so every revision
+    of it was refused for a send that never happened — the run could no longer
+    complete by any route.
+
+    A revision is the same logical send, so it reuses the first draft's id and the
+    service treats the check as idempotent. Content, recipients and caps are still
+    re-evaluated on every call; only the counter is not incremented twice. An
+    unrelated second send in the same run still gets its own id and its own slot.
+    """
+    if name not in SEND_TOOL_NAMES or not state.get("redraft_requested"):
+        return tool_call.get("id", "")
+    return state.get("send_action_id") or tool_call.get("id", "")
+
+
 def _restore_redactions(args: dict, state: State) -> dict:
     """Put redacted identifiers back into whatever the model produced.
 
@@ -1091,7 +1127,72 @@ def _category_for_run(state: State):
     return next((c for c in cfg.categories if c.name == name), None)
 
 
-def _effective_recipients(name: str, args: dict, state: State) -> list[str]:
+def _off_workflow_action(category, name: str) -> str | None:
+    """Reason to refuse `name`, or None when the workflow allows it.
+
+    CaMeL step #2: control flow must not depend on untrusted mail. A run that
+    matched a workflow executes only the tools that workflow opens — the model
+    fills in content for an action already decided, it does not choose the
+    action after reading the message.
+
+    Runs that matched no workflow are not constrained here: there is no declared
+    intent to enforce, and the tool-level default in `security/policy.yaml`
+    remains what governs them.
+    """
+    if category is None:
+        return None
+    allowed = category.actions()
+    if name in allowed:
+        return None
+    return (
+        f"workflow '{category.name}' does not perform '{name}'"
+        f" (allowed: {', '.join(allowed) if allowed else 'none'})"
+    )
+
+
+# Recipients a human typed in the approval screen, per tool call.
+# Kept out of `args` so the model can never write into it: the model's args are
+# what the reviewer is checking, and a value it could set would defeat the point
+# of showing the destination at all.
+_REVIEWER_RECIPIENT_KEY = "_recipients"
+
+# Attachment ids a human staged via POST /run/{id}/attachments before approving.
+# Same trust boundary as _REVIEWER_RECIPIENT_KEY: the model never sees or sets
+# this — tool_node resolves the ids to bytes and injects them through context.
+_REVIEWER_ATTACHMENTS_KEY = "_attachments"
+
+
+def _reviewer_recipients(edited_args: dict, previous: list[str]) -> list[str] | None:
+    """Addresses the reviewer put in the approval screen, or None.
+
+    The preview already renders the resolved destination under this key; letting
+    it come back changed is how a person redirects or adds a recipient. Returning
+    None means "unchanged", so the trusted context stays in charge.
+
+    Nothing is trusted about these values. They are re-authorized by the policy
+    engine, checked against the workflow's `external_send_allowed`, and the send
+    helpers enforce AGENT_OUTBOUND_ALLOWLIST underneath all of it.
+    """
+    if not isinstance(edited_args, dict) or _REVIEWER_RECIPIENT_KEY not in edited_args:
+        return None
+    raw = edited_args.get(_REVIEWER_RECIPIENT_KEY)
+    # The approval screen sends one comma-separated field, the REST API may send
+    # a list. Both mean the same thing.
+    if isinstance(raw, list):
+        values = raw
+    else:
+        values = str(raw or "").split(",")
+    addresses = []
+    for value in values:
+        address = _email_addr(value)
+        if address and address not in addresses:
+            addresses.append(address)
+    if not addresses or addresses == list(previous):
+        return None
+    return addresses
+
+
+def _effective_recipients(name: str, args: dict, state: State, override: list[str] | None = None) -> list[str]:
     """Every address this tool call will actually reach.
 
     Send tools no longer take a recipient argument, so the addresses live in the
@@ -1099,6 +1200,10 @@ def _effective_recipients(name: str, args: dict, state: State) -> list[str]:
     the workflow's configured targets for routing. Reading them from `args` here
     would find nothing and silently pass every recipient check.
     """
+    if override:
+        # A person named these, in front of the draft. They still go through
+        # every check below this call — this only changes *what* is checked.
+        return list(dict.fromkeys(address.lower() for address in override if address))
     recipients: list[str] = []
     if name in _REPLY_TOOL_NAMES:
         reply = _trusted_reply_to(state)
@@ -1181,6 +1286,7 @@ def _authorize_tool_action(
     refresh: bool = False,
     arg_trust: dict | None = None,
     recipients: list[str] | None = None,
+    action_id: str | None = None,
 ) -> dict:
     key = _authorization_cache_key(run_id, name, tool_call)
     if refresh or key not in _authorization_cache:
@@ -1188,7 +1294,7 @@ def _authorize_tool_action(
             name,
             args,
             run_id,
-            tool_call.get("id", ""),
+            action_id or tool_call.get("id", ""),
             arg_trust,
             recipients,
         )
@@ -1227,6 +1333,8 @@ def tool_node(state: State, store: BaseStore, config=None):
     redraft_feedback = None
     redraft_baseline = None
     redraft_cleared = False
+    # The id the run's send budget is counted against; see _send_action_id.
+    first_send_action_id = None
     run_id = _run_id_from_config(config)
     category_obj = _category_for_run(state)
 
@@ -1265,9 +1373,24 @@ def tool_node(state: State, store: BaseStore, config=None):
         # anywhere later risks a placeholder reaching a recipient.
         args = _restore_redactions(args, state)
 
+        # The workflow decides which tool may act, not the model that just read
+        # the message. Checked before authorization so an off-workflow call is
+        # never even submitted as a candidate action: an injection that steered
+        # a "draft a reply" workflow into forwarding or trashing would otherwise
+        # get every downstream check asked about the tool it chose.
+        reviewer_recipients: list[str] | None = None
+        reviewer_attachment_ids: list[str] | None = None
+        blocked_action = _off_workflow_action(category_obj, name)
+        if blocked_action is not None:
+            result.append(_blocked_tool_message(name, blocked_action, tool_call["id"]))
+            continue
+
         authorization_decision = "hitl" if name in approval_set else "allow"
         arg_trust = _derive_arg_trust(args, state["email_input"].get("security"))
         effective_recipients = _effective_recipients(name, args, state)
+        send_action_id = _send_action_id(name, state, tool_call)
+        if name in SEND_TOOL_NAMES and not state.get("send_action_id"):
+            first_send_action_id = first_send_action_id or send_action_id
 
         if settings.security_enabled:
             authz = _authorize_tool_action(
@@ -1277,6 +1400,7 @@ def tool_node(state: State, store: BaseStore, config=None):
                 tool_call,
                 arg_trust=arg_trust,
                 recipients=effective_recipients,
+                action_id=send_action_id,
             )
             authorization_decision = authz["decision"]
             if authorization_decision == "deny":
@@ -1386,6 +1510,24 @@ def tool_node(state: State, store: BaseStore, config=None):
 
             if decision_type == "edit":
                 edited_args = decision_data or args
+                chosen = _reviewer_recipients(edited_args, effective_recipients)
+                if chosen is not None:
+                    reviewer_recipients = chosen
+                    effective_recipients = chosen
+                if isinstance(edited_args, dict) and _REVIEWER_ATTACHMENTS_KEY in edited_args:
+                    raw_ids = edited_args.get(_REVIEWER_ATTACHMENTS_KEY)
+                    if isinstance(raw_ids, list):
+                        reviewer_attachment_ids = [str(v) for v in raw_ids if v]
+                if isinstance(edited_args, dict) and (
+                    _REVIEWER_RECIPIENT_KEY in edited_args or _REVIEWER_ATTACHMENTS_KEY in edited_args
+                ):
+                    # Preview-only keys. They must never reach the tool as an
+                    # argument, and must not show up in the learned-preference
+                    # diff below as if the model had written them.
+                    edited_args = {
+                        k: v for k, v in edited_args.items()
+                        if k not in (_REVIEWER_RECIPIENT_KEY, _REVIEWER_ATTACHMENTS_KEY)
+                    }
                 if edited_args != args:
                     # Rewrite the AI message's tool_call args so message history
                     # reflects what actually ran (immutable copy — reference pattern).
@@ -1425,7 +1567,8 @@ def tool_node(state: State, store: BaseStore, config=None):
                 tool_call,
                 refresh=True,
                 arg_trust=_derive_arg_trust(args, state["email_input"].get("security")),
-                recipients=_effective_recipients(name, args, state),
+                recipients=_effective_recipients(name, args, state, reviewer_recipients),
+                action_id=send_action_id,
             )
             if authz["decision"] == "deny":
                 result.append(_blocked_tool_message(name, authz["reason"], tool_call["id"]))
@@ -1458,11 +1601,28 @@ def tool_node(state: State, store: BaseStore, config=None):
         thread_id_token = current_gmail_thread_id.set(
             state["email_input"].get("gmail_thread_id")
         )
+        attachments_token = current_email_attachments.set(
+            tuple(state["email_input"].get("attachments") or [])
+        )
         # Recipients are graph context, never tool arguments. The model can say
-        # anything it likes about where mail should go; these are the only two
-        # places it can actually go.
-        reply_to_token = current_reply_to.set(_trusted_reply_to(state))
-        route_targets_token = current_route_targets.set(_trusted_route_targets(state))
+        # anything it likes about where mail should go; these are the only
+        # places it can actually go: the sender of the message being handled,
+        # the workflow's configured targets, or an address a *person* typed in
+        # the approval screen. That last one arrives through the HITL resume
+        # payload, has already been re-authorized above, and is still subject to
+        # AGENT_OUTBOUND_ALLOWLIST inside the send helpers.
+        reply_to_token = current_reply_to.set(
+            (reviewer_recipients[0] if reviewer_recipients else None) or _trusted_reply_to(state)
+        )
+        route_targets_token = current_route_targets.set(
+            tuple(reviewer_recipients) if reviewer_recipients else _trusted_route_targets(state)
+        )
+        uploaded, _upload_notes = (
+            load_uploaded_attachments(run_id, reviewer_attachment_ids)
+            if reviewer_attachment_ids
+            else ([], [])
+        )
+        uploaded_token = current_uploaded_attachments.set(tuple(uploaded))
         try:
             if name in approval_set:
                 tok = hitl_approved.set(True)
@@ -1486,8 +1646,10 @@ def tool_node(state: State, store: BaseStore, config=None):
                 return {"messages": result, "email_send_failed": message}
             continue
         finally:
+            current_uploaded_attachments.reset(uploaded_token)
             current_route_targets.reset(route_targets_token)
             current_reply_to.reset(reply_to_token)
+            current_email_attachments.reset(attachments_token)
             current_gmail_thread_id.reset(thread_id_token)
             current_email_id.reset(email_id_token)
         result.append(
@@ -1497,6 +1659,8 @@ def tool_node(state: State, store: BaseStore, config=None):
             sent = True
 
     update = {"messages": result}
+    if first_send_action_id:
+        update["send_action_id"] = first_send_action_id
     if redraft_requested:
         update["redraft_requested"] = True
         if redraft_feedback:
@@ -1544,6 +1708,12 @@ def after_tools(state: State) -> Literal["llm_call", "redraft_direct", "__end__"
     ):
         return END
     if state.get("redraft_requested"):
+        # Same wall as in _force_redraft_or_give_up: a refused action stays
+        # refused, so revising the body forever cannot get past it.
+        if _denied_since_last_feedback(state["messages"]):
+            raise RedraftGiveUpError(POLICY_REFUSED_MESSAGE)
+        if len(state["messages"]) > _MAX_RUN_MESSAGES:
+            raise RedraftGiveUpError(LOOP_ABORTED_MESSAGE)
         return "redraft_direct"
     return "llm_call"
 
@@ -1595,15 +1765,19 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
     # server-side draft so a retouche never resets hand edits.
     previous = {**previous, **{k: v for k, v in baseline.items() if isinstance(v, str) and v.strip()}}
     feedback = state.get("redraft_feedback") or _feedback_from_messages(state["messages"])
-    response_prefs = get_memory(
-        store,
-        namespace("response_preferences"),
-        agent_config.agent.response_preferences,
+    response_prefs = _prompt_memory(
+        get_memory(
+            store,
+            namespace("response_preferences"),
+            agent_config.agent.response_preferences,
+        )
     )
-    writing_style = get_memory(
-        store,
-        namespace("writing_style"),
-        agent_config.agent.writing_style_default,
+    writing_style = _prompt_memory(
+        get_memory(
+            store,
+            namespace("writing_style"),
+            agent_config.agent.writing_style_default,
+        )
     )
     run_id = _run_id_from_config(config)
 
@@ -1671,6 +1845,23 @@ _REDRAFT_NUDGE_SNIPPETS = (
 # decision); nudge attempts reset at each new round.
 _FEEDBACK_MARKER = "The user requested changes to this draft:"
 _REDRAFT_MAX_ATTEMPTS = 3
+# Start of the tool message tool_node appends when the security service refuses
+# an action outright (see _blocked_tool_message).
+_POLICY_DENIED_MARKER = "Security policy denied the"
+# A ceiling no legitimate run approaches: a normal draft-approve-send run holds
+# well under twenty messages, and the longest observed real feedback round held
+# thirty. Anything past this is a loop, and every extra turn costs a full-window
+# model call.
+_MAX_RUN_MESSAGES = 60
+
+POLICY_REFUSED_MESSAGE = (
+    "La politique de sécurité a refusé l'envoi de ce brouillon — "
+    "envoyez-le manuellement ou ajustez la politique."
+)
+LOOP_ABORTED_MESSAGE = (
+    "La reprise automatique tournait en boucle et a été arrêtée — "
+    "le brouillon précédent reste en attente."
+)
 
 
 class RedraftGiveUpError(RuntimeError):
@@ -1697,8 +1888,36 @@ def _redraft_attempts(messages) -> int:
     return count
 
 
+def _denied_since_last_feedback(messages) -> bool:
+    """True when policy refused an action during the current feedback round."""
+    denied = False
+    for message in messages:
+        content = (
+            message.get("content") if isinstance(message, dict)
+            else getattr(message, "content", None)
+        )
+        if not isinstance(content, str):
+            continue
+        if _FEEDBACK_MARKER in content:
+            denied = False
+        if _POLICY_DENIED_MARKER in content:
+            denied = True
+    return denied
+
+
 def _force_redraft_or_give_up(state: State) -> Literal["force_redraft"]:
-    if _redraft_attempts(state["messages"]) >= _REDRAFT_MAX_ATTEMPTS:
+    messages = state["messages"]
+    # A refusal is not a drafting mistake, so re-drafting cannot clear it. The
+    # denial message tells the model to call Done, and this router used to answer
+    # Done with "no, produce a revised draft" — a livelock that re-sent a
+    # full-window prompt on every turn. One observed run reached 758 messages and
+    # 379 model calls without ever being able to succeed.
+    if _denied_since_last_feedback(messages):
+        raise RedraftGiveUpError(POLICY_REFUSED_MESSAGE)
+    # Belt and braces for any future loop this router does not know about.
+    if len(messages) > _MAX_RUN_MESSAGES:
+        raise RedraftGiveUpError(LOOP_ABORTED_MESSAGE)
+    if _redraft_attempts(messages) >= _REDRAFT_MAX_ATTEMPTS:
         raise RedraftGiveUpError(
             f"No revised draft after {_REDRAFT_MAX_ATTEMPTS} attempts; "
             "the previous draft is kept pending."
@@ -1719,6 +1938,102 @@ def should_continue(state: State) -> Literal["environment", "force_redraft", "__
     return END
 
 
+_SUBJECT_TOKEN_RE = _re.compile(r"\b\d+\b")
+_SUBJECT_SPACE_RE = _re.compile(r"\s+")
+
+
+def _triage_subject_shape(subject: str) -> str:
+    shaped = _SUBJECT_TOKEN_RE.sub("#", subject.lower())
+    return _SUBJECT_SPACE_RE.sub(" ", shaped).strip()
+
+
+def _triage_sender_key(author: str) -> str:
+    _name, address = parseaddr(author or "")
+    return (address or author or "").strip().lower()
+
+
+def _triage_cache_key(
+    *,
+    author: str,
+    subject: str,
+    triage_instructions: str,
+    category_section: str,
+) -> str:
+    payload = {
+        "user": current_user_id(),
+        "instance": current_agent_instance_id(),
+        "sender": _triage_sender_key(author),
+        "subject_shape": _triage_subject_shape(subject),
+        "rules_hash": hashlib.sha256(
+            f"{triage_instructions}\n{category_section}".encode("utf-8")
+        ).hexdigest(),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"agora:triage:{digest}"
+
+
+TRIAGE_CACHEABLE_DECISIONS = frozenset({"respond", "notify"})
+
+
+def _triage_cacheable(
+    state: State, attachments: list, category_update: dict, classification: str
+) -> bool:
+    return (
+        settings.triage_cache_ttl_seconds > 0
+        and classification in TRIAGE_CACHEABLE_DECISIONS
+        and not attachments
+        and not state["email_input"].get("security")
+        and not category_update
+    )
+
+
+def _route_triage_decision(
+    state: State,
+    *,
+    classification: str,
+    category_update: dict,
+    email_markdown: str,
+) -> Command[Literal["llm_call", "environment", "__end__"]]:
+    if classification == "respond":
+        print("📧 Classification: RESPOND - This email requires a response")
+        return Command(
+            goto="llm_call",
+            update={
+                "classification_decision": classification,
+                **category_update,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Respond to the email: {email_markdown}",
+                    }
+                ],
+            },
+        )
+    if classification == "ignore":
+        print("🚫 Classification: IGNORE - This email can be safely ignored")
+        if _can_auto_organize():
+            return Command(
+                goto="environment",
+                update={
+                    "classification_decision": classification,
+                    **category_update,
+                    "auto_organized": True,
+                    "messages": [_auto_organize_message()],
+                },
+            )
+        return Command(
+            goto=END,
+            update={"classification_decision": classification, **category_update},
+        )
+    if classification == "notify":
+        print("🔔 Classification: NOTIFY - This email contains important information")
+        return Command(
+            goto=END,
+            update={"classification_decision": classification, **category_update},
+        )
+    raise ValueError(f"Invalid classification: {classification}")
+
+
 def triage_router(
     state: State, store: BaseStore, config=None
 ) -> Command[Literal["llm_call", "environment", "__end__"]]:
@@ -1737,10 +2052,12 @@ def triage_router(
     atts = state["email_input"].get("attachments") or []
     att_str = format_attachments(atts)
 
-    triage_instructions = get_memory(
-        store,
-        namespace("triage_preferences"),
-        agent_config.agent.triage_instructions,
+    triage_instructions = _prompt_memory(
+        get_memory(
+            store,
+            namespace("triage_preferences"),
+            agent_config.agent.triage_instructions,
+        )
     )
 
     # Build optional category section for B4 LLM fallback tagging.
@@ -1771,6 +2088,21 @@ def triage_router(
         attachments=att_str or "none",
     )
     email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
+    cache_key = _triage_cache_key(
+        author=author,
+        subject=subject,
+        triage_instructions=triage_instructions,
+        category_section=category_section,
+    )
+    cached = cache_get_json(cache_key)
+    # "ignore" is never cached: a stale one drops real mail silently for a whole TTL.
+    if isinstance(cached, dict) and cached.get("classification") in TRIAGE_CACHEABLE_DECISIONS:
+        return _route_triage_decision(
+            state,
+            classification=str(cached["classification"]),
+            category_update={},
+            email_markdown=email_markdown,
+        )
 
     run_id = _run_id_from_config(config)
     result = _invoke_llm(
@@ -1808,40 +2140,19 @@ def triage_router(
         if policy_command is not None:
             return policy_command
 
-    if classification == "respond":
-        print("📧 Classification: RESPOND - This email requires a response")
-        goto = "llm_call"
-        update = {
-            "classification_decision": classification,
-            **category_update,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"Respond to the email: {email_markdown}",
-                }
-            ],
-        }
-    elif classification == "ignore":
-        print("🚫 Classification: IGNORE - This email can be safely ignored")
-        if _can_auto_organize():
-            goto = "environment"
-            update = {
-                "classification_decision": classification,
-                **category_update,
-                "auto_organized": True,
-                "messages": [_auto_organize_message()],
-            }
-        else:
-            goto = END
-            update = {"classification_decision": classification, **category_update}
-    elif classification == "notify":
-        print("🔔 Classification: NOTIFY - This email contains important information")
-        goto = END
-        update = {"classification_decision": classification, **category_update}
-    else:
-        raise ValueError(f"Invalid classification: {classification}")
+    if _triage_cacheable(state, atts, category_update, classification):
+        cache_set_json(
+            cache_key,
+            {"classification": classification},
+            settings.triage_cache_ttl_seconds,
+        )
 
-    return Command(goto=goto, update=update)
+    return _route_triage_decision(
+        state,
+        classification=classification,
+        category_update=category_update,
+        email_markdown=email_markdown,
+    )
 
 
 overall_workflow = (

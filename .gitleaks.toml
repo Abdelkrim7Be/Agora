@@ -1,5 +1,7 @@
 [extend]
 useDefault = true
 
-# No exceptions yet. Add path/rule allowlist entries here (with a comment
-# explaining why) if the default ruleset ever flags a committed non-secret.
+# No exceptions in this config. The two known-false-positive findings from
+# git history (a deterministic test password literal, not a real credential)
+# are pinned by exact fingerprint in .gitleaksignore instead — the recommended
+# way to allowlist a specific historical finding without a broad regex.

@@ -50,7 +50,7 @@ def fake_quarantine(monkeypatch):
         injection: bool = False,
         spam: bool = False,
         reasons: list[str] | None = None,
-        sanitized: str = "clean text",
+        spans: list[dict] | None = None,
         raises: bool = False,
     ):
         import src.sanitize as s
@@ -66,7 +66,7 @@ def fake_quarantine(monkeypatch):
                         injection=injection,
                         spam=spam,
                         reasons=reasons or [],
-                        sanitized=sanitized,
+                        spans=spans or [],
                     )
                 ),
             )
@@ -81,7 +81,7 @@ def fake_output_quarantine(monkeypatch):
         injection: bool = False,
         spam: bool = False,
         reasons: list[str] | None = None,
-        sanitized: str = "clean text",
+        spans: list[dict] | None = None,
         raises: bool = False,
     ):
         import src.output_audit as oa
@@ -97,7 +97,7 @@ def fake_output_quarantine(monkeypatch):
                         injection=injection,
                         spam=spam,
                         reasons=reasons or [],
-                        sanitized=sanitized,
+                        spans=spans or [],
                     )
                 ),
             )

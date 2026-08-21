@@ -4,6 +4,9 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useBusy } from '../../contexts/BusyContext';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { useInboxQuery, useInboxAction, useForceAgentOnMessage, useCategorizeContact, useCategoriesQuery, useContactsQuery } from '../../api/queries';
 import { decodeHtmlEntities, formatDateTimeFr, parseSenderEmail, senderDomain } from '../../utils/format';
 
@@ -11,6 +14,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog, selectDialog } = useDialog();
+  const { runBusy } = useBusy();
   const navigate = useNavigate();
   const canManage = hasRole('owner');
   const announcedInitialLoad = useRef(false);
@@ -30,6 +34,9 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
   const messages = query.data?.messages || [];
   const warning = query.data?.warning;
   const isSentMailbox = mailbox === 'sent';
+  // Every row action mutates the mailbox, and none of them apply to a message
+  // already sent. Keeping the column produced a header over nothing but blanks.
+  const showActions = canManage && !isSentMailbox;
 
   const contacts = contactsQuery.data?.contacts || [];
   const categoryByEmail = useMemo(() => {
@@ -71,10 +78,19 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     isSentMailbox || categoryFilter === 'all' ? messages : messages.filter((msg) => categoryForMessage(msg) === categoryFilter)
   ), [messages, categoryFilter, categoryByEmail, isSentMailbox]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const pager = usePagination(filteredMessages);
+  const pageMessages = pager.visible;
+
   useEffect(() => {
     setMailbox(initialMailbox);
     setSelectedIds(new Set());
   }, [initialMailbox]);
+
+  // Switching mailbox or folder is a new list, so it starts at its first page.
+  // Carrying the old index over dropped you into the middle of the new one.
+  useEffect(() => {
+    pager.setPage(0);
+  }, [mailbox, categoryFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (query.data && !announcedInitialLoad.current) {
@@ -125,7 +141,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
         });
     if (!category) return;
     try {
-      await categorizeContact.mutateAsync({ email, category, domainOnly });
+      await runBusy('Classement de l’expéditeur', () => categorizeContact.mutateAsync({ email, category, domainOnly }));
       setStatus(domainOnly ? `Domaine ${target} catégorisé.` : `Expéditeur ${target} catégorisé.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de catégoriser : ${error.message}`, 'error');
@@ -141,18 +157,18 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     });
   };
 
-  const allVisibleSelected = filteredMessages.length > 0
-    && filteredMessages.every((msg) => selectedIds.has(msg.id));
+  const allVisibleSelected = pageMessages.length > 0
+    && pageMessages.every((msg) => selectedIds.has(msg.id));
 
   const toggleSelectAll = () => {
     setSelectedIds((current) => {
       if (allVisibleSelected) {
         const next = new Set(current);
-        filteredMessages.forEach((msg) => next.delete(msg.id));
+        pageMessages.forEach((msg) => next.delete(msg.id));
         return next;
       }
       const next = new Set(current);
-      filteredMessages.forEach((msg) => next.add(msg.id));
+      pageMessages.forEach((msg) => next.add(msg.id));
       return next;
     });
   };
@@ -191,7 +207,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     const failed = [];
     for (const email of senders) {
       try {
-        await categorizeContact.mutateAsync({ email, category, domainOnly: false });
+        await runBusy('Classement des expéditeurs', () => categorizeContact.mutateAsync({ email, category, domainOnly: false }));
         done += 1;
       } catch (error) {
         failed.push(email);
@@ -217,7 +233,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
       if (!confirmed) return;
     }
     try {
-      await inboxAction.mutateAsync({ msgId, command });
+      await runBusy('Action sur la boîte de réception', () => inboxAction.mutateAsync({ msgId, command }));
       setStatus(`Terminé : ${command}.`, 'ok');
     } catch (error) {
       setStatus(`Action sur la boîte de réception échouée : ${error.message}`, 'error');
@@ -234,8 +250,26 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
     });
     if (!confirmed) return;
     try {
-      const result = await forceAgent.mutateAsync(msgId);
-      setStatus(`Agent relancé : ${result.outcome?.status || 'traitement demandé'}.`, 'ok');
+      const result = await runBusy(
+        'L’agent lit le message et rédige une proposition',
+        () => forceAgent.mutateAsync(msgId),
+      );
+      const outcome = result.outcome || {};
+      // Land on what the agent just produced rather than leaving the person on
+      // the list to work out which row changed: a draft waiting for a decision
+      // opens in the validation queue with that card focused, anything else
+      // (ignored, notified, failed) opens its run so the verdict is readable.
+      if (outcome.run_id && outcome.status === 'pending_approval') {
+        setStatus('Brouillon prêt — relisez-le avant envoi.', 'ok');
+        navigate(`../validation?run=${encodeURIComponent(outcome.run_id)}`);
+        return;
+      }
+      if (outcome.run_id) {
+        setStatus(`Traitement terminé : ${outcome.status || 'terminé'}.`, 'ok');
+        navigate(`../run/${encodeURIComponent(outcome.run_id)}`);
+        return;
+      }
+      setStatus(`Agent relancé : ${outcome.status || 'traitement demandé'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de forcer l’agent : ${error.message}`, 'error');
     }
@@ -300,12 +334,13 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
                   disabled={!filteredMessages.length}
                 />
               </th>
-              <th>{isSentMailbox ? 'À' : 'De'}</th><th>Sujet</th><th>Date</th><th>Agent</th><th>Actions</th>
+              <th>{isSentMailbox ? 'À' : 'De'}</th><th>Sujet</th><th>Date</th><th>Agent</th>
+              {showActions ? <th>Actions</th> : null}
             </tr>
           </thead>
           <tbody>
-            {!filteredMessages.length ? (
-              <tr><td colSpan={6} className="empty-cell">
+            {!pageMessages.length ? (
+              <tr><td colSpan={showActions ? 6 : 5} className="empty-cell">
                 {warning ? (
                   <div className="inbox-empty-state">
                     <strong>Cette boîte n’est pas encore connectée à Gmail.</strong>
@@ -317,7 +352,7 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
                 ) : (isSentMailbox ? 'Aucun e-mail envoyé trouvé dans la boîte connectée.' : (categoryFilter === 'all' ? 'Boîte de réception vide.' : 'Aucun message dans ce dossier.'))}
               </td></tr>
             ) : (
-              filteredMessages.map((msg) => {
+              pageMessages.map((msg) => {
                 const verdictLabel = msg.run_status === 'pending_approval'
                   ? 'Relire le brouillon'
                   : msg.run_id ? 'Détail de l’exécution' : 'aucun';
@@ -335,32 +370,26 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
                     <td>{msg.unread ? <strong>{decodeHtmlEntities(msg.subject) || '(sans objet)'}</strong> : (decodeHtmlEntities(msg.subject) || '(sans objet)')}<div className="muted">{decodeHtmlEntities(msg.snippet)}</div></td>
                     <td>{formatDateTimeFr(msg.date)}</td>
                     <td>{msg.run_id ? <button className="link-button" type="button" onClick={() => handleOpen(msg)}>{verdictLabel}</button> : <span className="muted">aucun</span>}</td>
-                    <td>
-                      <div className="actions">
-                        {canManage && !isSentMailbox && (
+                    {showActions ? (
+                      <td>
+                        <div className="actions">
                           <button type="button" onClick={() => handleAction(msg.unread ? 'read' : 'unread', msg.id)}>
                             {msg.unread ? 'Marquer lu' : 'Marquer non lu'}
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>}
-                        {canManage && !isSentMailbox && (
+                          <button type="button" onClick={() => handleAction('archive', msg.id)}>Archiver</button>
                           <button type="button" title="Catégoriser l’expéditeur" onClick={() => handleCategorize(msg, false)}>
                             Catégoriser l’expéditeur
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && (
                           <button type="button" title="Catégoriser le domaine" onClick={() => handleCategorize(msg, true)}>
                             Catégoriser le domaine
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && (
                           <button type="button" disabled={forceAgent.isPending} onClick={() => handleForceAgent(msg.id)}>
                             Forcer l’agent
                           </button>
-                        )}
-                        {canManage && !isSentMailbox && <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>}
-                      </div>
-                    </td>
+                          <button className="danger" type="button" onClick={() => handleAction('trash', msg.id)}>Corbeille</button>
+                        </div>
+                      </td>
+                    ) : null}
                   </tr>
                 );
               })
@@ -368,6 +397,15 @@ export default function InboxPage({ initialMailbox = 'inbox' }) {
           </tbody>
         </table>
       </div>
+      <TablePager
+        page={pager.page}
+        pageCount={pager.pageCount}
+        total={pager.total}
+        size={pager.size}
+        onPage={pager.setPage}
+        onSize={pager.setSize}
+        unit="messages"
+      />
     </>
   );
 }

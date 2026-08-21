@@ -13,6 +13,13 @@ def _pubsub_body(payload: dict) -> dict:
     return {"message": {"data": data, "messageId": "msg-1"}}
 
 
+def _enable_webhooks(monkeypatch, api):
+    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/acme/topics/gmail-push")
+    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    monkeypatch.setattr(api.settings, "polling_fallback_enabled", True)
+
+
 def test_duplicate_history_push_is_a_no_op(monkeypatch):
     import src.api as api
 
@@ -22,8 +29,7 @@ def test_duplicate_history_push_is_a_no_op(monkeypatch):
         called["poll"] = True
         return []
 
-    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
-    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    _enable_webhooks(monkeypatch, api)
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: "123")
     monkeypatch.setattr(api, "set_last_history_id", lambda hid: called.update(set=True))
@@ -54,8 +60,7 @@ def test_webhook_does_not_advance_baseline_on_generic_batch_failure(monkeypatch)
     async def fake_poll_history(graph, history_id):
         raise RuntimeError("temporary upstream failure")
 
-    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
-    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    _enable_webhooks(monkeypatch, api)
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: "100")
     monkeypatch.setattr(api, "set_last_history_id", lambda hid: advanced.update(called=True, hid=hid))
@@ -93,8 +98,7 @@ def test_webhook_advances_stale_history_window_to_stop_redelivery(monkeypatch):
     async def fake_poll_history(graph, history_id):
         raise _HttpError(404)
 
-    monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
-    monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
+    _enable_webhooks(monkeypatch, api)
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: "100")
     monkeypatch.setattr(api, "set_last_history_id", lambda hid: advanced.update(hid=hid))

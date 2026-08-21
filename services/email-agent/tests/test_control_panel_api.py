@@ -551,6 +551,43 @@ def test_style_endpoint_reads_and_updates_current_instance():
     assert hr["writing_style"] != "Use crisp executive prose."
 
 
+def test_sensitivity_endpoint_round_trip(monkeypatch):
+    from src.sensitivity_config import SensitivityConfig
+
+    stored = {"config": SensitivityConfig()}
+
+    monkeypatch.setattr(api, "load_sensitivity", lambda agent_instance_id=None: stored["config"])
+
+    def fake_save(config, agent_instance_id=None):
+        stored["config"] = config
+        stored["agent_instance_id"] = agent_instance_id
+
+    monkeypatch.setattr(api, "save_sensitivity", fake_save)
+
+    with TestClient(app) as client:
+        initial = client.get("/sensitivity", headers={"X-Agora-Agent-Instance": "ceo-email-agent"})
+        saved = client.put(
+            "/sensitivity",
+            headers={"X-Agora-Agent-Instance": "ceo-email-agent", "X-Agora-Instance-Role": "owner"},
+            json={
+                "enabled": True,
+                "blocked_senders": [" Private@Bank.Example ", ""],
+                "blocked_domains": ["Legal.Example"],
+                "subject_keywords": ["Confidentiel"],
+            },
+        )
+
+    assert initial.status_code == 200
+    assert initial.json()["sensitivity"]["enabled"] is False
+    assert saved.status_code == 200
+    body = saved.json()["sensitivity"]
+    assert body["enabled"] is True
+    assert body["blocked_senders"] == ["private@bank.example"]
+    assert body["blocked_domains"] == ["legal.example"]
+    assert body["subject_keywords"] == ["confidentiel"]
+    assert stored["agent_instance_id"] == "ceo-email-agent"
+
+
 def test_style_learn_requires_enabled_config(monkeypatch):
     import src.api as api
 
@@ -1210,6 +1247,7 @@ def test_gmail_webhook_processes_history_from_stored_baseline(monkeypatch):
         return [("m1", "completed", "run-1")]
 
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/test/topics/gmail")
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: "100")
@@ -1244,6 +1282,7 @@ def test_gmail_webhook_seeds_baseline_on_first_push(monkeypatch):
         return []
 
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/test/topics/gmail")
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
     monkeypatch.setattr(api, "poll_history", fake_poll_history)
     monkeypatch.setattr(api, "get_last_history_id", lambda: None)
@@ -1272,6 +1311,7 @@ def test_gmail_webhook_rejects_invalid_token_when_enabled(monkeypatch):
     import src.api as api
 
     monkeypatch.setattr(api.settings, "gmail_webhook_enabled", True)
+    monkeypatch.setattr(api.settings, "gmail_webhook_topic", "projects/test/topics/gmail")
     monkeypatch.setattr(api.settings, "gmail_webhook_secret", "secret")
 
     with TestClient(app) as client:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from src import alerts
+from src.alerts import load_alert_settings
 from src.config import settings
 
 
@@ -89,3 +90,26 @@ def test_token_cap_alert_uses_threshold_transition(monkeypatch, tmp_path):
     assert events[0]["kind"] == "token_cap_near"
     assert len(sent) == 1
     assert alerts.evaluate_alerts(snapshot, now=datetime(2026, 7, 11, 9, 10, tzinfo=timezone.utc)) == []
+
+
+def test_deployment_defaults_apply_to_an_instance_with_no_saved_settings(monkeypatch, tmp_path):
+    """A fresh install used to ship with alerts off and no recipient, so the
+    component-down and token-cap mails never left even with notify enabled."""
+    monkeypatch.setattr(settings, "alerts_path", str(tmp_path / "alerts.yaml"))
+    monkeypatch.setattr(settings, "alerts_enabled_default", True)
+    monkeypatch.setattr(settings, "alert_admin_recipient_default", "ops@example.com")
+
+    config = load_alert_settings()
+
+    assert config.enabled is True
+    assert config.admin_recipient == "ops@example.com"
+
+
+def test_saved_settings_win_over_the_deployment_defaults(monkeypatch, tmp_path):
+    path = tmp_path / "alerts.yaml"
+    path.write_text("enabled: true\nadmin_recipient: team@example.com\n")
+    monkeypatch.setattr(settings, "alerts_path", str(path))
+    monkeypatch.setattr(settings, "alerts_enabled_default", True)
+    monkeypatch.setattr(settings, "alert_admin_recipient_default", "ops@example.com")
+
+    assert load_alert_settings().admin_recipient == "team@example.com"

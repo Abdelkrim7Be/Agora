@@ -71,31 +71,46 @@ export default function PlatformDashboardPage() {
       <PageHeading view="platformDashboard" />
       <div className="platform-dashboard-grid">
         <Link className="platform-metric-card" to="/instances">
-          <span>Instances IA</span>
-          <strong>{formatCountFr(totals.instances)}</strong>
-          <small>{formatCountFr(totals.ready)} prêtes · {formatCountFr(totals.active)} actives</small>
+          <span className="platform-metric-icon material-symbols-outlined" aria-hidden="true">deployed_code</span>
+          <span className="platform-metric-copy">
+            <span>Instances IA</span>
+            <strong>{formatCountFr(totals.instances)}</strong>
+            <small>{formatCountFr(totals.ready)} prêtes · {formatCountFr(totals.active)} actives</small>
+          </span>
         </Link>
         <Link className="platform-metric-card" to="/instances">
-          <span>Boîtes surveillées</span>
-          <strong>{formatCountFr(totals.mailboxes)}</strong>
-          <small>Connexions mail accessibles</small>
+          <span className="platform-metric-icon material-symbols-outlined" aria-hidden="true">mark_email_read</span>
+          <span className="platform-metric-copy">
+            <span>Boîtes surveillées</span>
+            <strong>{formatCountFr(totals.mailboxes)}</strong>
+            <small>Connexions mail accessibles</small>
+          </span>
         </Link>
         <Link className="platform-metric-card" to="/instances">
-          <span>À valider</span>
-          <strong>{formatCountFr(totals.pending)}</strong>
-          <small>Brouillons ou actions en attente</small>
+          <span className="platform-metric-icon material-symbols-outlined" aria-hidden="true">inbox</span>
+          <span className="platform-metric-copy">
+            <span>À valider</span>
+            <strong>{formatCountFr(totals.pending)}</strong>
+            <small>Brouillons ou actions en attente</small>
+          </span>
         </Link>
         {isAdmin ? (
           <Link className="platform-metric-card" to="/team">
-            <span>Utilisateurs</span>
-            <strong>{formatCountFr(totals.users)}</strong>
-            <small>Comptes plateforme</small>
+            <span className="platform-metric-icon material-symbols-outlined" aria-hidden="true">group</span>
+            <span className="platform-metric-copy">
+              <span>Utilisateurs</span>
+              <strong>{formatCountFr(totals.users)}</strong>
+              <small>Comptes plateforme</small>
+            </span>
           </Link>
         ) : (
           <Link className="platform-metric-card" to="/agent-types">
-            <span>Catalogue</span>
-            <strong>{formatCountFr(agentTypes.length)}</strong>
-            <small>Types d’agents disponibles</small>
+            <span className="platform-metric-icon material-symbols-outlined" aria-hidden="true">smart_toy</span>
+            <span className="platform-metric-copy">
+              <span>Catalogue</span>
+              <strong>{formatCountFr(agentTypes.length)}</strong>
+              <small>Types d’agents disponibles</small>
+            </span>
           </Link>
         )}
       </div>
@@ -131,16 +146,15 @@ export default function PlatformDashboardPage() {
         <Card className="platform-overview-card">
           <div className="card-header">
             <div>
-              <h2>Contrôle humain</h2>
-              <div className="meta"><span>Ce qui nécessite une décision avant sortie client</span></div>
+              <h2>En attente de décision</h2>
+              <div className="meta"><span>Toutes instances confondues</span></div>
             </div>
           </div>
           <div className="platform-control-panel">
-            <div><span>Actions en attente</span><strong>{formatCountFr(totals.pending)}</strong></div>
-            <div><span>Coût du jour</span><strong>{formatCostEur(totals.dailyCost)}</strong></div>
-            <div><span>Boîtes connectées</span><strong>{formatCountFr(totals.mailboxes)}</strong></div>
+            <Link to="/instances"><span>Actions à valider</span><strong>{formatCountFr(totals.pending)}</strong></Link>
+            <Link to="/instances"><span>Coût du jour</span><strong>{formatCostEur(totals.dailyCost)}</strong></Link>
+            <Link to="/instances"><span>Boîtes connectées</span><strong>{formatCountFr(totals.mailboxes)}</strong></Link>
           </div>
-          <div className="notice">Chaque agent garde son espace de travail, mais la plateforme donne la vue d’ensemble : instances, boîtes, utilisateurs et contrôle humain.</div>
         </Card>
       </div>
     </>

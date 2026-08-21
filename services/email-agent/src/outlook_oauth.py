@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 
 from src.config import settings
+from src.connected_mailboxes import claim_mailbox, release_mailbox
 from src.oauth_state import build_state, sign_state, validate_state  # noqa: F401 — re-exported
 from src.token_store import delete_token, has_stored_token, prepared_token_file
 
@@ -137,7 +138,7 @@ def _post_token(form: dict[str, str]) -> dict[str, Any]:
     return payload
 
 
-def _verify_mailbox(access_token: str, expected_mailbox: str) -> str:
+def _verify_mailbox(access_token: str, expected_mailbox: str | None = None) -> str:
     """Return the authorized mailbox address, raising if it is not the expected one.
 
     Fails closed, like the Gmail path: a token is never stored for a mailbox we
@@ -155,9 +156,10 @@ def _verify_mailbox(access_token: str, expected_mailbox: str) -> str:
         raise ValueError(f"Could not verify authorized mailbox: {exc}") from exc
 
     actual = (profile.get("mail") or profile.get("userPrincipalName") or "").strip().lower()
-    if actual != expected_mailbox:
+    expected = (expected_mailbox or "").strip().lower()
+    if expected and actual != expected:
         raise ValueError(
-            f"OAuth authorized '{actual}' but expected '{expected_mailbox}'. "
+            f"OAuth authorized '{actual}' but expected '{expected}'. "
             "Re-authorize with the correct Microsoft account."
         )
     return actual
@@ -190,8 +192,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any], state: str
         raise ValueError("Microsoft returned no access token.")
 
     expected_mailbox = (state_payload.get("mailbox_identity") or "").strip().lower()
-    if expected_mailbox:
-        _verify_mailbox(access_token, expected_mailbox)
+    actual_mailbox = _verify_mailbox(access_token, expected_mailbox or None)
 
     if not payload.get("refresh_token"):
         print(
@@ -211,6 +212,11 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any], state: str
             f"Outlook authorized but the token could not be stored ({exc}). "
             "Check the token store volume and encryption key, then reconnect."
         ) from exc
+    try:
+        claim_mailbox(PROVIDER, actual_mailbox, user_id, agent_instance_id)
+    except Exception:
+        delete_token(user_id, agent_instance_id, provider=PROVIDER)
+        raise
 
     print(f"oauth: outlook token stored for {agent_instance_id}")
     return path
@@ -271,4 +277,5 @@ def revoke_outlook_token(
     if not has_stored_token(agent_instance_id, provider=PROVIDER):
         return False
     delete_token(user_id, agent_instance_id, provider=PROVIDER)
+    release_mailbox(PROVIDER, agent_instance_id)
     return True

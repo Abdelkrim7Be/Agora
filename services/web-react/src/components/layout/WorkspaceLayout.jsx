@@ -14,7 +14,7 @@ export default function WorkspaceLayout() {
   const { instanceId: paramId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { setInstanceId, setInstances } = useInstance();
+  const { setInstanceId, setInstances, currentInstance, currentInstanceContentRole } = useInstance();
   const { setStatus } = useStatus();
   const queryClient = useQueryClient();
   const { api } = useApi();
@@ -24,6 +24,8 @@ export default function WorkspaceLayout() {
   const instancesQuery = useAgentInstancesQuery();
   const setupQuery = useInstanceSetupQuery();
   const setupStatus = setupQuery.data?.status;
+  const canReadContent = Boolean(currentInstanceContentRole);
+  const onContentRoute = /^\/instance\/[^/]+\/(?:validation|drafts|inbox|sent|run(?:\/|$))/.test(location.pathname);
 
   useEffect(() => {
     document.body.classList.add('workspace-mode');
@@ -93,6 +95,16 @@ export default function WorkspaceLayout() {
     if (instancesQuery.data) setInstances(instancesQuery.data);
   }, [instancesQuery.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!paramId || !instancesQuery.isSuccess || !currentInstance || canReadContent) return;
+    queryClient.removeQueries({ queryKey: ['pending-runs', paramId] });
+    queryClient.removeQueries({ queryKey: ['inbox', paramId] });
+    queryClient.removeQueries({ queryKey: ['run-detail'] });
+    if (!onContentRoute) return;
+    setStatus('Vue masquée : ce compte peut voir l’instance, pas le contenu de sa boîte.', 'warn');
+    navigate(`/instance/${encodeURIComponent(paramId)}`, { replace: true });
+  }, [paramId, instancesQuery.isSuccess, currentInstance, canReadContent, onContentRoute]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // An email workspace is not usable until Gmail connection and minimum setup
   // are complete. Gate not_started/loading states too so users do not land on
   // empty dashboards while onboarding has not populated inbox, contacts,
@@ -102,9 +114,7 @@ export default function WorkspaceLayout() {
 
   useEffect(() => {
     if (setupStatus !== 'ready' || !paramId) return;
-    [
-      ['inbox', paramId],
-      ['drafts', paramId],
+    const sharedQueryKeys = [
       ['categories', paramId],
       ['contacts', paramId],
       ['persona', paramId],
@@ -115,9 +125,15 @@ export default function WorkspaceLayout() {
       ['gmail-status', paramId],
       ['notifications', paramId],
       ['notifications-unread-count', paramId],
+    ];
+    const contentQueryKeys = [
+      ['inbox', paramId],
       ['pending-runs', paramId],
-    ].forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
+    ];
+    sharedQueryKeys.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
     queryClient.invalidateQueries({ queryKey: ['agent-instances'] });
+    if (!canReadContent) return;
+    contentQueryKeys.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
     queryClient.prefetchQuery({
       queryKey: inboxQueryKey(paramId, 'inbox'),
       queryFn: () => api(inboxQueryPath('inbox')),

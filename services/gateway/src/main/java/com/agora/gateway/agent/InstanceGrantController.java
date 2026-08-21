@@ -25,8 +25,6 @@ import java.util.Map;
 @RequestMapping("/agent-instances/{instanceId}/grants")
 public class InstanceGrantController {
 
-    private static final String INSTANCE_ROLE_HEADER = "X-Agora-Instance-Role";
-
     private final InstanceGrantService grantService;
     private final AuditService auditService;
 
@@ -36,10 +34,27 @@ public class InstanceGrantController {
     }
 
     @GetMapping
-    public List<GrantResponse> list(@PathVariable String instanceId) {
-        return grantService.listGrants(instanceId).stream()
+    public ResponseEntity<List<GrantResponse>> list(Authentication auth, @PathVariable String instanceId) {
+        if (!canManageGrants(auth, instanceId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return ResponseEntity.ok(grantService.listGrants(instanceId).stream()
                 .map(GrantResponse::from)
-                .toList();
+                .toList());
+    }
+
+    private boolean canManageGrants(Authentication auth, String instanceId) {
+        // Platform admin can always reach the grants endpoint, even with no active
+        // grant of their own — otherwise an admin locked out of an instance (grant
+        // expired, or the owner who could re-grant it is gone) has no way back in
+        // except a direct database edit. addGrant() still forces any grant back to
+        // an admin user through the 24h cap, so this only restores a path to
+        // request time-boxed access, never a standing one.
+        String role = jwtRole(auth);
+        if ("admin".equals(role)) {
+            return true;
+        }
+        return "owner".equals(grantService.effectiveRole(instanceId, auth.getName(), role).orElse(""));
     }
 
     @PostMapping
@@ -47,8 +62,11 @@ public class InstanceGrantController {
             Authentication auth,
             @PathVariable String instanceId,
             @Valid @RequestBody GrantRequest request) {
+        if (!canManageGrants(auth, instanceId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         AgentInstanceGrant grant = grantService.addGrant(
-                instanceId, request.userId(), request.role(), auth.getName());
+                instanceId, request.userId(), request.role(), auth.getName(), request.expiresAt());
         auditService.record(auth.getName(), jwtRole(auth), "grant_add", "POST",
                 "/agent-instances/" + instanceId + "/grants", null,
                 "granted " + request.role() + " to " + request.userId());
@@ -60,6 +78,9 @@ public class InstanceGrantController {
             Authentication auth,
             @PathVariable String instanceId,
             @PathVariable String userId) {
+        if (!canManageGrants(auth, instanceId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         grantService.removeGrant(instanceId, userId);
         auditService.record(auth.getName(), jwtRole(auth), "grant_remove", "DELETE",
                 "/agent-instances/" + instanceId + "/grants/" + userId, null,
@@ -69,6 +90,11 @@ public class InstanceGrantController {
 
     @ExceptionHandler(InstanceGrantService.InvalidGrantRoleException.class)
     ResponseEntity<Map<String, String>> invalidRole(InstanceGrantService.InvalidGrantRoleException ex) {
+        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(InstanceGrantService.AdminGrantRequiresExpiryException.class)
+    ResponseEntity<Map<String, String>> adminGrantRequiresExpiry(InstanceGrantService.AdminGrantRequiresExpiryException ex) {
         return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
     }
 
@@ -86,7 +112,8 @@ public class InstanceGrantController {
 
     record GrantRequest(
             @NotBlank @JsonProperty("user_id") String userId,
-            @NotBlank @JsonProperty("role") String role
+            @NotBlank @JsonProperty("role") String role,
+            @JsonProperty("expires_at") Instant expiresAt
     ) {}
 
     record GrantResponse(
@@ -94,11 +121,12 @@ public class InstanceGrantController {
             @JsonProperty("user_id") String userId,
             String role,
             @JsonProperty("granted_by") String grantedBy,
-            @JsonProperty("granted_at") Instant grantedAt
+            @JsonProperty("granted_at") Instant grantedAt,
+            @JsonProperty("expires_at") Instant expiresAt
     ) {
         static GrantResponse from(AgentInstanceGrant g) {
             return new GrantResponse(g.getAgentInstanceId(), g.getUserId(), g.getRole(),
-                    g.getGrantedBy(), g.getGrantedAt());
+                    g.getGrantedBy(), g.getGrantedAt(), g.getExpiresAt());
         }
     }
 }

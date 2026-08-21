@@ -3,11 +3,15 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { InstanceProvider } from './contexts/InstanceContext';
 import { I18nProvider } from './contexts/I18nContext';
-import { ThemeProvider } from './contexts/ThemeContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { DialogProvider } from './contexts/DialogContext';
-import { QueryClient, QueryCache, QueryClientProvider } from '@tanstack/react-query';
-import { recordFailure, clearFailure } from './api/failureLog';
+import { BusyProvider } from './contexts/BusyContext';
+import { Toaster } from 'sonner';
+import { PendingClick } from './components/ui/PendingClick';
+import { RequireGlobalRole } from './components/layout/RequireGlobalRole';
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query';
+import { recordFailure, clearFailure, recordActionFailure, clearActionFailure } from './api/failureLog';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import PlatformLayout from './components/layout/PlatformLayout';
 import WorkspaceLayout from './components/layout/WorkspaceLayout';
@@ -18,10 +22,11 @@ import InstancesPage from './pages/platform/InstancesPage';
 import AgentTypesPage from './pages/platform/AgentTypesPage';
 import HealthPage from './pages/platform/HealthPage';
 import AuditPage from './pages/platform/AuditPage';
+import ReportsPage from './pages/platform/ReportsPage';
+import PlatformAuditPage from './pages/platform/PlatformAuditPage';
 import UsersPage from './pages/platform/UsersPage';
 import AccountPage from './pages/platform/AccountPage';
 import ValidationPage from './pages/workspace/ValidationPage';
-import DraftsPage from './pages/workspace/DraftsPage';
 import InboxPage from './pages/workspace/InboxPage';
 import RunDetailPage from './pages/workspace/RunDetailPage';
 import GmailPage from './pages/workspace/GmailPage';
@@ -49,8 +54,17 @@ import NotFoundPage from './pages/NotFoundPage';
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
-    onError: (error, query) => recordFailure(query.queryKey, error),
+    onError: (error, query) => {
+      if (query.meta?.silentFailure) return;
+      recordFailure(query.queryKey, error);
+    },
     onSuccess: (_data, query) => clearFailure(query.queryKey),
+  }),
+  // Reads reported their failures and writes did not, so a button the server
+  // declines did nothing visible at all — same as a broken one.
+  mutationCache: new MutationCache({
+    onError: (error) => recordActionFailure(error),
+    onSuccess: () => clearActionFailure(),
   }),
   defaultOptions: {
     queries: {
@@ -73,12 +87,26 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+function AdminOnly({ children }) {
+  const { globalRole } = useAuth();
+  if (globalRole !== 'admin') return <Navigate to="/instances" replace />;
+  return children;
+}
+
 function PublicOnlyRoute({ children }) {
   const { token } = useAuth();
   if (token) {
     return <Navigate to="/" replace />;
   }
   return children;
+}
+
+// Sonner reads the app's own dark/light toggle rather than guessing from
+// prefers-color-scheme, so a toast never clashes with whichever theme the
+// person actually chose.
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster theme={theme} position="bottom-right" richColors closeButton />;
 }
 
 // Keeps `body.signed-in` in sync so the CSS written for the vanilla app
@@ -100,6 +128,9 @@ export default function App() {
             <ThemeProvider>
               <StatusProvider>
                 <DialogProvider>
+                  <BusyProvider>
+                  <ThemedToaster />
+                  <PendingClick />
                   <SessionBodyClass />
                   <BrowserRouter>
                     <ErrorBoundary>
@@ -111,7 +142,9 @@ export default function App() {
 
                       {/* Platform views */}
                       <Route path="/" element={<ProtectedRoute><PlatformLayout /></ProtectedRoute>}>
-                        <Route index element={<PlatformDashboardPage />} />
+                        {/* Instance owners work inside a workspace; the platform-wide
+                            overview is an administration view. */}
+                        <Route index element={<AdminOnly><PlatformDashboardPage /></AdminOnly>} />
                         <Route path="instances" element={<InstancesPage />} />
                         <Route path="agent-types" element={<AgentTypesPage />} />
                         {/* Route segments below deliberately avoid "health"/"audit"/"users" as a
@@ -120,6 +153,8 @@ export default function App() {
                             with the same name would break on hard reload / direct navigation. */}
                         <Route path="system-health" element={<HealthPage />} />
                         <Route path="access-log" element={<AuditPage />} />
+                        <Route path="report-inbox" element={<AdminOnly><ReportsPage /></AdminOnly>} />
+                        <Route path="platform-audit" element={<AdminOnly><PlatformAuditPage /></AdminOnly>} />
                         <Route path="team" element={<UsersPage />} />
                         <Route path="account" element={<AccountPage />} />
                       </Route>
@@ -132,12 +167,21 @@ export default function App() {
                         <Route path="junk" element={<JunkPage />} />
                         <Route path="notifications" element={<NotificationsPage />} />
                         <Route path="validation" element={<ValidationPage />} />
-                        <Route path="drafts" element={<DraftsPage />} />
+                        {/* Brouillons and Validation listed the same pending_approval runs
+                            through two endpoints — one queue, one page. */}
+                        <Route path="drafts" element={<Navigate to="../validation" replace />} />
                         <Route path="inbox" element={<InboxPage />} />
-                        <Route path="sent" element={<InboxPage initialMailbox="sent" />} />
+                        {/* Messages already toggles Envoyés from within the same page
+                            (InboxPage's own inbox/sent switch) — a separate route and
+                            sidebar entry for the same view was a duplicate, not a page. */}
+                        <Route path="sent" element={<Navigate to="../inbox" replace />} />
                         <Route path="run/:runId" element={<RunDetailPage />} />
                         <Route path="gmail" element={<GmailPage />} />
                         <Route path="config" element={<PersonaPage />} />
+                        {/* The name the agent declares for this section in its
+                            manifest. `config` predates the contract and is kept
+                            so existing links and bookmarks still resolve. */}
+                        <Route path="persona" element={<PersonaPage />} />
                         <Route path="style" element={<StylePage />} />
                         <Route path="signature" element={<SignaturePage />} />
                         <Route path="categories" element={<CategoriesPage />} />
@@ -147,10 +191,10 @@ export default function App() {
                         <Route path="campaigns" element={<CampaignsPage />} />
                         <Route path="memory" element={<MemoryPage />} />
                         <Route path="rules" element={<RulesPage />} />
-                        <Route path="capabilities" element={<CapabilitiesPage />} />
+                        <Route path="capabilities" element={<RequireGlobalRole view="capabilities"><CapabilitiesPage /></RequireGlobalRole>} />
                         <Route path="permissions" element={<PermissionsPage />} />
-                        <Route path="dlq" element={<DlqPage />} />
-                        <Route path="costs" element={<CostsPage />} />
+                        <Route path="dlq" element={<RequireGlobalRole view="dlq"><DlqPage /></RequireGlobalRole>} />
+                        <Route path="costs" element={<RequireGlobalRole view="costs"><CostsPage /></RequireGlobalRole>} />
                       </Route>
 
                       {/* A mistyped or stale link used to render a blank page. */}
@@ -158,6 +202,7 @@ export default function App() {
                     </Routes>
                     </ErrorBoundary>
                   </BrowserRouter>
+                  </BusyProvider>
                 </DialogProvider>
               </StatusProvider>
             </ThemeProvider>

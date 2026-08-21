@@ -35,6 +35,14 @@ export default function DashboardPage() {
   const workflows = summary?.by_workflow || [];
   const depts = summary?.dept_load || [];
 
+  // A freshly onboarded mailbox renders four zeros, which reads as a measured
+  // result rather than "nothing has run yet". Only say so once the request has
+  // actually succeeded — during a load or a failure, zero means neither.
+  const nothingProcessedYet = query.isSuccess
+    && !totals.emails_handled
+    && !totals.pending
+    && workflows.length === 0;
+
   return (
     <>
       <PageHeading view="analytics" />
@@ -44,26 +52,52 @@ export default function DashboardPage() {
           <option value="week">7 derniers jours</option>
           <option value="month">Mois en cours</option>
         </select>
-        <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Actualiser</span>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
         <span className="counter">{summary?.agent_instance_id || instanceId}</span>
       </div>
       <div className="cost-summary-grid dashboard-summary-grid">
         <div><strong>{formatCountFr(totals.emails_handled)}</strong><span>E-mails traités</span></div>
-        <div><strong>{formatPercentFr(totals.approval_rate_pct)}</strong><span>Taux d'approbation</span></div>
-        <div><strong>{formatDurationFr(totals.avg_turnaround_seconds)}</strong><span>Délai moyen</span></div>
+        <div>
+            <strong className={totals.approval_rate_pct === null || totals.approval_rate_pct === undefined ? 'metric-value-unavailable' : undefined}>
+              {formatPercentFr(totals.approval_rate_pct)}
+            </strong>
+            <span>Taux d'approbation</span>
+            {totals.approval_rate_pct === null || totals.approval_rate_pct === undefined ? (
+              <small className="metric-hint">Aucune validation décidée sur la période</small>
+            ) : null}
+          </div>
+        <div>
+            <strong className={totals.avg_turnaround_seconds === null || totals.avg_turnaround_seconds === undefined ? 'metric-value-unavailable' : undefined}>
+              {formatDurationFr(totals.avg_turnaround_seconds)}
+            </strong>
+            <span>Délai moyen</span>
+            {totals.avg_turnaround_seconds === null || totals.avg_turnaround_seconds === undefined ? (
+              <small className="metric-hint">Se calcule dès la première décision</small>
+            ) : null}
+          </div>
         <div><strong>{formatCountFr(totals.pending)}</strong><span>En attente</span></div>
       </div>
-      <div className="notice dashboard-notice">
-        Ce tableau de bord mesure l’activité de l’agent sélectionné. Les e-mails sortants restent bloqués tant qu’une validation humaine est requise.
-      </div>
+      {nothingProcessedYet ? (
+        <div className="notice dashboard-notice">
+          <strong>Aucun e-mail traité pour l’instant.</strong> Les compteurs ci-dessus sont à zéro parce que
+          l’agent n’a encore rien traité sur cette période, pas parce qu’une mesure vaut zéro. Il analyse la
+          boîte à chaque relève ; les premiers chiffres apparaîtront après le prochain message reçu.
+          Élargissez la période pour voir une activité plus ancienne.
+        </div>
+      ) : (
+        <div className="notice dashboard-notice">
+          Ce tableau de bord mesure l’activité de l’agent sélectionné. Les e-mails sortants restent bloqués tant qu’une validation humaine est requise.
+        </div>
+      )}
       <div className="cost-layout dashboard-chart-layout">
         <Card className="dashboard-chart-card">
           <h2 className="section-title">Volume traité</h2>
           <VerticalBarChart points={summary?.volume_timeline || []} emptyLabel="Aucune donnée pour cette période." />
         </Card>
-        <Card className="dashboard-chart-card dashboard-focus-card">
+        <Card className="dashboard-chart-card">
           <h2 className="section-title">Cas métier les plus actifs</h2>
           <HorizontalBarChart rows={summary?.top_categories || []} emptyLabel="Aucune donnée pour cette période." />
         </Card>

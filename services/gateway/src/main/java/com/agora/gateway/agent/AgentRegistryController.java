@@ -2,10 +2,13 @@ package com.agora.gateway.agent;
 
 import com.agora.gateway.config.GatewayProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.agora.gateway.audit.AuditEvent;
+import com.agora.gateway.audit.AuditRepository;
 import com.agora.gateway.audit.AuditService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -25,20 +28,22 @@ import java.util.Map;
 public class AgentRegistryController {
 
     private final AgentRegistryService service;
+    private final AuditRepository auditRepository;
     private final AuditService auditService;
     private final InstanceGrantService grants;
 
     public AgentRegistryController(AgentRegistryService service, AuditService auditService,
-                                   InstanceGrantService grants) {
+                                   InstanceGrantService grants, AuditRepository auditRepository) {
         this.service = service;
         this.auditService = auditService;
         this.grants = grants;
+        this.auditRepository = auditRepository;
     }
 
     @GetMapping("/agents")
     public List<AgentTypeResponse> agents() {
         return service.agentTypes().stream()
-                .map(type -> AgentTypeResponse.from(type, service.serviceHealth(type)))
+                .map(type -> AgentTypeResponse.from(service.describedType(type), service.serviceHealth(type)))
                 .toList();
     }
 
@@ -50,7 +55,8 @@ public class AgentRegistryController {
         // in parallel keeps the listing at roughly one instance's latency.
         return service.visibleInstances(username, role).parallelStream()
                 .map(instance -> AgentInstanceResponse.from(instance, service.summary(instance, username),
-                        grants.effectiveRole(instance.getId(), username, role).orElse("")))
+                        grants.effectiveRole(instance.getId(), username, role).orElse(""),
+                        grants.contentRole(instance.getId(), username).orElse("")))
                 .toList();
     }
 
@@ -101,6 +107,24 @@ public class AgentRegistryController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/agent-instances/{instanceId}/admin-access")
+    public ResponseEntity<List<AdminAccessResponse>> adminAccess(Authentication auth,
+            @PathVariable String instanceId) {
+        String effectiveRole = grants.effectiveRole(instanceId, auth.getName(), role(auth)).orElse("");
+        if (!"owner".equals(effectiveRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        List<AdminAccessResponse> rows = auditRepository
+                .findByPathAndActionInOrderByTimestampDesc(
+                        "/agent-instances/" + instanceId,
+                        List.of("admin_mailbox_access", "mailbox_content_access"),
+                        PageRequest.of(0, 20))
+                .stream()
+                .map(AdminAccessResponse::from)
+                .toList();
+        return ResponseEntity.ok(rows);
+    }
+
     @ExceptionHandler(AgentRegistryService.UnknownAgentTypeException.class)
     ResponseEntity<Map<String, String>> unknownAgentType(AgentRegistryService.UnknownAgentTypeException ex) {
         return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
@@ -116,9 +140,19 @@ public class AgentRegistryController {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", ex.getMessage()));
     }
 
+    @ExceptionHandler(AgentRegistryService.DuplicateMailboxIdentityException.class)
+    ResponseEntity<Map<String, String>> duplicateMailboxIdentity(AgentRegistryService.DuplicateMailboxIdentityException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", ex.getMessage()));
+    }
+
     @ExceptionHandler(AgentRegistryService.ForbiddenAgentInstanceOperationException.class)
     ResponseEntity<Map<String, String>> forbiddenAgentInstanceOperation(AgentRegistryService.ForbiddenAgentInstanceOperationException ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AgentRegistryService.InvalidAllowedRolesException.class)
+    ResponseEntity<Map<String, String>> invalidAllowedRoles(AgentRegistryService.InvalidAllowedRolesException ex) {
+        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
     }
 
     private String role(Authentication auth) {
@@ -136,6 +170,7 @@ public class AgentRegistryController {
             List<String> capabilities,
             @JsonProperty("base_path") String basePath,
             @JsonProperty("health_path") String healthPath,
+            @JsonProperty("settings_schema") List<GatewayProperties.SettingSection> settingsSchema,
             String color,
             String icon,
             String health
@@ -143,7 +178,7 @@ public class AgentRegistryController {
         static AgentTypeResponse from(GatewayProperties.AgentType type, String health) {
             return new AgentTypeResponse(type.getId(), type.getDisplayName(), type.getDescription(),
                     type.getCapabilities(), type.getBasePath(), type.getHealthPath(),
-                    type.getColor(), type.getIcon(), health);
+                    type.getSettingsSchema(), type.getColor(), type.getIcon(), health);
         }
     }
 
@@ -161,13 +196,35 @@ public class AgentRegistryController {
             String icon,
             @JsonProperty("created_at") Instant createdAt,
             @JsonProperty("effective_role") String effectiveRole,
+            @JsonProperty("content_role") String contentRole,
             Map<String, Object> summary
     ) {
         static AgentInstanceResponse from(AgentInstance instance, Map<String, Object> summary, String effectiveRole) {
+            return from(instance, summary, effectiveRole, effectiveRole);
+        }
+
+        static AgentInstanceResponse from(AgentInstance instance, Map<String, Object> summary, String effectiveRole, String contentRole) {
             return new AgentInstanceResponse(instance.getId(), instance.getAgentType(), instance.getDisplayName(),
                     instance.getMailboxIdentity(), instance.getDescription(), instance.getStatus(),
                     instance.getBasePath(), instance.getAllowedRoles(), instance.getCreatedBy(),
-                    instance.getColor(), instance.getIcon(), instance.getCreatedAt(), effectiveRole, summary);
+                    instance.getColor(), instance.getIcon(), instance.getCreatedAt(), effectiveRole, contentRole, summary);
+        }
+    }
+
+    record AdminAccessResponse(
+            Instant timestamp,
+            String username,
+            String method,
+            @JsonProperty("upstream_status") Integer upstreamStatus,
+            String outcome
+    ) {
+        static AdminAccessResponse from(AuditEvent event) {
+            return new AdminAccessResponse(
+                    event.getTimestamp(),
+                    event.getUsername(),
+                    event.getMethod(),
+                    event.getUpstreamStatus(),
+                    event.getOutcome());
         }
     }
 }

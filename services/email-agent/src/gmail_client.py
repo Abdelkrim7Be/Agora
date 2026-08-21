@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html as _html
+import re as _re
 from email.message import EmailMessage
 
 try:
@@ -19,6 +20,7 @@ from src.outbound_guard import (  # noqa: F401 — OutboundRecipientBlocked re-e
 from src.send_mode import effective_dry_run
 from src.token_store import prepared_token_file
 from src.state import EmailInput
+from src.utils import THREAD_BLOCK_SEPARATOR
 
 # Full scope covers read (list/get) and modify (mark-as-read) plus send.
 # `gmail.modify` covers everything this agent does: read, send, drafts, labels,
@@ -441,12 +443,72 @@ def get_message(msg_id: str, resource=None) -> dict:
     return resource.users().messages().get(userId="me", id=msg_id).execute()
 
 
+def get_message_headers(msg_id: str, resource=None) -> dict:
+    """Fetch sender/subject metadata only; never returns the message body."""
+    resource = resource or gmail_resource()
+    record_gmail_call()
+    return (
+        resource.users()
+        .messages()
+        .get(
+            userId="me",
+            id=msg_id,
+            format="metadata",
+            metadataHeaders=[
+                "From",
+                "To",
+                "Subject",
+                "List-Unsubscribe",
+                "Precedence",
+                "List-Id",
+                "Auto-Submitted",
+            ],
+        )
+        .execute()
+    )
+
+
 def _dry_run_result(action: str, **fields) -> dict:
     return {"dry_run": True, "action": action, **fields}
 
 
 def _encode_message(message: EmailMessage) -> str:
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def _signature_image_width() -> int:
+    """Configured render width for the signature image, in CSS pixels."""
+    try:
+        from src.signature import load_signature
+
+        return int(load_signature().image_width)
+    except Exception:
+        # Mirrors signature.DEFAULT_SIGNATURE_IMAGE_WIDTH — inlined because this
+        # branch exists for the case where importing that module is what failed.
+        return 420
+
+
+def _size_signature_image(rendered: str) -> str:
+    """Give the signature image explicit dimensions.
+
+    Markdown emits a bare <img>, and a mail client with nothing to go on renders
+    it at the file's natural pixel size — a small logo arrived as a stamp beside
+    the text, a large one blew the layout out. The width attribute is there for
+    Outlook, which ignores CSS width on images; the inline style covers everyone
+    else and `height:auto` keeps the aspect ratio whatever was uploaded.
+    """
+    from src.media import SIGNATURE_CID
+
+    width = _signature_image_width()
+    style = (
+        f"width:{width}px;max-width:100%;height:auto;"
+        "display:block;border:0;outline:none;text-decoration:none;margin-top:6px;"
+    )
+    return _re.sub(
+        rf'<img([^>]*?)src="cid:{_re.escape(SIGNATURE_CID)}"([^>]*?)/?>',
+        lambda m: f'<img{m.group(1)}src="cid:{SIGNATURE_CID}"{m.group(2)} width="{width}" style="{style}" />',
+        rendered,
+    )
 
 
 def render_rich_email_html(body: str) -> str:
@@ -466,9 +528,10 @@ def render_rich_email_html(body: str) -> str:
             "<p>" + _html.escape(part).replace("\n", "<br>") + "</p>"
             for part in paragraphs
         )
+    rendered = _size_signature_image(rendered)
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0 auto;">'
+        'font-size:15px;line-height:1.6;color:#1a1a1a;max-width:640px;margin:0;">'
         f"{rendered}"
         "</div>"
     )
@@ -481,6 +544,7 @@ def _build_email_message(
     extra_headers: dict[str, str] | None = None,
     rich: bool = True,
     inline_images: dict[str, tuple[bytes, str]] | None = None,
+    attachments: list[dict] | None = None,
 ) -> EmailMessage:
     recipients = to if isinstance(to, list) else [to]
     message = EmailMessage()
@@ -500,6 +564,18 @@ def _build_email_message(
                 html_part.add_related(
                     data, maintype="image", subtype=subtype, cid=f"<{cid}>"
                 )
+    # add_attachment must run after add_alternative/add_related — EmailMessage
+    # promotes the whole thing to multipart/mixed wrapping the existing
+    # alternative part, which is only correct once that part is complete.
+    for attachment in attachments or []:
+        mime_type = attachment.get("mime_type") or "application/octet-stream"
+        maintype, _, subtype = mime_type.partition("/")
+        message.add_attachment(
+            attachment["data"],
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=attachment.get("filename") or "attachment",
+        )
     return message
 
 
@@ -523,12 +599,14 @@ def _send_email_message(
     extra_headers: dict[str, str] | None = None,
     resource=None,
     rich: bool = True,
+    attachments: list[dict] | None = None,
 ) -> dict:
     _enforce_outbound_allowlist(to)
     resource = resource or gmail_resource()
     message = _build_email_message(
         to, subject, body, extra_headers=extra_headers, rich=rich,
         inline_images=_signature_inline_images(body) if rich else None,
+        attachments=attachments,
     )
     gmail_message = {"raw": _encode_message(message)}
     if thread_id:
@@ -542,11 +620,15 @@ def _send_email_message(
     )
 
 
-def send_message(to: str, subject: str, body: str, resource=None) -> dict:
+def send_message(
+    to: str, subject: str, body: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Send an agent-authored email with plain-text and HTML alternatives."""
     if effective_dry_run():
         return _dry_run_result("send_message", to=to, subject=subject)
-    return _send_email_message(to=to, subject=subject, body=body, resource=resource, rich=True)
+    return _send_email_message(
+        to=to, subject=subject, body=body, resource=resource, rich=True, attachments=attachments
+    )
 
 
 def send_html_message(
@@ -712,6 +794,7 @@ def create_draft(
     subject: str,
     body: str,
     thread_id: str | None = None,
+    attachments: list[dict] | None = None,
     resource=None,
 ) -> dict:
     """Create a Gmail draft without sending it."""
@@ -723,7 +806,7 @@ def create_draft(
             thread_id=thread_id,
         )
     resource = resource or gmail_resource()
-    message = _build_email_message(to, subject, body, rich=True)
+    message = _build_email_message(to, subject, body, rich=True, attachments=attachments)
     draft_message = {"raw": _encode_message(message)}
     if thread_id:
         draft_message["threadId"] = thread_id
@@ -735,7 +818,9 @@ def create_draft(
     )
 
 
-def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
+def forward_message(
+    message_id: str, to: str, note: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Forward a Gmail message to a recipient, optionally with a note."""
     if effective_dry_run():
         return _dry_run_result("forward_message", message_id=message_id, to=to)
@@ -752,10 +837,12 @@ def forward_message(message_id: str, to: str, note: str, resource=None) -> dict:
         f"To: {_header_value(original, 'To', 'Unknown Recipient')}\n\n"
         f"{_extract_message_part(original.get('payload', {}))}"
     )
-    return _send_email_message(to=to, subject=subject, body=body, resource=resource)
+    return _send_email_message(to=to, subject=subject, body=body, resource=resource, attachments=attachments)
 
 
-def notify_internal_message(to: str | list[str], subject: str, note: str, resource=None) -> dict:
+def notify_internal_message(
+    to: str | list[str], subject: str, note: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Send an internal-only workflow notification.
 
     Unlike forward_message, this never re-fetches or re-sends the original
@@ -766,10 +853,12 @@ def notify_internal_message(to: str | list[str], subject: str, note: str, resour
     if effective_dry_run():
         return _dry_run_result("notify_internal_message", to=to, subject=subject)
     resource = resource or gmail_resource()
-    return _send_email_message(to=to, subject=subject, body=note, resource=resource)
+    return _send_email_message(to=to, subject=subject, body=note, resource=resource, attachments=attachments)
 
 
-def reply_all_message(message_id: str, body: str, resource=None) -> dict:
+def reply_all_message(
+    message_id: str, body: str, attachments: list[dict] | None = None, resource=None
+) -> dict:
     """Reply to all participants on a Gmail message's thread."""
     if effective_dry_run():
         return _dry_run_result("reply_all_message", message_id=message_id)
@@ -797,6 +886,7 @@ def reply_all_message(message_id: str, body: str, resource=None) -> dict:
         thread_id=original.get("threadId"),
         extra_headers=extra_headers,
         resource=resource,
+        attachments=attachments,
     )
 
 
@@ -920,7 +1010,7 @@ def format_thread(
         if len(body) > max_chars_per_message:
             body = body[:max_chars_per_message] + "\n…[truncated]"
         blocks.append(f"From: {author}\nDate: {date}\n\n{body}")
-    return "\n\n---\n\n".join(blocks)
+    return THREAD_BLOCK_SEPARATOR.join(blocks)
 
 
 def gmail_to_email_input(message: dict, thread_messages: list[dict] | None = None) -> EmailInput:

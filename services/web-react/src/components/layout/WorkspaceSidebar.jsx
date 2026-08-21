@@ -11,10 +11,8 @@ const TAB_GROUPS = [
     tabs: [
       { to: 'guide', icon: 'help', label: 'Guide' },
       { to: '', end: true, icon: 'dashboard', label: 'Tableau de bord' },
-      { to: 'validation', icon: 'inbox', label: 'Validation' },
-      { to: 'drafts', icon: 'drafts', label: 'Brouillons' },
-      { to: 'inbox', icon: 'mail', label: 'Messages' },
-      { to: 'sent', icon: 'send', label: 'Envoyés' },
+      { to: 'validation', icon: 'inbox', label: 'À valider', minContentRole: 'viewer' },
+      { to: 'inbox', icon: 'mail', label: 'Messages', minContentRole: 'viewer' },
       { to: 'notifications', icon: 'notifications', label: 'Notifications' },
     ],
   },
@@ -49,24 +47,47 @@ const TAB_GROUPS = [
     label: 'Contrôle',
     tabs: [
       { to: 'capabilities', icon: 'shield', label: 'Capacités', minGlobalRole: 'admin' },
-      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minGlobalRole: 'admin' },
+      { to: 'permissions', icon: 'admin_panel_settings', label: 'Permissions', minRole: 'owner' },
       { to: 'dlq', icon: 'warning', label: 'File d’erreurs', minGlobalRole: 'admin' },
       { to: 'costs', icon: 'monitoring', label: 'Coûts', minGlobalRole: 'admin' },
     ],
   },
 ];
 
+// Routes the curated groups above already reach. `config` and `persona` render
+// the same page, so a manifest declaring either is considered covered.
+const CURATED_ROUTES = new Set(
+  TAB_GROUPS.flatMap((group) => group.tabs.map((tab) => tab.to)).concat('persona'),
+);
+
+/** Settings sections an agent type declares that this sidebar does not hardcode.
+ *
+ * The email agent's own sections are all curated above — richer labels, icons and
+ * role gates than a manifest can carry — so this adds nothing for it. It is what
+ * gives a *second* agent type a working settings navigation without anyone
+ * writing frontend for it: the agent declares, the platform renders.
+ */
+function declaredSections(agentType, types) {
+  const type = (types || []).find((candidate) => candidate.id === agentType);
+  return (type?.settings_schema || [])
+    .filter((section) => typeof section?.path === 'string' && section.path.startsWith('/'))
+    .map((section) => ({ ...section, route: section.path.replace(/^\//, '') }))
+    .filter((section) => section.route && !CURATED_ROUTES.has(section.route));
+}
+
 export default function WorkspaceSidebar() {
   const { globalRole } = useAuth();
-  const { instanceId, currentInstance, hasRole } = useInstance();
+  const { instanceId, currentInstance, hasRole, hasContentRole } = useInstance();
   const params = useParams();
   const typesQuery = useAgentTypesQuery();
-  const pendingQuery = usePendingRunsQuery(0);
+  const canReadContent = hasContentRole('viewer');
+  const pendingQuery = usePendingRunsQuery(0, {}, canReadContent);
   const unreadQuery = useUnreadCountQuery();
   const id = params.instanceId || instanceId;
   const typeLabel = agentTypeLabel(currentInstance?.agent_type, typesQuery.data || []);
-  const pendingCount = pendingQuery.data?.runs?.length ?? 0;
+  const pendingCount = canReadContent ? pendingQuery.data?.runs?.length ?? 0 : 0;
   const unreadCount = unreadQuery.data?.unread_count ?? 0;
+  const declared = declaredSections(currentInstance?.agent_type, typesQuery.data);
 
   return (
     <aside className="sidebar">
@@ -86,7 +107,11 @@ export default function WorkspaceSidebar() {
 
       <nav className="workspace-tabs" aria-label="Onglets de l'espace de travail">
         {TAB_GROUPS.map((group) => {
-          const tabs = group.tabs.filter((tab) => (!tab.minRole || hasRole(tab.minRole)) && (!tab.minGlobalRole || globalRole === tab.minGlobalRole));
+          const tabs = group.tabs.filter((tab) => (
+            (!tab.minRole || hasRole(tab.minRole))
+            && (!tab.minContentRole || hasContentRole(tab.minContentRole))
+            && (!tab.minGlobalRole || globalRole === tab.minGlobalRole)
+          ));
           if (!tabs.length) return null;
           return (
             <div className="tab-group" key={group.label}>
@@ -109,6 +134,24 @@ export default function WorkspaceSidebar() {
             </div>
           );
         })}
+        {declared.length ? (
+          <div className="tab-group">
+            <span className="tab-group-label">Réglages de l'agent</span>
+            <div className="tab-group-items">
+              {declared.map((section) => (
+                <NavLink
+                  key={section.key}
+                  to={section.route}
+                  title={section.description || undefined}
+                  className={({ isActive }) => `workspace-tab nav-item${isActive ? ' active' : ''}`}
+                >
+                  <span className="material-symbols-outlined" aria-hidden="true">tune</span>
+                  <span>{section.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </nav>
     </aside>
   );

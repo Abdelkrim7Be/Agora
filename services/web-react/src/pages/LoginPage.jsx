@@ -10,8 +10,13 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState({ message: '', kind: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSending, setForgotSending] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -28,6 +33,24 @@ export default function LoginPage() {
       setStatus({ message: `Échec de connexion : ${error.message}`, kind: 'error' });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleForgot = async (event) => {
+    event.preventDefault();
+    setForgotSending(true);
+    try {
+      await api('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotEmail.trim() }),
+      });
+    } catch (_error) {
+      // Swallowed on purpose. The endpoint answers the same way whatever the
+      // address, and reporting a failure here would hand back the one signal it
+      // exists to withhold: whether that address has an account.
+    } finally {
+      setForgotSending(false);
+      setForgotSent(true);
     }
   };
 
@@ -57,20 +80,64 @@ export default function LoginPage() {
           </label>
           <label>
             <span>Mot de passe</span>
-            <input
-              aria-label="Mot de passe"
-              type="password"
-              placeholder="Mot de passe"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
+            <div className="password-field">
+              <input
+                aria-label="Mot de passe"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Mot de passe"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                className="ghost icon-button password-toggle"
+                aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                onClick={() => setShowPassword((current) => !current)}
+              >
+                <span aria-hidden="true">{showPassword ? '🙈' : '👁️'}</span>
+              </button>
+            </div>
           </label>
           <button className="primary" type="submit" disabled={submitting}>
-            <span className="material-symbols-outlined" aria-hidden="true">login</span>
-            <span>Accéder à la plateforme</span>
+            <span>{submitting ? 'Connexion…' : 'Accéder à la plateforme'}</span>
           </button>
         </form>
+        {forgotOpen ? (
+          <form className="login-forgot" onSubmit={handleForgot}>
+            {forgotSent ? (
+              <p className="login-forgot-done" role="status">
+                Si un compte existe pour cette adresse, un lien de réinitialisation vient
+                d’être envoyé. Il expire et ne sert qu’une fois.
+              </p>
+            ) : (
+              <>
+                <label>
+                  <span>Adresse e-mail du compte</span>
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    placeholder="vous@exemple.com"
+                    value={forgotEmail}
+                    onChange={(event) => setForgotEmail(event.target.value)}
+                    required
+                  />
+                </label>
+                <button type="submit" disabled={forgotSending}>
+                  <span>{forgotSending ? 'Envoi…' : 'Envoyer le lien'}</span>
+                </button>
+              </>
+            )}
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="login-forgot-toggle"
+            onClick={() => setForgotOpen(true)}
+          >
+            Mot de passe oublié ?
+          </button>
+        )}
         <div className="login-trust-row" aria-label="Garanties de sécurité">
           <span>Validation humaine</span>
           <span>Audit activé</span>
@@ -82,11 +149,11 @@ export default function LoginPage() {
           <span className="eyebrow">Agora Consulting · agents métiers supervisés</span>
           <h2>Des agents IA utiles, mais jamais hors contrôle.</h2>
           <p>Centralisez les validations, la synchronisation des boîtes mail, les règles métier et les journaux d’audit dans une interface pensée pour les équipes clientes.</p>
-          <div className="login-proof-grid">
-            <div><strong>Supervision</strong><span>Chaque action sensible passe par une validation claire.</span></div>
-            <div><strong>Traçabilité</strong><span>Les accès et décisions restent consultables.</span></div>
-            <div><strong>Connecteurs</strong><span>Boîtes mail, cas métier et routage dans un seul espace.</span></div>
-          </div>
+          <ol className="login-proof-rail">
+            <li><strong>Supervision</strong><span>Chaque action sensible passe par une validation claire.</span></li>
+            <li><strong>Traçabilité</strong><span>Les accès et décisions restent consultables.</span></li>
+            <li><strong>Connecteurs</strong><span>Boîtes mail, cas métier et routage dans un seul espace.</span></li>
+          </ol>
         </div>
       </aside>
     </div>

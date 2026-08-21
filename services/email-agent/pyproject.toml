@@ -30,6 +30,10 @@ dependencies = [
     "Pillow>=10.0",
     "python-multipart>=0.0.9",
     "boto3>=1.34",
+    # Shared inbox cache and Gmail call budget across the API and poller
+    # containers. Optional at runtime — everything degrades to per-process state
+    # when REDIS_URL is unset — but the default compose stack does use it.
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]

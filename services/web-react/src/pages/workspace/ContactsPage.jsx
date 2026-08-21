@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { FileField } from '../../components/ui/FileField';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
-import { Pager } from '../../components/ui/Pager';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useApi } from '../../api/useApi';
-import { usePager } from '../../hooks/usePager';
 import {
   useContactsQuery,
   useSaveContact,
@@ -78,7 +79,6 @@ export default function ContactsPage() {
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [bulkCategorizing, setBulkCategorizing] = useState(false);
   const fileInputRef = useRef(null);
-  const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
@@ -240,8 +240,8 @@ export default function ContactsPage() {
     ].filter(Boolean).join(' ').toLowerCase();
     return haystack.includes(needle);
   });
-  const pageContacts = filteredContacts.slice(pager.page * PAGE_SIZE, pager.page * PAGE_SIZE + PAGE_SIZE);
-  const hasMore = (pager.page + 1) * PAGE_SIZE < filteredContacts.length;
+  const pager = usePagination(filteredContacts, PAGE_SIZE);
+  const pageContacts = pager.visible;
 
   const toggleSelect = (email) => {
     setSelectedEmails((prev) => {
@@ -294,7 +294,7 @@ export default function ContactsPage() {
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les contacts</span>
         </button>
-        <input aria-label="Recherche contacts" placeholder="Rechercher un contact" value={search} onChange={(event) => { setSearch(event.target.value); pager.reset(); }} />
+        <input aria-label="Recherche contacts" placeholder="Rechercher un contact" value={search} onChange={(event) => { setSearch(event.target.value); pager.setPage(0); }} />
         <span className="counter">{filteredContacts.length} contact{filteredContacts.length > 1 ? 's' : ''}</span>
         <span className="counter">{query.data?.storage || 'contacts-directory'}</span>
       </div>
@@ -335,7 +335,13 @@ export default function ContactsPage() {
               {editingEmail && (
                 <div className="signature-image-row">
                   <span>Photo du contact</span>
-                  <input ref={fileInputRef} type="file" accept="image/png,image/jpeg" data-testid="contact-photo-file" onChange={handleUploadPhoto} />
+                  <FileField
+                    inputRef={fileInputRef}
+                    accept="image/png,image/jpeg"
+                    data-testid="contact-photo-file"
+                    label="Choisir une photo"
+                    onChange={handleUploadPhoto}
+                  />
                   {hasPhoto && <button type="button" className="ghost" onClick={handleDeletePhoto}>Retirer la photo</button>}
                 </div>
               )}
@@ -347,7 +353,14 @@ export default function ContactsPage() {
                   <span className="material-symbols-outlined" aria-hidden="true">restart_alt</span><span>Nouveau contact</span>
                 </button>
               </div>
-              <label><span>Importer un CSV</span><input type="file" accept=".csv,text/csv" onChange={(e) => setCsvFile(e.target.files?.[0] || null)} /></label>
+              <label>
+                <span>Importer un CSV</span>
+                <FileField
+                  accept=".csv,text/csv"
+                  label="Choisir un fichier CSV"
+                  onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                />
+              </label>
               <label><span>Ou coller le CSV</span><textarea rows={5} value={csvText} onChange={(e) => setCsvText(e.target.value)} placeholder={"email,name,audience,tags\nclient@example.com,Client,client,vip"} /></label>
               <label><span>Audience par défaut à l'import</span>
                 <select value={importAudience} onChange={(e) => setImportAudience(e.target.value)}>
@@ -363,8 +376,14 @@ export default function ContactsPage() {
         <Card className="editor-card">
           <div className="card-header">
             <div><h2>Contacts enregistrés</h2><p>Audience, champs métier et statut actif restent visibles sans exposer le YAML.</p></div>
+            <input
+              aria-label="Rechercher un contact"
+              placeholder="Rechercher un contact"
+              value={search}
+              onChange={(event) => { setSearch(event.target.value); pager.setPage(0); }}
+            />
             {availableCategories.length ? (
-              <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); pager.reset(); }}>
+              <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); pager.setPage(0); }}>
                 <option value="">Toutes catégories</option>
                 {availableCategories.map((c) => <option key={c.name} value={c.name}>{c.display_name || c.name}</option>)}
               </select>
@@ -426,7 +445,15 @@ export default function ContactsPage() {
                     </div>
                   );
                 })}
-                <Pager page={pager.page} hasMore={hasMore} onPrev={pager.prev} onNext={pager.next} />
+                <TablePager
+                  page={pager.page}
+                  pageCount={pager.pageCount}
+                  total={pager.total}
+                  size={pager.size}
+                  onPage={pager.setPage}
+                  onSize={pager.setSize}
+                  unit="contacts"
+                />
               </>
             )}
           </div>

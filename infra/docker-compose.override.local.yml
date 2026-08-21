@@ -5,19 +5,31 @@
 # message is built. The security service enforces the same pair at policy level
 # (see SECURITY_POLICY_PATH below) — this is the layer underneath it.
 x-outbound-allowlist: &outbound_allowlist
-  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com"
+  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com,abdelkrimbellagnech99@gmail.com"
+
+# Docker GPU passthrough is not configured on this machine, so an Ollama running
+# inside Compose falls back to CPU and a draft takes minutes. The host runs Ollama
+# as a systemd service with the GPU, so both containerised Ollama services move
+# behind a profile (not started by default) and every LLM caller reaches the host
+# through the docker host gateway instead. Start them with `--profile docker-ollama`
+# if the host service is not available.
+x-host-ollama: &host_ollama
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
 
 services:
-  ollama-init:
-    entrypoint: []
-
   ollama:
+    profiles: ["docker-ollama"]
     gpus: !reset []
     environment:
       NVIDIA_VISIBLE_DEVICES: !reset ""
       NVIDIA_DRIVER_CAPABILITIES: !reset ""
 
+  ollama-init:
+    profiles: ["docker-ollama"]
+
   email-agent:
+    <<: *host_ollama
     volumes:
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
       # The live-test harness runs inside this container so the sender's OAuth
@@ -27,25 +39,71 @@ services:
       <<: *outbound_allowlist
       AGENT_DRY_RUN: "false"
       AGENT_DEFAULT_SEND_MODE: "live"
-      GMAIL_OAUTH_REDIRECT_URI: http://localhost:8081/api/agent/connect/gmail/callback
+      AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
+      GMAIL_OAUTH_REDIRECT_URI: http://localhost:${GATEWAY_PORT:-8081}/api/agent/connect/gmail/callback
       # Prod leaves this empty (Traefik puts web + gateway on one origin, so a
       # relative redirect from the OAuth callback just works). Local dev splits
       # them across ports, so the callback needs to know where the web app is.
-      AGENT_APP_BASE_URL: http://localhost:5173
+      AGENT_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+      AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
+      AGENT_NOTIFY_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+      # Wide startup analysis for demo instances: scan deep into the mailbox and
+      # triage the full unread backlog on connect, not just the newest 20.
+      AGENT_SETUP_RECENT_LIMIT: "500"
+      AGENT_SETUP_BACKLOG_LIMIT: "500"
+    # The base file waits for ollama-init, which no longer runs — without this the
+    # agent would block forever on a dependency that is behind a profile.
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      email-agent-migrate:
+        condition: service_completed_successfully
+      security:
+        condition: service_healthy
 
   security:
+    <<: *host_ollama
     volumes:
       - ../services/security/policy.live-test.yaml:/app/policy.live-test.yaml:ro
     environment:
       SECURITY_POLICY_PATH: policy.live-test.yaml
+      SECURITY_SANITIZE_ENDPOINT: http://host.docker.internal:11434/v1
 
   gateway:
+    environment:
+      # Follows WEB_PORT so a port change cannot silently break browser login:
+      # the SPA's Origin has to be on this list or /auth/login answers 403, and
+      # curl without an Origin header still succeeds, which makes it look like
+      # the UI is at fault rather than the allow list.
+      # Two origins, because local dev has two front ends: the nginx container
+      # on WEB_PORT and `npm run dev` on VITE_DEV_PORT. Serving only the first
+      # made the dev server's sign-in return 403 while curl (no Origin header)
+      # still returned 200 — which reads as a broken login, not a CORS list.
+      GATEWAY_CORS_ALLOWED_ORIGINS: http://localhost:${WEB_PORT:-5173},http://localhost:${VITE_DEV_PORT:-5173}
+      GATEWAY_APP_URL: http://localhost:${WEB_PORT:-5173}
+      # The instance used when a request carries no X-Agora-Agent-Instance —
+      # which is every call the platform dashboard makes before a workspace is
+      # picked. It was left at the built-in `default-email-agent`, and once a
+      # database holds real instances under different ids, that name resolves to
+      # nothing: effectiveRole comes back empty and every headerless call 403s.
+      # Set it to an instance that actually exists in this database.
+      GATEWAY_DEFAULT_AGENT_INSTANCE: ${GATEWAY_DEFAULT_AGENT_INSTANCE:-default-email-agent}
+      # Local dev is plain HTTP, and a Secure cookie is silently dropped there —
+      # which kills silent token refresh and logs the browser out every 15 min.
+      # Never set this in a deployed stack; production serves the SPA over TLS.
+      GATEWAY_JWT_SECURE_COOKIES: "false"
+      # The model runs on the host CPU here, where a tone rewrite or a redraft
+      # takes minutes. At the 150s default the gateway gave up mid-inference and
+      # the browser sat on a spinner that never resolved.
+      GATEWAY_UPSTREAM_TIMEOUT_SECONDS: "280"
     ports:
-      - "8081:8080"
+      - "${GATEWAY_PORT:-8081}:8080"
 
   web:
     ports:
-      - "5173:8080"
+      - "${WEB_PORT:-5173}:8080"
 
   # docker-compose.yml has no poller service at all (only the demo overlay
   # does, tuned for a single live mailbox). Without one, fetched inbox mail
@@ -53,8 +111,10 @@ services:
   # click — src/poller.py already loops every connected instance via
   # agent_instance_context, so it works unmodified for multi-instance local dev.
   poller:
+    <<: *host_ollama
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: unless-stopped
     mem_limit: 1g
@@ -69,33 +129,52 @@ services:
       AGENT_RUN_MIGRATIONS: "false"
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
+      REDIS_URL: redis://redis:6379/0
+      # The SLA escalation and component alerts run in this process, not the API.
+      # Both recipients below are on the outbound allow list at the top of the file.
+      AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
+      AGENT_NOTIFY_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
+      AGENT_ALERTS_ENABLED: ${AGENT_ALERTS_ENABLED:-true}
+      AGENT_ALERT_ADMIN_RECIPIENT: ${AGENT_ALERT_ADMIN_RECIPIENT:-abdelkrimbellagnech28@gmail.com}
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      GMAIL_TOKEN_PATH: /app/data/token.json
       AGENT_MEDIA_DIR: /app/data/media
       GMAIL_CREDENTIALS_PATH: credentials.json
       AGENT_TOKEN_ENCRYPTION_KEY: ${AGENT_TOKEN_ENCRYPTION_KEY}
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_LLM_PROFILE: local
-      AGENT_LLM_CONFIG_PATH: config/llm.local-docker.yaml
+      AGENT_LLM_CONFIG_PATH: config/llm.local-host.yaml
       OPENAI_API_KEY: ollama-local
       AGENT_DRY_RUN: ${AGENT_DRY_RUN:-false}
       AGENT_DEFAULT_SEND_MODE: "live"
-      AGENT_POLL_INTERVAL_MIN: "1"
+      # One minute meant the poller was almost always mid-inference, so a click
+      # in the UI queued behind it. The mailbox does not change that fast.
+      AGENT_POLL_INTERVAL_MIN: "5"
       GMAIL_POLLING_FALLBACK_ENABLED: "true"
       AGENT_JOB_QUEUE_ENABLED: "false"
     volumes:
       - agent_data:/app/data
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
+      # The rules harness has to run where the rules run: it pauses this process's
+      # sweep to set up label predicates, then lets it pick the mail up.
+      - ../services/email-agent/scripts:/app/scripts:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       email-agent-migrate:
         condition: service_completed_successfully
       security:
         condition: service_healthy
-      ollama-init:
-        condition: service_completed_successfully
     networks:
       - agora
+
+  # Reachable on the host in dev only. The base compose deliberately keeps it
+  # off the host so nothing bypasses the TLS ingress in a real deployment.
+  grafana:
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"

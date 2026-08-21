@@ -1,15 +1,101 @@
 from __future__ import annotations
 
+import re
 from typing import Any, List
+
+from src.config import settings
+
+# Where a mail client stops writing the reply and starts repeating the message
+# being replied to. Anchored at line start so a sentence that merely contains
+# one of these words is not mistaken for a divider.
+_QUOTE_MARKERS = (
+    # Outlook / Gmail attribution lines, English and French. The address part may
+    # wrap across lines, so the gap is matched loosely but bounded.
+    r"^On\s.{0,400}?\swrote:\s*$",
+    r"^Le\s.{0,400}?\sa\s+écrit\s*:\s*$",
+    r"^-{2,}\s*(Original Message|Forwarded message|Message d'origine|Message transféré)\s*-{2,}\s*$",
+    # Outlook's horizontal rule above the quoted block.
+    r"^_{10,}\s*$",
+    # Header block a client re-emits above the quote.
+    r"^From:\s.+\nSent:\s",
+    r"^De\s*:\s.+\nEnvoyé\s*:\s",
+    # A run of quoted lines. One is not enough — a single ">" appears in prose.
+    r"^>.*\n(?:>.*\n){2,}",
+)
+
+_QUOTE_PATTERN = re.compile("|".join(_QUOTE_MARKERS), re.MULTILINE | re.IGNORECASE)
+
+# Below this, the text before the divider is too short to be the real reply —
+# more likely the marker matched something inside the first line and cutting
+# there would throw away the message.
+_MIN_KEPT_CHARS = 40
+
+# What `format_thread` puts between two messages of the same conversation. Shared
+# so the prompt-time cleanup can tell one message's quoted tail from the next
+# real message and never cut the thread short.
+THREAD_BLOCK_SEPARATOR = "\n\n---\n\n"
+
+
+def strip_quoted_reply(body: str) -> str:
+    """Drop the quoted history a mail client appends below a reply.
+
+    In a thread of N messages, every message carries a copy of the ones before
+    it, so the same text is paid for N times in one prompt — the single largest
+    avoidable input cost on the hot path. The model gains nothing: the thread is
+    already assembled chronologically from the individual messages.
+
+    Conservative by construction. If the text above the divider is too short to
+    be a real reply, the body is returned untouched: sending a redundant quote to
+    the model is cheap, losing the actual message is not.
+    """
+    if not body:
+        return body
+    match = _QUOTE_PATTERN.search(body)
+    if not match:
+        return body
+    kept = body[: match.start()].rstrip()
+    if len(kept.strip()) < _MIN_KEPT_CHARS:
+        return body
+    return kept
+
+
+def clamp_email_body(email_thread: str) -> str:
+    """Cap the body that goes into a prompt.
+
+    `format_thread` bounds a Gmail-fetched *thread* (N messages x per-message
+    truncation), but three paths reach a model without passing through it: a
+    single message with no thread, the manual `/run` API where the body is a free
+    string from the client, and the poller appending extracted attachment text —
+    capped per PDF, uncapped in aggregate.
+
+    So the body was the one unbounded input on the hot path, and it is paid twice
+    per email: once at triage, once at drafting. Keeping the head is deliberate —
+    the ask in a business email is at the top, and quoted history at the bottom is
+    what a long body is usually made of.
+
+    This only shapes the prompt. The run record and the UI keep the full text;
+    truncating at ingestion would lose it — which is also why the quoted-history
+    cleanup runs here and not in the provider's parser.
+    """
+    email_thread = THREAD_BLOCK_SEPARATOR.join(
+        strip_quoted_reply(block) for block in email_thread.split(THREAD_BLOCK_SEPARATOR)
+    )
+    limit = settings.email_body_max_chars
+    if limit <= 0 or len(email_thread) <= limit:
+        return email_thread
+    return email_thread[:limit].rstrip() + "\n\n…[message tronqué]"
 
 
 def parse_email(email_input: dict) -> tuple[str, str, str, str]:
-    """Parse an email input dictionary into (author, to, subject, email_thread)."""
+    """Parse an email input dictionary into (author, to, subject, email_thread).
+
+    Every caller of this builds a prompt, which is why the body cap lives here.
+    """
     return (
         email_input["author"],
         email_input["to"],
         email_input["subject"],
-        email_input["email_thread"],
+        clamp_email_body(email_input["email_thread"]),
     )
 
 

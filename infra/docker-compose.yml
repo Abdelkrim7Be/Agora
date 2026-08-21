@@ -94,7 +94,9 @@ services:
     cpus: 1.0
     environment:
       # Local-first quarantine classifier (Ollama, OpenAI-compatible endpoint).
-      SECURITY_SANITIZE_MODEL: ${SECURITY_SANITIZE_MODEL:-openai:qwen2.5:3b-8k}
+      # Must match the email-agent's model: a second resident model does not fit
+      # beside it on a small GPU, and the two evict each other on every call.
+      SECURITY_SANITIZE_MODEL: ${SECURITY_SANITIZE_MODEL:-openai:qwen3:4b-4k}
       SECURITY_SANITIZE_ENDPOINT: ${SECURITY_SANITIZE_ENDPOINT:-http://ollama:11434/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-ollama-local}
       SECURITY_SECRET_MANAGER_BACKEND: ${SECURITY_SECRET_MANAGER_BACKEND:-disabled}
@@ -176,6 +178,7 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY}
     volumes:
       - ./litellm.config.yaml:/app/config.yaml:ro
     networks:
@@ -183,7 +186,8 @@ services:
 
   email-agent-migrate:
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: "no"
     environment:
@@ -200,7 +204,8 @@ services:
 
   email-agent:
     build:
-      context: ../services/email-agent
+      context: ../services
+      dockerfile: email-agent/Dockerfile
       network: host
     restart: unless-stopped
     mem_limit: 2g
@@ -221,9 +226,23 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-ollama-local}
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
+      # Shared with the poller: the inbox listing cache and the Gmail hourly call
+      # budget are per-mailbox facts, and a per-process copy of either is wrong.
+      REDIS_URL: redis://redis:6379/0
+      # System mail: approver reminders, SLA escalation and component alerts. Sent
+      # through the connected mailbox, so it stays off until a stack opts in.
+      AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-false}
+      AGENT_NOTIFY_APP_BASE_URL: ${AGENT_NOTIFY_APP_BASE_URL:-}
+      AGENT_ALERTS_ENABLED: ${AGENT_ALERTS_ENABLED:-false}
+      AGENT_ALERT_ADMIN_RECIPIENT: ${AGENT_ALERT_ADMIN_RECIPIENT:-}
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-default}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
+      # The default instance keeps the pre-multi-instance token path, which is
+      # relative to the service root — i.e. inside the container's own writable
+      # layer. Left there, its Gmail grant is invisible to the poller and is lost
+      # on the next image build; it belongs on the shared volume like every other.
+      GMAIL_TOKEN_PATH: /app/data/token.json
       AGENT_MEDIA_DIR: /app/data/media
       GMAIL_WEBHOOK_ENABLED: ${GMAIL_WEBHOOK_ENABLED:-false}
       GMAIL_WEBHOOK_TOPIC: ${GMAIL_WEBHOOK_TOPIC:-}
@@ -239,6 +258,7 @@ services:
       AGENT_SECURITY_ENABLED: "true"
       AGENT_SECURITY_URL: http://security:8001
       AGENT_SECURITY_TIMEOUT: 10
+      GATEWAY_AGENT_SHARED_SECRET: ${GATEWAY_AGENT_SHARED_SECRET}
       # Browser Gmail OAuth onboarding. Demo/live compose mounts credentials.json explicitly.
       # Redirect URI points at the gateway — the browser cannot reach email-agent directly.
       GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH:-credentials.json}
@@ -260,6 +280,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       email-agent-migrate:
         condition: service_completed_successfully
       security:
@@ -280,6 +302,7 @@ services:
     environment:
       GATEWAY_SECRET_DIR: ${GATEWAY_SECRET_DIR:-/run/secrets/agora-gateway/}
       GATEWAY_JWT_SECRET: ${GATEWAY_JWT_SECRET}
+      GATEWAY_AGENT_SHARED_SECRET: ${GATEWAY_AGENT_SHARED_SECRET}
       # Invitation links point at the public web app; SMTP is optional — with no
       # relay the endpoints return the setup link instead of mailing it.
       # Invitation links are built from this, so it must be the URL a person can
@@ -301,6 +324,7 @@ services:
       GATEWAY_VIEWER_PASSWORD: ${GATEWAY_VIEWER_PASSWORD}
       GATEWAY_ADMIN_USERNAME: ${GATEWAY_ADMIN_USERNAME}
       GATEWAY_ADMIN_PASSWORD: ${GATEWAY_ADMIN_PASSWORD}
+      GATEWAY_SEED_RESET_PASSWORD: ${GATEWAY_SEED_RESET_PASSWORD:-false}
       GATEWAY_UPSTREAM_EMAIL_AGENT_URL: http://email-agent:8000
       # Allow the browser control panel (served by the web service) to call the gateway.
       GATEWAY_CORS_ALLOWED_ORIGINS: ${GATEWAY_CORS_ALLOWED_ORIGINS:-https://localhost}
@@ -326,6 +350,51 @@ services:
       timeout: 5s
       retries: 5
       start_period: 90s
+    networks:
+      - agora
+
+  prometheus:
+    image: prom/prometheus:v3.8.1
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      email-agent:
+        condition: service_healthy
+      security:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    networks:
+      - agora
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_HTTP_PORT: 3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    # No host port. Prometheus already stays internal-only, and publishing
+    # Grafana put a second door on the host that skips the TLS ingress
+    # entirely — the one thing infra/tests asserts must never happen. Local
+    # dev republishes it in docker-compose.override.local.yml.
     networks:
       - agora
 
@@ -356,6 +425,8 @@ volumes:
   redis_data:
   agent_data:
   ollama_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   agora:

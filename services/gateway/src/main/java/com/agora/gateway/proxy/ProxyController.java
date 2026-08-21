@@ -34,13 +34,14 @@ public class ProxyController {
     private static final String USER_DEPT_HEADER = "X-Agora-User-Dept";
     private static final String AGENT_INSTANCE_HEADER = "X-Agora-Agent-Instance";
     private static final String INSTANCE_ROLE_HEADER = "X-Agora-Instance-Role";
+    private static final String GATEWAY_SECRET_HEADER = "X-Agora-Gateway-Secret";
     private static final Pattern VERB_PATTERN = Pattern.compile("^/api/agent/run/[^/]+/([^/]+)$");
 
     private static final Set<String> HOP_BY_HOP = Set.of(
             "host", "connection", "content-length", "transfer-encoding",
             "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
             USER_HEADER.toLowerCase(), USER_DEPT_HEADER.toLowerCase(), AGENT_INSTANCE_HEADER.toLowerCase(),
-            INSTANCE_ROLE_HEADER.toLowerCase()
+            INSTANCE_ROLE_HEADER.toLowerCase(), GATEWAY_SECRET_HEADER.toLowerCase()
     );
 
     // Write-tier paths: owner only.
@@ -66,6 +67,7 @@ public class ProxyController {
     private final AgentRegistryService agentRegistryService;
     private final InstanceGrantService grantService;
     private final String defaultAgentInstance;
+    private final String agentSharedSecret;
     private final UserRepository userRepository;
 
     public ProxyController(GatewayProperties props, RestClient.Builder builder, AuditService auditService,
@@ -73,6 +75,10 @@ public class ProxyController {
                            UserRepository userRepository) {
         this.upstreamBase = props.getUpstream().getEmailAgentUrl();
         this.defaultAgentInstance = props.getDefaultAgentInstance();
+        this.agentSharedSecret = props.getAgentSharedSecret();
+        if ((agentSharedSecret == null || agentSharedSecret.isBlank()) && !isLocalUpstream(upstreamBase)) {
+            throw new IllegalStateException("GATEWAY_AGENT_SHARED_SECRET must be set");
+        }
         this.restClient = builder.build();
         this.auditService = auditService;
         this.agentRegistryService = agentRegistryService;
@@ -116,8 +122,7 @@ public class ProxyController {
         String requestedAgentInstance = request.getHeader(AGENT_INSTANCE_HEADER);
         String agentInstance = selectAgentInstance(requestedAgentInstance, username, jwtRole);
         if (agentInstance == null) {
-            auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                    downstreamPath, null, "denied");
+            recordDeniedAuditIfRelevant(username, jwtRole, deriveAction(request), request, downstreamPath);
             writeForbidden(response);
             return;
         }
@@ -128,8 +133,7 @@ public class ProxyController {
         } else {
             Optional<String> effectiveRoleOpt = grantService.effectiveRole(agentInstance, username, jwtRole);
             if (effectiveRoleOpt.isEmpty()) {
-                auditService.record(username, jwtRole, "agent_instance_access", request.getMethod(),
-                        downstreamPath, null, "denied");
+                recordDeniedAuditIfRelevant(username, jwtRole, "agent_instance_access", request, downstreamPath);
                 writeForbidden(response);
                 return;
             }
@@ -139,8 +143,14 @@ public class ProxyController {
         if (username != null) {
             String tier = deriveTier(downstreamPath, request.getMethod());
             if (!grantService.isAuthorized(effectiveRole, tier)) {
-                auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                        downstreamPath, null, "denied");
+                recordDeniedAuditIfRelevant(username, jwtRole, deriveAction(request), request, downstreamPath);
+                writeForbidden(response);
+                return;
+            }
+            if (isMailboxContentRead(downstreamPath, request.getMethod())
+                    && grantService.contentRole(agentInstance, username).isEmpty()) {
+                auditService.record(username, jwtRole, "mailbox_content_access", request.getMethod(),
+                        "/agent-instances/" + agentInstance, null, "denied " + deriveAction(request));
                 writeForbidden(response);
                 return;
             }
@@ -162,6 +172,9 @@ public class ProxyController {
         }
         spec = spec.header(AGENT_INSTANCE_HEADER, agentInstance);
         spec = spec.header(INSTANCE_ROLE_HEADER, effectiveRole);
+        if (agentSharedSecret != null && !agentSharedSecret.isBlank()) {
+            spec = spec.header(GATEWAY_SECRET_HEADER, agentSharedSecret);
+        }
 
         if (body.length > 0 && contentType != null) {
             spec = spec.contentType(MediaType.parseMediaType(contentType)).body(body);
@@ -173,6 +186,10 @@ public class ProxyController {
             if (shouldRecordForwardedAudit(request, downstreamPath)) {
                 auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
                         downstreamPath, status, "forwarded");
+            }
+            if ("admin".equals(jwtRole) && shouldRecordAdminMailboxAccess(request, downstreamPath)) {
+                auditService.record(username, jwtRole, "admin_mailbox_access", request.getMethod(),
+                        "/agent-instances/" + agentInstance, status, deriveAction(request));
             }
 
             response.setStatus(status);
@@ -209,6 +226,10 @@ public class ProxyController {
                 .orElse(null);
     }
 
+    private boolean isLocalUpstream(String url) {
+        return url != null && (url.startsWith("http://localhost:") || url.startsWith("http://127.0.0.1:"));
+    }
+
     private String deriveTier(String path, String method) {
         if ("GET".equals(method)) return "read";
         if ("POST".equals(method) && ("/api/agent/run".equals(path) || "/api/agent/run/stream".equals(path))) return "write";
@@ -226,8 +247,66 @@ public class ProxyController {
         return "write";
     }
 
+    private boolean isMailboxContentRead(String path, String method) {
+        if (!"GET".equals(method)) return false;
+        return path.equals("/api/agent/inbox")
+                || path.equals("/api/agent/runs")
+                || path.startsWith("/api/agent/run/");
+    }
+
+    /**
+     * Read-only status endpoints the web client polls on a timer.
+     *
+     * The audit trail exists to answer "who did what, and who saw whose mail".
+     * These answer neither: a health blob, aggregate counters, a connection badge,
+     * setup progress, an unread count. None of them names a message, a run or a
+     * correspondent. They were nonetheless writing a row every few seconds per
+     * open tab, which pushed real actions off the first page of the trail within
+     * about two minutes and made it useless for the thing it is for.
+     *
+     * Anything that discloses a record stays audited: {@code GET /run/{id}},
+     * {@code /inbox}, {@code /drafts}, {@code /messages}, {@code /contacts}, and
+     * every write. Admin mailbox access is recorded separately and is not
+     * affected by this list.
+     */
+    private static final Set<String> POLLED_STATUS_PATHS = Set.of(
+            "/api/agent/runs",
+            "/api/agent/health",
+            "/api/agent/analytics",
+            "/api/agent/metrics",
+            "/api/agent/sync/status",
+            "/api/agent/instance-setup",
+            "/api/agent/events",
+            "/api/agent/notifications",
+            "/api/agent/notifications/unread-count"
+    );
+
     private boolean shouldRecordForwardedAudit(HttpServletRequest request, String downstreamPath) {
-        return !("GET".equals(request.getMethod()) && "/api/agent/runs".equals(downstreamPath));
+        if (!"GET".equals(request.getMethod())) {
+            return true;
+        }
+        // Match on the path only: a query string carries filters, never authority.
+        int queryStart = downstreamPath.indexOf('?');
+        String path = queryStart >= 0 ? downstreamPath.substring(0, queryStart) : downstreamPath;
+        return !POLLED_STATUS_PATHS.contains(path);
+    }
+
+    private void recordDeniedAuditIfRelevant(String username, String jwtRole, String action,
+                                             HttpServletRequest request, String downstreamPath) {
+        if (shouldRecordForwardedAudit(request, downstreamPath)) {
+            auditService.record(username, jwtRole, action, request.getMethod(), downstreamPath, null, "denied");
+        }
+    }
+
+    private boolean shouldRecordAdminMailboxAccess(HttpServletRequest request, String downstreamPath) {
+        // Same exclusion as the forwarded trail. "An administrator opened your
+        // mailbox" has to mean something; a row every few seconds for the tab's
+        // own unread-count poll made the notice read as constant surveillance
+        // and buried the one access that mattered.
+        if (!shouldRecordForwardedAudit(request, downstreamPath)) {
+            return false;
+        }
+        return downstreamPath.startsWith("/api/agent/");
     }
 
     private String deriveAction(HttpServletRequest request) {

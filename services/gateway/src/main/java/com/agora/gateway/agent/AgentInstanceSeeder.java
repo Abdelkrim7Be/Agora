@@ -32,19 +32,46 @@ public class AgentInstanceSeeder implements CommandLineRunner {
                 .findFirst()
                 .orElseGet(GatewayProperties.AgentType::defaultEmailAgent);
 
+        // A literal "default-mailbox" shipped here before. It is not an address, and
+        // the email-agent compares this value against the mailbox Google actually
+        // authorized and fails closed on a mismatch — so every clean install seeded an
+        // instance that could never connect Gmail. Blank restores the documented
+        // "no expectation" path; a configured value pins the instance to one mailbox.
+        String mailbox = props.getDefaultAgentMailbox();
+
+        // The literal "system" shipped as the creator here, and nobody can log in
+        // as "system". The poller stamps each run it files with the owning
+        // instance's creator, and tenant-scoped reads filter on the requesting
+        // user — so every run on the seeded instance was written under an
+        // identity no session ever carries, and the validation queue came up
+        // empty however much mail the agent had processed. Own it with the
+        // seeded owner account instead, falling back only if none is configured.
+        String createdBy = firstNonBlank(
+                props.getOwner() == null ? null : props.getOwner().getUsername(),
+                props.getAdmin() == null ? null : props.getAdmin().getUsername(),
+                "system"
+        );
+
         instances.save(new AgentInstance(
                 id,
                 type.getId(),
                 "Default Email Agent",
-                "default-mailbox",
+                mailbox == null ? "" : mailbox.trim(),
                 "Seeded email-agent instance that preserves the original single-mailbox flow.",
                 "active",
                 type.getBasePath(),
                 "owner,viewer",
-                "system",
+                createdBy,
                 type.getColor(),
                 type.getIcon()
         ));
-        log.info("seeded agent instance {} ({})", id, type.getId());
+        log.info("seeded agent instance {} ({}) owned by {}", id, type.getId(), createdBy);
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        return "system";
     }
 }

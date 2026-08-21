@@ -7,7 +7,7 @@ import socket
 import time
 
 from src.automation import load_rules
-from src.config import settings
+from src.config import settings, validate_model_redaction
 from src.dlq import setup_dlq
 from src.mail import get_provider
 from src.gmail_sync import setup_gmail_sync
@@ -81,6 +81,7 @@ async def run_forever() -> None:
     SKIP LOCKED query is what makes concurrent workers safe.
     """
     require_job_queue_available()
+    validate_model_redaction()
     validate_token_security()
     upgrade_to_head()
     validate_runtime_role()

@@ -9,6 +9,8 @@ def _use_json(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "run_registry_backend", "json")
     monkeypatch.setattr(settings, "database_url", "")
     monkeypatch.setattr(settings, "gmail_sync_status_path", str(tmp_path / "sync_status.json"))
+    # An auth failure now raises a notification; keep it out of the real store.
+    monkeypatch.setattr(settings, "notification_store_path", str(tmp_path / "notifications.json"))
 
 
 def test_default_status_is_disconnected(monkeypatch, tmp_path):
@@ -45,6 +47,52 @@ def test_auth_error_sets_expired(monkeypatch, tmp_path):
     s = sync_status.get_status("alice@example.com", "default-email-agent")
     assert s["connection_status"] == "expired"
     assert s["last_error"] == "Gmail authorization expired or was revoked. Reconnect Gmail."
+
+
+def test_scope_change_sets_expired_and_names_the_fix(monkeypatch, tmp_path):
+    # A token granted under a scope string this build no longer requests fails
+    # the refresh with invalid_scope. Nothing expired and nothing was revoked, so
+    # it used to fall through to the generic "check the logs" message and the
+    # poller looped on it forever.
+    _use_json(monkeypatch, tmp_path)
+    sync_status.record_failure(
+        "('invalid_scope: Bad Request', {'error': 'invalid_scope'})",
+        "alice@example.com",
+        "default-email-agent",
+    )
+    s = sync_status.get_status("alice@example.com", "default-email-agent")
+    assert s["connection_status"] == "expired"
+    assert "Reconnect Gmail" in s["last_error"]
+
+
+def test_auth_failure_raises_one_deduped_notification(monkeypatch, tmp_path):
+    from src import notification_store
+
+    _use_json(monkeypatch, tmp_path)
+    for _ in range(3):
+        sync_status.record_failure("invalid_scope: Bad Request", "alice@example.com", "default-email-agent")
+
+    notifications = notification_store.list_notifications(
+        user_id="alice@example.com", agent_instance_id="default-email-agent"
+    )
+    reconnects = [n for n in notifications if n["notification_type"] == "mailbox_reconnect_required"]
+    # Three failed poll cycles, one notification: the poller runs every few
+    # minutes and would otherwise bury every other notification.
+    assert len(reconnects) == 1
+    assert reconnects[0]["action_url"] == "/instance/default-email-agent/gmail"
+
+
+def test_transient_failure_raises_no_notification(monkeypatch, tmp_path):
+    from src import notification_store
+
+    _use_json(monkeypatch, tmp_path)
+    sync_status.record_failure("Connection refused", "alice@example.com", "default-email-agent")
+
+    notifications = notification_store.list_notifications(
+        user_id="alice@example.com", agent_instance_id="default-email-agent"
+    )
+    # Only a human-fixable authorization failure is worth interrupting for.
+    assert [n for n in notifications if n["notification_type"] == "mailbox_reconnect_required"] == []
 
 
 def test_record_success_clears_error(monkeypatch, tmp_path):

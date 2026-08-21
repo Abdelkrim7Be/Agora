@@ -3,6 +3,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useDialog } from '../../contexts/DialogContext';
 import {
   useRulesQuery,
@@ -53,18 +54,27 @@ function ruleThenSummary(rule) {
   return parts.join(' · ') || 'aucune action';
 }
 
-function TogglePill({ label, enabled, onClick }) {
+/**
+ * Five identical pills said "Automatisation : Activé" and left you to work out
+ * what each subsystem actually did. A switch with one line of plain French says
+ * both what it is and whether it is on.
+ */
+function SectionSwitch({ label, description, enabled, disabled, onToggle }) {
   return (
-    <button className={`toggle-pill ${enabled ? 'on' : 'off'}`} type="button" onClick={onClick}>
-      <span className="toggle-dot" aria-hidden="true" />
-      <span>{label} : {enabled ? 'Activé' : 'Désactivé'}</span>
-    </button>
+    <label className={`toggle-row rules-section-switch${enabled ? ' on' : ''}`}>
+      <input type="checkbox" checked={enabled} disabled={disabled} onChange={() => onToggle(!enabled)} />
+      <span>
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+    </label>
   );
 }
 
 export default function RulesPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
+  const { runBusy } = useBusy();
   const { confirmDialog } = useDialog();
   const canManage = hasRole('owner');
 
@@ -78,12 +88,13 @@ export default function RulesPage() {
     enabled: true, allowedSenders: '', allowedDomains: '', blockedSenders: '', blockedDomains: '',
     gmailCategories: true, bulkHeaders: true, senderHeuristics: true,
   });
+  const [loadSecondaryRulesData, setLoadSecondaryRulesData] = useState(false);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
   const query = useRulesQuery();
-  const junkQuery = useJunkQuery();
-  const suggestionsQuery = useRuleSuggestionsQuery();
+  const junkQuery = useJunkQuery(loadSecondaryRulesData);
+  const suggestionsQuery = useRuleSuggestionsQuery(loadSecondaryRulesData);
   const saveYaml = useSaveRulesYaml();
   const saveRule = useSaveRule();
   const deleteRule = useDeleteRule();
@@ -97,6 +108,12 @@ export default function RulesPage() {
   const parsed = query.data?.parsed;
   const rules = parsed?.rules || [];
   const suggestions = suggestionsQuery.data?.suggestions || [];
+
+  useEffect(() => {
+    if (loadSecondaryRulesData || (!query.data && !query.error)) return undefined;
+    const timer = setTimeout(() => setLoadSecondaryRulesData(true), 750);
+    return () => clearTimeout(timer);
+  }, [loadSecondaryRulesData, query.data, query.error]);
 
   useEffect(() => {
     if (!query.data) return;
@@ -184,7 +201,7 @@ export default function RulesPage() {
       },
     };
     try {
-      await saveRule.mutateAsync(payload);
+      await runBusy('Enregistrement de la règle', () => saveRule.mutateAsync(payload));
       resetRuleForm();
       setStatus(`Règle « ${name} » enregistrée.`, 'ok');
     } catch (error) {
@@ -202,7 +219,7 @@ export default function RulesPage() {
     });
     if (!confirmed) return;
     try {
-      await deleteRule.mutateAsync(name);
+      await runBusy('Suppression de la règle', () => deleteRule.mutateAsync(name));
       setStatus(`Règle « ${name} » supprimée.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de supprimer la règle : ${error.message}`, 'error');
@@ -211,7 +228,7 @@ export default function RulesPage() {
 
   const handleToggleRule = async (name, enabled) => {
     try {
-      await toggleRule.mutateAsync({ name, enabled });
+      await runBusy('Mise à jour de la règle', () => toggleRule.mutateAsync({ name, enabled }));
       setStatus(`Règle « ${name} » ${enabled ? 'activée' : 'désactivée'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de basculer la règle : ${error.message}`, 'error');
@@ -220,7 +237,7 @@ export default function RulesPage() {
 
   const handleToggleSection = async (section, enabled) => {
     try {
-      await toggleSection.mutateAsync({ section, enabled });
+      await runBusy('Mise à jour de l’automatisation', () => toggleSection.mutateAsync({ section, enabled }));
       setStatus(`${section.replace('_', ' ')} ${enabled ? 'activé' : 'désactivé'}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de basculer ${section} : ${error.message}`, 'error');
@@ -235,14 +252,14 @@ export default function RulesPage() {
         ? { label_prefix: snooze.labelPrefix.trim() || 'Snoozed', max_resurface_per_run: Number(snooze.maxResurface || 20) }
         : { label: followUps.label.trim() || 'Awaiting Reply', after_days: Number(followUps.afterDays || 3), max_results: Number(followUps.maxResults || 10), nudge: followUps.nudge.trim() || 'Just following up on this.' };
     try {
-      await saveSectionConfig.mutateAsync({ section, config });
+      await runBusy('Enregistrement de la configuration', () => saveSectionConfig.mutateAsync({ section, config }));
       setStatus('Sous-système enregistré.', 'ok');
     } catch (error) {
       setStatus(`Impossible d'enregistrer : ${error.message}`, 'error');
     }
   };
 
-  const starterQuery = useStarterRulesQuery();
+  const starterQuery = useStarterRulesQuery(loadSecondaryRulesData);
   const applyStarter = useApplyStarterRules();
   const [starterPicks, setStarterPicks] = useState([]);
 
@@ -256,7 +273,7 @@ export default function RulesPage() {
   const handleApplyStarter = async () => {
     if (!starterPicks.length) return;
     try {
-      const result = await applyStarter.mutateAsync(starterPicks);
+      const result = await runBusy('Application des règles proposées', () => applyStarter.mutateAsync(starterPicks));
       setStarterPicks([]);
       setStatus(`${(result.added || []).length} règle(s) recommandée(s) ajoutée(s).`, 'ok');
     } catch (error) {
@@ -266,7 +283,7 @@ export default function RulesPage() {
 
   const handleSaveYaml = async () => {
     try {
-      await saveYaml.mutateAsync(yamlText);
+      await runBusy('Enregistrement des règles', () => saveYaml.mutateAsync(yamlText));
       setStatus('Règles enregistrées.', 'ok');
     } catch (error) {
       setStatus(`Impossible d'enregistrer les règles : ${error.message}`, 'error');
@@ -294,7 +311,7 @@ export default function RulesPage() {
 
   const handlePromote = async (index) => {
     try {
-      const result = await promoteSuggestion.mutateAsync(index);
+      const result = await runBusy('Création de la règle', () => promoteSuggestion.mutateAsync(index));
       setStatus(result.kind === 'workflow' ? 'Suggestion promue en workflow.' : 'Suggestion promue en règle active.', 'ok');
     } catch (error) {
       setStatus(`Impossible de promouvoir la suggestion : ${error.message}`, 'error');
@@ -356,9 +373,9 @@ export default function RulesPage() {
           </ul>
         </Card>
       )}
-      <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les règles</span>
+      <div className="toolbar" style={{ marginTop: 'var(--space-3)' }}>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
+          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>{query.isFetching ? 'Actualisation…' : 'Charger les règles'}</span>
         </button>
         <button className="primary" type="button" onClick={handleSaveYaml}>
           <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer les règles</span>
@@ -405,17 +422,40 @@ export default function RulesPage() {
       <Card className="editor-card">
         <strong>Règles configurées</strong>
         <div className="rules-preview">
-          <div className="rules-toggle-row">
-            {canManage && (
-              <>
-                <TogglePill label="Automatisation" enabled={Boolean(parsed?.enabled)} onClick={() => handleToggleSection('automation', !parsed?.enabled)} />
-                <TogglePill label={`Digest ${parsed?.digest?.hour ?? ''}:00`} enabled={Boolean(parsed?.digest?.enabled)} onClick={() => handleToggleSection('digest', !parsed?.digest?.enabled)} />
-                <TogglePill label="Mise en veille" enabled={Boolean(parsed?.snooze?.enabled)} onClick={() => handleToggleSection('snooze', !parsed?.snooze?.enabled)} />
-                <TogglePill label="Relances" enabled={Boolean(parsed?.follow_ups?.enabled)} onClick={() => handleToggleSection('follow_ups', !parsed?.follow_ups?.enabled)} />
-                <TogglePill label="Apprentissage" enabled={Boolean(parsed?.learning?.enabled)} onClick={() => handleToggleSection('learning', !parsed?.learning?.enabled)} />
-              </>
-            )}
-          </div>
+          {canManage && (
+            <div className="rules-section-grid">
+              <SectionSwitch
+                label="Automatisation"
+                description="Applique les règles ci-dessous à chaque e-mail entrant."
+                enabled={Boolean(parsed?.enabled)}
+                onToggle={(next) => handleToggleSection('automation', next)}
+              />
+              <SectionSwitch
+                label={`Résumé quotidien à ${parsed?.digest?.hour ?? 18}:00`}
+                description="Regroupe les e-mails sans urgence dans un seul récapitulatif."
+                enabled={Boolean(parsed?.digest?.enabled)}
+                onToggle={(next) => handleToggleSection('digest', next)}
+              />
+              <SectionSwitch
+                label="Mise en veille"
+                description="Permet de reporter un e-mail à une date choisie."
+                enabled={Boolean(parsed?.snooze?.enabled)}
+                onToggle={(next) => handleToggleSection('snooze', next)}
+              />
+              <SectionSwitch
+                label="Relances"
+                description="Repère les fils restés sans réponse et propose de relancer."
+                enabled={Boolean(parsed?.follow_ups?.enabled)}
+                onToggle={(next) => handleToggleSection('follow_ups', next)}
+              />
+              <SectionSwitch
+                label="Apprentissage"
+                description="Propose de nouvelles règles à partir de vos décisions."
+                enabled={Boolean(parsed?.learning?.enabled)}
+                onToggle={(next) => handleToggleSection('learning', next)}
+              />
+            </div>
+          )}
           <div className="rule-list">
             {!rules.length ? <div className="empty">Aucune règle configurée.</div> : rules.map((r) => (
               <div className="rule-row" key={r.name}>
@@ -424,20 +464,30 @@ export default function RulesPage() {
                   <span>{ruleWhenSummary(r)} → {ruleThenSummary(r)}</span>
                 </div>
                 <div className="rule-row-actions">
-                  <button
-                    type="button"
-                    className={`status-pill ${r.enabled ? 'ok' : 'error'}`}
-                    onClick={() => handleToggleRule(r.name, !r.enabled)}
-                  >
-                    {r.enabled ? 'Activée' : 'Désactivée'}
-                  </button>
+                  {/* Was a status badge that happened to be clickable — the state
+                      and the control now look like what they are. */}
+                  <label className="toggle-row rule-enabled-switch">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(r.enabled)}
+                      aria-label={`${r.enabled ? 'Désactiver' : 'Activer'} la règle ${r.name}`}
+                      onChange={() => handleToggleRule(r.name, !r.enabled)}
+                    />
+                    <span>{r.enabled ? 'Activée' : 'Désactivée'}</span>
+                  </label>
                   {canManage && (
                     <div className="directory-actions">
-                      <button type="button" onClick={() => startEdit(r)}>
-                        <span className="material-symbols-outlined" aria-hidden="true">edit</span><span>Modifier</span>
+                      <button type="button" title="Modifier" aria-label={`Modifier ${r.name}`} onClick={() => startEdit(r)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">edit</span>
                       </button>
-                      <button className="danger" type="button" onClick={() => handleDeleteRule(r.name)}>
-                        <span className="material-symbols-outlined" aria-hidden="true">delete</span><span>Supprimer</span>
+                      <button
+                        className="ghost danger-text"
+                        type="button"
+                        title="Supprimer"
+                        aria-label={`Supprimer ${r.name}`}
+                        onClick={() => handleDeleteRule(r.name)}
+                      >
+                        <span className="material-symbols-outlined" aria-hidden="true">delete</span>
                       </button>
                     </div>
                   )}

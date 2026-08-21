@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Pager } from '../../components/ui/Pager';
@@ -8,6 +8,7 @@ import ValidationCard from '../../components/domain/ValidationCard';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useApi } from '../../api/useApi';
 import { actionArgs, workflowLabelFr } from '../../utils/format';
 import {
@@ -31,9 +32,11 @@ export default function ValidationPage() {
   const { hasRole } = useInstance();
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog } = useDialog();
+  const { runBusy, holdOverlay } = useBusy();
   const { api, streamApi } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const canApprove = hasRole('approver');
 
   const [page, setPage] = useState(0);
@@ -75,6 +78,19 @@ export default function ValidationPage() {
   useEffect(() => {
     if (query.error) setStatus(`Impossible de charger la validation : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Arriving from "Forcer l'agent" with ?run=<id>: put the person on the draft
+  // that was just written for them instead of the top of a queue where they have
+  // to find it. Cleared from the URL afterwards so a refresh is an ordinary visit.
+  const requestedRunId = searchParams.get('run');
+  useEffect(() => {
+    if (!requestedRunId || !runs.length) return;
+    if (!runs.some((run) => run.run_id === requestedRunId)) return;
+    setActiveRunId(requestedRunId);
+    document.querySelector(`[data-card="${requestedRunId}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setSearchParams({}, { replace: true });
+  }, [requestedRunId, runs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Prune selection/edits to runs still present.
   useEffect(() => {
@@ -127,6 +143,15 @@ export default function ValidationPage() {
     ? { ...actionArgs(run), ...editedFields[run.run_id] }
     : null);
 
+  // A run whose state is gone answers 410 and has just been retired server-side:
+  // refresh so the card leaves the queue instead of sitting there un-actionable.
+  const reportFailure = (message, error) => {
+    setStatus(`${message} : ${error.message}`, 'error');
+    if (error.message.includes('expiré')) {
+      queryClient.invalidateQueries({ queryKey: ['pending-runs'] });
+    }
+  };
+
   const handleDecision = async (command, runId, options = {}) => {
     const run = runs.find((item) => item.run_id === runId);
     if (!run) return;
@@ -137,13 +162,15 @@ export default function ValidationPage() {
     }
 
     if (command === 'tone') {
-      setStatus('Reformulation en cours...');
       try {
-        const result = await toneRun.mutateAsync({ runId, tone: options.tone });
+        const result = await runBusy(
+          `Reformulation du brouillon (${options.tone})`,
+          () => toneRun.mutateAsync({ runId, tone: options.tone }),
+        );
         handleFieldChange(runId, result.field || options.field || 'content', result.content);
         setStatus('Brouillon reformulé — vérifiez avant d’approuver.', 'ok');
       } catch (error) {
-        setStatus(`Échec de la reformulation : ${error.message}`, 'error');
+        reportFailure('Échec de la reformulation', error);
       }
       return;
     }
@@ -159,10 +186,10 @@ export default function ValidationPage() {
       });
       if (value === null) return;
       try {
-        await assignRun.mutateAsync({ runId, assignee: value || null });
+        await runBusy('Assignation de la validation', () => assignRun.mutateAsync({ runId, assignee: value || null }));
         setStatus(value ? `Assigné à ${value}.` : 'Assignation retirée.', 'ok');
       } catch (error) {
-        setStatus(`Échec de l’assignation : ${error.message}`, 'error');
+        reportFailure('Échec de l’assignation', error);
       }
       return;
     }
@@ -170,10 +197,10 @@ export default function ValidationPage() {
     if (command === 'claim') {
       setBusy(runId, true);
       try {
-        await claimRun.mutateAsync(runId);
-        setStatus('Pris en charge.', 'ok');
+        await runBusy('Prise en charge de la validation', () => claimRun.mutateAsync(runId));
+        setStatus('Cette validation vous est maintenant assignée.', 'ok');
       } catch (error) {
-        setStatus(`Échec de la prise en charge : ${error.message}`, 'error');
+        reportFailure('Échec de la prise en charge', error);
       } finally {
         setBusy(runId, false);
       }
@@ -183,11 +210,11 @@ export default function ValidationPage() {
     if (command === 'accept') {
       setBusy(runId, true);
       try {
-        await approveRun.mutateAsync({ runId, args: editedArgsFor(run) });
+        await runBusy('Envoi en cours', () => approveRun.mutateAsync({ runId, args: editedArgsFor(run) }));
         setEditedFields((prev) => { const next = { ...prev }; delete next[runId]; return next; });
         setStatus('Envoyé.', 'ok');
       } catch (error) {
-        setStatus(`Décision échouée : ${error.message}`, 'error');
+        reportFailure('Décision échouée', error);
       } finally {
         setBusy(runId, false);
       }
@@ -197,10 +224,10 @@ export default function ValidationPage() {
     if (command === 'ignore') {
       setBusy(runId, true);
       try {
-        await rejectRun.mutateAsync(runId);
+        await runBusy('Rejet en cours', () => rejectRun.mutateAsync(runId));
         setStatus('E-mail ignoré.', 'ok');
       } catch (error) {
-        setStatus(`Décision échouée : ${error.message}`, 'error');
+        reportFailure('Décision échouée', error);
       } finally {
         setBusy(runId, false);
       }
@@ -243,7 +270,7 @@ export default function ValidationPage() {
           await api(`/api/agent/run/${runId}/respond`, { method: 'POST', body: JSON.stringify({ feedback, draft: respondDraft }) });
         } catch (fallbackError) {
           settleFeedbackMessage(runId, agentMessageId, `La retouche a échoué : ${fallbackError.message}`);
-          setStatus(`Décision échouée : ${fallbackError.message}`, 'error');
+          reportFailure('Décision échouée', fallbackError);
           setBusy(runId, false);
           return;
         }
@@ -276,7 +303,10 @@ export default function ValidationPage() {
     });
     if (!confirmed) return;
     try {
-      const result = await bulkDecision.mutateAsync({ runIds, decision });
+      const result = await runBusy(
+        `${decision === 'approve' ? 'Approbation' : 'Rejet'} de ${runIds.length} validation(s)`,
+        () => bulkDecision.mutateAsync({ runIds, decision }),
+      );
       const errors = (result.results || []).filter((item) => item.status === 'error');
       setSelectedRuns((prev) => {
         if (!explicitRunIds) return new Set();
@@ -290,8 +320,14 @@ export default function ValidationPage() {
     }
   };
 
+  // The toolbar already draws its own progress bar for this sync — holding
+  // the overlay off keeps it from covering the exact bar being watched.
+  useEffect(() => {
+    if (!syncGmail.isPending || !holdOverlay) return undefined;
+    return holdOverlay();
+  }, [syncGmail.isPending, holdOverlay]);
+
   const handleSync = async () => {
-    setStatus('Vérification Gmail en cours...');
     try {
       await syncGmail.mutateAsync();
       setStatus('Synchronisation terminée.', 'ok');
@@ -352,9 +388,9 @@ export default function ValidationPage() {
         <strong>Décisions à prendre :</strong> seules les actions qui attendent une validation humaine apparaissent ici.
       </div>
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
+        <button type="button" disabled={query.isFetching} onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
-          <span>Actualiser</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
         <button className="primary" type="button" onClick={handleSync} disabled={syncGmail.isPending}>
           <span className="material-symbols-outlined" aria-hidden="true">mark_email_read</span>
@@ -379,6 +415,19 @@ export default function ValidationPage() {
         </select>
         <input aria-label="Recherche expéditeur ou sujet" placeholder="Rechercher" value={search} onChange={(event) => setSearch(event.target.value)} />
         <input aria-label="Depuis le" type="date" value={since} onChange={(event) => setSince(event.target.value)} />
+        {canApprove && category && runs.length ? (
+          <button
+            className="primary"
+            type="button"
+            title={`Approuver et envoyer les ${runs.length} validation(s) de ce cas métier`}
+            onClick={() => handleBulk('approve', runs.map((run) => run.run_id))}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">done_all</span>
+            <span>
+              Approuver tout « {availableCategories.find((c) => c.name === category)?.display_name || category} » ({runs.length})
+            </span>
+          </button>
+        ) : null}
         <span className="counter">{runs.length} en attente</span>
         <span className="kbd-legend" title="Raccourcis clavier disponibles">Clavier disponible</span>
         <span className="toolbar-spacer"></span>

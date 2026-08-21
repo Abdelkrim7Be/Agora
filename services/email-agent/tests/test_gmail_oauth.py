@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from src.api import app
 from src.config import settings
+from src.gmail_client import GMAIL_SCOPES
 from src.gmail_oauth import build_state, validate_state
 
 
@@ -44,6 +45,15 @@ class _FakeFlow:
 
     def fetch_token(self, code):
         self.fetch_code = code
+
+
+def _stub_gmail_profile(monkeypatch, oauth, email="owner@example.com"):
+    fake_service = MagicMock()
+    fake_service.users.return_value.getProfile.return_value.execute.return_value = {
+        "emailAddress": email
+    }
+    monkeypatch.setattr(oauth, "_build_service", lambda *a, **kw: fake_service)
+    return fake_service
 
 
 def test_gmail_connect_start_builds_signed_offline_consent_url(monkeypatch):
@@ -154,8 +164,8 @@ def test_exchange_code_rejects_mailbox_mismatch(monkeypatch, tmp_path):
         oauth.exchange_code_for_token("abc", payload)
 
 
-def test_exchange_code_skips_mailbox_check_when_no_identity(monkeypatch, tmp_path):
-    """exchange_code_for_token skips mailbox verification when mailbox_identity is empty."""
+def test_exchange_code_verifies_and_records_mailbox_when_no_identity(monkeypatch, tmp_path):
+    """exchange_code_for_token verifies the actual mailbox even without a prefilled identity."""
     import src.gmail_oauth as oauth
 
     monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
@@ -164,15 +174,42 @@ def test_exchange_code_skips_mailbox_check_when_no_identity(monkeypatch, tmp_pat
     monkeypatch.setattr(settings, "token_encryption_required", False)
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
     monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+    _stub_gmail_profile(monkeypatch, oauth, "owner@example.com")
 
     state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
     payload = validate_state(state)
 
-    # No _build_service mock — would raise if called; test verifies it isn't called.
     path = oauth.exchange_code_for_token("abc", payload)
     assert path.exists()
     assert json.loads(path.read_text()) == {"token": "oauth-token"}
+    registry = json.loads((tmp_path / "connected_mailboxes.json").read_text())
+    assert registry["mailboxes"]["gmail:owner@example.com"]["agent_instance_id"] == "default-email-agent"
+
+
+def test_exchange_code_rejects_mailbox_already_connected_to_another_instance(monkeypatch, tmp_path):
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
+    monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+    _stub_gmail_profile(monkeypatch, oauth, "owner@example.com")
+
+    first = validate_state(build_state("owner@example.com", "ceo-email-agent", mailbox_identity=""))
+    second = validate_state(build_state("owner@example.com", "hr-email-agent", mailbox_identity=""))
+
+    oauth.exchange_code_for_token("abc", first)
+    with pytest.raises(ValueError, match="already connected to instance ceo-email-agent"):
+        oauth.exchange_code_for_token("def", second)
+
+    assert (tmp_path / "tokens" / "instance__ceo-email-agent.json").is_file()
+    assert not (tmp_path / "tokens" / "instance__hr-email-agent.json").exists()
 
 
 def test_revoke_gmail_token_calls_google_revoke_endpoint(monkeypatch, tmp_path):
@@ -275,6 +312,7 @@ def test_exchange_code_reports_persistence_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
     monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
     monkeypatch.setattr(oauth, "Flow", _FakeFlow)
+    _stub_gmail_profile(monkeypatch, oauth)
 
     from contextlib import contextmanager
 
@@ -312,3 +350,97 @@ def test_gmail_connect_callback_surfaces_exchange_error_message(monkeypatch):
     location = response.headers["location"]
     assert "gmail=error" in location
     assert "Redirect%20URI%20mismatch" in location
+
+
+class _ScopedCredentials(_FakeCredentials):
+    """Credentials that report the scopes Google actually granted."""
+
+    def __init__(self, scopes):
+        self.scopes = scopes
+
+
+class _ScopeAwareFlow(_FakeFlow):
+    """Flow whose token exchange records the oauthlib relax flag it ran under."""
+
+    granted_scopes: list[str] = list(GMAIL_SCOPES)
+    seen_relax_flag = None
+
+    def fetch_token(self, code):
+        import os
+
+        type(self).seen_relax_flag = os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+        self.fetch_code = code
+        self.credentials = _ScopedCredentials(type(self).granted_scopes)
+
+
+def _exchange_env(monkeypatch, tmp_path, flow_cls):
+    import src.gmail_oauth as oauth
+
+    monkeypatch.setattr(settings, "gmail_oauth_state_secret", "unit-state-secret")
+    monkeypatch.setattr(settings, "token_encryption_key_file", "")
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", False)
+    monkeypatch.setattr(settings, "gmail_token_path", str(tmp_path / "token.json"))
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens"))
+    monkeypatch.setattr(settings, "connected_mailboxes_path", str(tmp_path / "connected_mailboxes.json"))
+    monkeypatch.setattr(oauth, "Flow", flow_cls)
+    _stub_gmail_profile(monkeypatch, oauth)
+    state = build_state("owner@example.com", "default-email-agent", mailbox_identity="")
+    return oauth, validate_state(state)
+
+
+def test_token_exchange_relaxes_oauthlib_scope_check(monkeypatch, tmp_path):
+    """oauthlib must not raise when a prior broad grant widens the returned scopes.
+
+    An account that once granted `https://mail.google.com/` to the same OAuth client
+    gets the union back from Google, which oauthlib treats as tampering by default.
+    """
+    _ScopeAwareFlow.seen_relax_flag = None
+    _ScopeAwareFlow.granted_scopes = ["https://mail.google.com/", *GMAIL_SCOPES]
+    oauth, payload = _exchange_env(monkeypatch, tmp_path, _ScopeAwareFlow)
+    monkeypatch.delenv("OAUTHLIB_RELAX_TOKEN_SCOPE", raising=False)
+
+    path = oauth.exchange_code_for_token("abc", payload)
+
+    assert path.exists()
+    assert _ScopeAwareFlow.seen_relax_flag == "1"
+    # The flag is process-global; leaving it set would silently relax every later flow.
+    assert "OAUTHLIB_RELAX_TOKEN_SCOPE" not in __import__("os").environ
+
+
+def test_token_exchange_restores_preexisting_relax_flag(monkeypatch, tmp_path):
+    """A value the operator set in the environment must survive the exchange."""
+    _ScopeAwareFlow.granted_scopes = list(GMAIL_SCOPES)
+    oauth, payload = _exchange_env(monkeypatch, tmp_path, _ScopeAwareFlow)
+    monkeypatch.setenv("OAUTHLIB_RELAX_TOKEN_SCOPE", "0")
+
+    oauth.exchange_code_for_token("abc", payload)
+
+    assert __import__("os").environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] == "0"
+
+
+def test_token_exchange_rejects_missing_required_scope(monkeypatch, tmp_path):
+    """Relaxing the check must tolerate a superset, never a subset.
+
+    A token without gmail.modify would store fine and then fail on the first send,
+    long after the user left the connect screen.
+    """
+    _ScopeAwareFlow.granted_scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
+    oauth, payload = _exchange_env(monkeypatch, tmp_path, _ScopeAwareFlow)
+
+    with pytest.raises(ValueError, match="did not grant the permissions"):
+        oauth.exchange_code_for_token("abc", payload)
+
+
+def test_scope_change_error_explains_the_prior_grant():
+    """The raw oauthlib message names no cause and no fix; the wrapper must."""
+    from src.gmail_oauth import _explain_token_fetch_error
+
+    message = _explain_token_fetch_error(
+        Warning(
+            'Scope has changed from "https://www.googleapis.com/auth/gmail.modify" to '
+            '"https://mail.google.com/ https://www.googleapis.com/auth/gmail.modify".'
+        )
+    )
+
+    assert "myaccount.google.com/permissions" in message

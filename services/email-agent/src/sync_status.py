@@ -9,6 +9,7 @@ from src.postgres import tenant_connection
 from src.run_registry import selected_run_registry_backend
 from src.tenant import (
     current_agent_instance_id,
+    current_user_id,
     normalize_agent_instance_id,
     normalize_user_id,
     user_context,
@@ -16,7 +17,17 @@ from src.tenant import (
 
 DEFAULT_SYNC_STATUS_PATH = SERVICE_ROOT / "logs" / "gmail_sync_status.json"
 
-_AUTH_ERROR_MARKERS = ("invalid_grant", "token has been expired", "credentials", "unauthorized", "401")
+_AUTH_ERROR_MARKERS = (
+    "invalid_grant",
+    # A stored grant issued under a scope string this build no longer asks for.
+    # Google rejects the refresh outright, so it is an authorization failure even
+    # though nothing expired and nothing was revoked.
+    "invalid_scope",
+    "token has been expired",
+    "credentials",
+    "unauthorized",
+    "401",
+)
 
 
 def _path() -> Path:
@@ -260,6 +271,14 @@ def public_error_message(error: str) -> str:
         return "AI provider rate limit reached. Wait a few minutes and try again."
     if "invalid_grant" in lowered or "expired or revoked" in lowered or "token has been expired" in lowered:
         return "Gmail authorization expired or was revoked. Reconnect Gmail."
+    # Distinct from the above: the grant is still valid, it was just issued for a
+    # different scope string than this build asks for (see GMAIL_SCOPES). Nothing
+    # short of a fresh consent fixes it, so say so instead of "check the logs".
+    if "invalid_scope" in lowered:
+        return (
+            "Gmail authorization was granted for different permissions than this "
+            "version requests. Reconnect Gmail to grant them again."
+        )
     if "could not locate runnable browser" in lowered or "oauth" in lowered or "credentials" in lowered:
         return "Gmail sync is unavailable. Check the Gmail connection settings."
     return "Gmail sync failed. Check service logs for details."
@@ -272,16 +291,54 @@ def record_failure(
 ) -> None:
     uid, iid = _resolve(user_id, agent_instance_id)
     status = "expired" if _is_auth_error(error) else "error"
+    message = public_error_message(error)
     patch = {
         "connection_status": status,
         "last_failure_at": _now(),
-        "last_error": public_error_message(error),
+        "last_error": message,
     }
     if selected_run_registry_backend() == "postgres":
         with user_context(uid):
             _pg_update(uid, iid, patch)
     else:
         _json_update(uid, iid, patch)
+    if status == "expired":
+        # Not `uid`: the connection record is deliberately keyed on a constant
+        # identity (see _resolve), and a notification filed under that constant
+        # appears in nobody's list. The person who can reconnect is the acting
+        # user — the instance owner, in the poller's case.
+        _notify_reconnect_required(
+            normalize_user_id(user_id or current_user_id()), iid, message
+        )
+
+
+def _notify_reconnect_required(user_id: str, instance_id: str, message: str) -> None:
+    """Raise an in-app notification when only a human can restore the connection.
+
+    The mail provider is the broken thing here, so an e-mail alert would be sent
+    through the very channel that is down. This goes to the in-app inbox instead.
+    Deduped on an unread notification, so a poller looping every five minutes
+    bumps one counter rather than filling the list.
+    """
+    try:
+        from src.notification_store import create_notification
+
+        create_notification(
+            notification_type="mailbox_reconnect_required",
+            title="Boîte mail à reconnecter",
+            body=message,
+            severity="error",
+            # The UI navigates to this verbatim, so it has to be the absolute
+            # workspace route of the mailbox connection page.
+            action_url=f"/instance/{instance_id}/gmail",
+            dedupe_key=f"mailbox_reconnect_required:{instance_id}",
+            user_id=user_id,
+            agent_instance_id=instance_id,
+        )
+    except Exception as exc:
+        # A failed notification must never turn a recorded sync failure into an
+        # unrecorded one.
+        print(f"sync_status: reconnect notification failed: {exc}")
 
 
 def set_paused(

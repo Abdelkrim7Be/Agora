@@ -36,7 +36,7 @@ auto_organize:
 
 | Capability | Tool | Effect | Approval |
 |------------|------|--------|----------|
-| `email` | `write_email(to, subject, content)` | Sends a new email | HITL |
+| `email` | `write_email(to, subject, content, include_attachments)` | Sends a new email | HITL |
 | `email` | `forward_email(to, note)` | Forwards the current email | HITL |
 | `email` | `notify_internal(to, subject, note)` | Sends an internal workflow notice — synthesized note only, never the original message body | HITL |
 | `email` | `reply_all(content)` | Replies to all participants on the current thread | HITL |
@@ -47,7 +47,7 @@ auto_organize:
 | `inbox` | `mark_read()` | Removes the `UNREAD` label | None |
 | `inbox` | `mark_unread()` | Adds the `UNREAD` label | None |
 | `inbox` | `trash_email()` | Moves the current email to trash | HITL |
-| `drafts` | `create_draft(to, subject, content)` | Creates a Gmail draft without sending | None |
+| `drafts` | `create_draft(to, subject, content, include_attachments)` | Creates a Gmail draft without sending | None |
 
 Inbox and thread tools do not accept Gmail message ids from model-provided arguments. `tool_node` injects trusted `email_id` and `gmail_thread_id` from the poller-derived `EmailInput` using context variables.
 
@@ -103,6 +103,31 @@ whether by the LLM or a careless human edit during review. A flagged draft is
 blocked outright, even if `/authorize` already allowed the action. Fail-closed: a
 security-service outage blocks the send rather than letting it through unaudited.
 
+## Attachments
+
+Two independent sources feed a send/draft's outgoing attachments, both capped by
+`AGENT_MAX_ATTACHMENT_BYTES` (default 10 MiB, combined total) and
+`AGENT_MAX_ATTACHMENT_COUNT` (default 5):
+
+- **Reattach the original message.** `write_email` and `create_draft` both take
+  `include_attachments: bool` — model-controlled, opt-in. When true, the tool downloads the
+  current message's own attachments (via `gmail_client.download_attachment`) and carries them
+  onto the outgoing message. An attachment that would exceed the cap is skipped, not failed — the
+  tool's return string says what was dropped. Only Gmail supports this today; Outlook raises
+  `NotImplementedError` if attachments are passed (see `docs/mail-providers.md`).
+- **Reviewer upload at approval.** `POST /run/{run_id}/attachments` (multipart, `approver` role)
+  stages a file for a pending run, per-run ephemeral storage (`src/run_attachments.py`, same
+  local/S3 backend as `src/media.py`). The returned `attachment_id` is carried in the eventual
+  `approve`/`respond` payload under `_attachments: [id, ...]` — the same trusted-context pattern
+  as `_recipients`: `tool_node` resolves the ids to bytes and injects them, the model never sees
+  or sets this key. Files are deleted once the run resolves (`src/run_registry.upsert_run` calls
+  `discard_run_attachments` for any non-active status).
+
+Only `write_email` is meaningfully reachable from the approval screen — `create_draft` has no
+HITL gate (`REQUIRES_APPROVAL` is empty for it), so a reviewer never gets a chance to attach a
+file to it; `include_attachments` still works there for the model's own opt-in reattach.
+`forward_email`, `reply_all`, and `notify_internal` do not support attachments yet.
+
 ## Dry Run
 
 `AGENT_DRY_RUN=true` is the default. Agent-proposed Gmail mutations return dry-run results instead of changing the mailbox or sending mail.
@@ -139,7 +164,13 @@ authorization, HITL, dry-run, and trusted message context all still apply.
 
 ## Caveats
 
-- Forwarding does not include attachments from the original message.
+- Forwarding (`forward_email`), reply-all, and internal notifications do not support attachments —
+  only `write_email` and `create_draft` do (see Attachments above).
+- Attachment reattach/upload is Gmail-only; Outlook raises `NotImplementedError` if attachments
+  are passed to a send/draft.
+- No per-tenant tuning of the attachment size/count cap yet — `AGENT_MAX_ATTACHMENT_BYTES` /
+  `AGENT_MAX_ATTACHMENT_COUNT` are instance-wide settings, not policy-driven like `policy.yaml`'s
+  other limits.
 - `reply_all` recipients are derived from the Gmail thread and are not submitted to recipient policy checks.
 - `reply_all` sets `References` to the original `Message-ID` only.
 - `notify_internal`'s note still interpolates the original sender address and subject line
