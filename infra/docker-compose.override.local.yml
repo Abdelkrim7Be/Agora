@@ -172,3 +172,9 @@ services:
         condition: service_healthy
     networks:
       - agora
+
+  # Reachable on the host in dev only. The base compose deliberately keeps it
+  # off the host so nothing bypasses the TLS ingress in a real deployment.
+  grafana:
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
