@@ -8,6 +8,7 @@ import pytest
 from src import managed_secrets
 from src.config import settings
 from src.token_store import (
+    _load_envelope,
     delete_token,
     has_stored_token,
     prepared_token_file,
@@ -88,6 +89,9 @@ def test_vault_round_trip_leaves_no_local_token(vault, tmp_path):
 
     target = token_file_for_user(agent_instance_id="default-email-agent")
     record = next(iter(vault.records.values()))
+    envelope = _load_envelope(record.encode("utf-8"))
+    assert envelope["version"] == 3
+    assert envelope["tenant_scope"] == "default-email-agent"
     assert "oauth-secret" not in record
     assert "refresh-secret" not in record
     assert not target.exists()

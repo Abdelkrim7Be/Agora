@@ -3,6 +3,7 @@ package com.agora.gateway;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.agora.gateway.config.GatewayProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +23,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -37,6 +39,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.password=",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.hibernate.ddl-auto=create-drop",
+        "gateway.upstream.summary-cache-seconds=0",
+        "gateway.upstream.manifest-cache-seconds=0",
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.default-agent-instance=default-email-agent",
         "gateway.owner.username=owner",
@@ -64,6 +68,9 @@ class AgentRegistryTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private GatewayProperties gatewayProperties;
+
     @AfterEach
     void resetWireMock() {
         wireMock.resetAll();
@@ -77,6 +84,30 @@ class AgentRegistryTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(response).get("token").asText();
+    }
+
+    @Test
+    void configured_agent_types_satisfy_platform_contract() {
+        assertThat(gatewayProperties.getAgentTypes()).isNotEmpty();
+        for (GatewayProperties.AgentType type : gatewayProperties.getAgentTypes()) {
+            assertThat(type.getId()).isNotBlank();
+            assertThat(type.getDisplayName()).isNotBlank();
+            assertThat(type.getDescription()).isNotBlank();
+            assertThat(type.getCapabilities()).isNotEmpty();
+            assertThat(type.getBasePath()).startsWith("/");
+            assertThat(type.getHealthPath()).startsWith("/");
+            assertThat(type.getSettingsSchema()).isNotEmpty();
+        }
+
+        GatewayProperties.AgentType emailAgent = gatewayProperties.getAgentTypes().stream()
+                .filter(type -> "email-agent".equals(type.getId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(emailAgent.getBasePath()).isEqualTo("/api/agent");
+        assertThat(emailAgent.getHealthPath()).isEqualTo("/health");
+        assertThat(emailAgent.getSettingsSchema())
+                .extracting(GatewayProperties.SettingSection::key)
+                .contains("persona", "categories", "rules", "capabilities", "permissions");
     }
 
     @Test
@@ -94,6 +125,7 @@ class AgentRegistryTest {
                 .andExpect(jsonPath("$[0].display_name").value("Email Agent"))
                 .andExpect(jsonPath("$[0].capabilities", hasItem("gmail_sync")))
                 .andExpect(jsonPath("$[0].base_path").value("/api/agent"))
+                .andExpect(jsonPath("$[0].settings_schema[?(@.key == \"rules\")].path").value(hasItem("/rules")))
                 .andExpect(jsonPath("$[0].health").value("healthy"));
 
         wireMock.verify(1, getRequestedFor(urlEqualTo("/health")));
@@ -121,12 +153,12 @@ class AgentRegistryTest {
                 .andExpect(jsonPath("$[0].agent_type").value("email-agent"))
                 .andExpect(jsonPath("$[0].display_name").value("Default Email Agent"))
                 .andExpect(jsonPath("$[0].effective_role").value("viewer"))
+                .andExpect(jsonPath("$[0].content_role").value(""))
                 .andExpect(jsonPath("$[0].summary.service_health").value("healthy"))
-                .andExpect(jsonPath("$[0].summary.pending_drafts").value(2))
-                .andExpect(jsonPath("$[0].summary.today_cost_eur").value(1.25));
+                .andExpect(jsonPath("$[0].summary.pending_drafts").value(0))
+                .andExpect(jsonPath("$[0].summary.today_cost_eur").value(0.0));
 
-        wireMock.verify(getRequestedFor(urlEqualTo("/drafts"))
-                .withHeader("X-Agora-User", equalTo("viewer"))
+        wireMock.verify(0, getRequestedFor(urlEqualTo("/drafts"))
                 .withHeader("X-Agora-Agent-Instance", equalTo("default-email-agent")));
     }
 
@@ -170,6 +202,40 @@ class AgentRegistryTest {
                 .andExpect(jsonPath("$.id").value("admin-ceo-email-agent"))
                 .andExpect(jsonPath("$.mailbox_identity").value("admin-ceo@example.com"))
                 .andExpect(jsonPath("$.created_by").value("admin"));
+    }
+
+    @Test
+    void duplicate_active_mailbox_identity_is_rejected() throws Exception {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/drafts"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"drafts\":[]}")));
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/costs/summary?period=day"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("{\"totals\":{\"cost_eur\":0.0}}")));
+
+        String token = login("owner", "ownerpass");
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "support-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Support",
+                                "mailbox_identity", "Support@Example.com"
+                        ))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/agent-instances")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "id", "support-copy-email-agent",
+                                "agent_type", "email-agent",
+                                "display_name", "Support Copy",
+                                "mailbox_identity", "support@example.com"
+                        ))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("mailbox support@example.com is already connected to instance support-email-agent (Support)"));
     }
 
     @Test
@@ -362,4 +428,106 @@ class AgentRegistryTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("inactive"));
     }
+
+    // --- agent contract: the agent declares itself, the gateway reads it -----
+
+    private void stubHealthy() {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/health"))
+                .willReturn(aResponse().withStatus(200)));
+    }
+
+    private void stubManifest(String body) {
+        wireMock.stubFor(com.github.tomakehurst.wiremock.client.WireMock.get(urlEqualTo("/manifest"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(body)));
+    }
+
+    @Test
+    void manifest_overrides_the_configured_description_and_settings() throws Exception {
+        stubHealthy();
+        stubManifest("""
+                {"contract_version":1,"id":"email-agent","display_name":"Agent Courrier",
+                 "description":"Declared by the agent itself.",
+                 "capabilities":["email_triage","contract_demo"],
+                 "settings_schema":[{"key":"persona","label":"Persona","description":"d","path":"/persona"},
+                                    {"key":"brand","label":"Marque","description":"d","path":"/brand"}]}
+                """);
+
+        mockMvc.perform(get("/agents")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].display_name").value("Agent Courrier"))
+                .andExpect(jsonPath("$[0].description").value("Declared by the agent itself."))
+                .andExpect(jsonPath("$[0].capabilities", hasItem("contract_demo")))
+                .andExpect(jsonPath("$[0].settings_schema[?(@.key == \"brand\")].path").value(hasItem("/brand")))
+                // Routing stays the platform's to decide.
+                .andExpect(jsonPath("$[0].base_path").value("/api/agent"));
+    }
+
+    @Test
+    void an_unreachable_agent_falls_back_to_the_configured_type() throws Exception {
+        // No /manifest stub: WireMock answers 404 like a service that has not
+        // shipped the endpoint yet. The settings navigation must not go blank.
+        stubHealthy();
+
+        mockMvc.perform(get("/agents")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].display_name").value("Email Agent"))
+                .andExpect(jsonPath("$[0].settings_schema[?(@.key == \"rules\")].path").value(hasItem("/rules")));
+    }
+
+    @Test
+    void a_contract_version_this_gateway_does_not_know_falls_back() throws Exception {
+        stubHealthy();
+        stubManifest("""
+                {"contract_version":99,"id":"email-agent","display_name":"From the future",
+                 "capabilities":["x"],"settings_schema":[{"key":"x","label":"X","path":"/x"}]}
+                """);
+
+        mockMvc.perform(get("/agents")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].display_name").value("Email Agent"));
+    }
+
+    @Test
+    void a_manifest_cannot_claim_a_different_agent_type() throws Exception {
+        // Otherwise a compromised or misconfigured container could answer as
+        // another registered type and inherit that type's routing and grants.
+        stubHealthy();
+        stubManifest("""
+                {"contract_version":1,"id":"billing-agent","display_name":"Billing",
+                 "capabilities":["invoices"],"settings_schema":[{"key":"x","label":"X","path":"/x"}]}
+                """);
+
+        mockMvc.perform(get("/agents")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value("email-agent"))
+                .andExpect(jsonPath("$[0].display_name").value("Email Agent"));
+    }
+
+    @Test
+    void off_origin_settings_paths_are_dropped_from_the_manifest() throws Exception {
+        // Settings paths are rendered as workspace links; a protocol-relative or
+        // absolute URL would point the UI at someone else's host.
+        stubHealthy();
+        stubManifest("""
+                {"contract_version":1,"id":"email-agent","display_name":"Email Agent",
+                 "capabilities":["email_triage"],
+                 "settings_schema":[{"key":"evil","label":"Evil","path":"//attacker.example/steal"},
+                                    {"key":"also-evil","label":"Also","path":"https://attacker.example"},
+                                    {"key":"persona","label":"Persona","path":"/persona"}]}
+                """);
+
+        mockMvc.perform(get("/agents")
+                        .header("Authorization", "Bearer " + login("owner", "ownerpass")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].settings_schema.length()").value(1))
+                .andExpect(jsonPath("$[0].settings_schema[0].key").value("persona"));
+    }
+
 }

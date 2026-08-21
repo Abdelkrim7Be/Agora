@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -14,7 +15,7 @@ from src import managed_secrets
 from src.config import SERVICE_ROOT, settings
 from src.tenant import current_agent_instance_id, normalize_agent_instance_id
 
-ENVELOPE_VERSION = 2
+ENVELOPE_VERSION = 3
 DEFAULT_KEY_ID = "default"
 LEGACY_KEY_ID = "legacy"
 TOKEN_BACKENDS = {"file", "vault"}
@@ -68,6 +69,19 @@ def _derive_fernet(secret: str):
     from cryptography.fernet import Fernet
 
     digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _derive_tenant_fernet(secret: str, tenant_scope: str):
+    from cryptography.fernet import Fernet
+
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"agora-token-tenant-wrap-v1:{normalize_agent_instance_id(tenant_scope)}".encode(
+            "utf-8"
+        ),
+        hashlib.sha256,
+    ).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
@@ -180,22 +194,39 @@ def _load_envelope(blob: bytes) -> dict | None:
     return payload if required.issubset(payload) else None
 
 
-def _encrypt_envelope(data: bytes, *, key_id: str, secret: str) -> bytes:
+def _encrypt_envelope(
+    data: bytes,
+    *,
+    key_id: str,
+    secret: str,
+    tenant_scope: str,
+) -> bytes:
     from cryptography.fernet import Fernet
 
     data_key = Fernet.generate_key()
-    wrapped_data_key = _derive_fernet(secret).encrypt(data_key).decode("utf-8")
+    normalized_scope = normalize_agent_instance_id(tenant_scope)
+    wrapped_data_key = (
+        _derive_tenant_fernet(secret, normalized_scope)
+        .encrypt(data_key)
+        .decode("utf-8")
+    )
     ciphertext = Fernet(data_key).encrypt(data).decode("utf-8")
     envelope = {
         "version": ENVELOPE_VERSION,
         "key_id": key_id,
+        "tenant_scope": normalized_scope,
         "wrapped_data_key": wrapped_data_key,
         "ciphertext": ciphertext,
     }
     return json.dumps(envelope, sort_keys=True).encode("utf-8")
 
 
-def _decrypt_envelope(blob: bytes, keys: dict[str, str]) -> bytes:
+def _decrypt_envelope(
+    blob: bytes,
+    keys: dict[str, str],
+    *,
+    tenant_scope: str | None = None,
+) -> bytes:
     from cryptography.fernet import Fernet
 
     envelope = _load_envelope(blob)
@@ -224,9 +255,21 @@ def _decrypt_envelope(blob: bytes, keys: dict[str, str]) -> bytes:
             f"Stored Gmail token references unknown key id {key_id}. "
             "Restore the matching master key or reconnect Gmail."
         )
-    data_key = _derive_fernet(secret).decrypt(
-        str(envelope["wrapped_data_key"]).encode("utf-8")
-    )
+    stored_scope = envelope.get("tenant_scope")
+    if stored_scope:
+        normalized_stored_scope = normalize_agent_instance_id(str(stored_scope))
+        if (
+            tenant_scope is not None
+            and normalize_agent_instance_id(tenant_scope) != normalized_stored_scope
+        ):
+            raise ValueError(
+                "Stored Gmail token belongs to a different tenant scope. "
+                "Reconnect Gmail for this agent instance."
+            )
+        wrapper = _derive_tenant_fernet(secret, normalized_stored_scope)
+    else:
+        wrapper = _derive_fernet(secret)
+    data_key = wrapper.decrypt(str(envelope["wrapped_data_key"]).encode("utf-8"))
     return Fernet(data_key).decrypt(str(envelope["ciphertext"]).encode("utf-8"))
 
 
@@ -377,7 +420,9 @@ def prepared_token_file(
             else:
                 blob = _read_persisted_blob(target, resolved_instance)
                 if blob is not None:
-                    work_path.write_bytes(_decrypt_envelope(blob, keys))
+                    work_path.write_bytes(
+                        _decrypt_envelope(blob, keys, tenant_scope=resolved_instance)
+                    )
                     work_path.chmod(0o600)
 
             yield str(work_path)
@@ -388,6 +433,7 @@ def prepared_token_file(
                     work_path.read_bytes(),
                     key_id=active_key_id,
                     secret=secret,
+                    tenant_scope=resolved_instance,
                 )
                 _persist_blob(target, resolved_instance, blob)
         finally:

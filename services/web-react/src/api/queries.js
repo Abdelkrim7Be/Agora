@@ -25,30 +25,40 @@ export function useAgentTypesQuery() {
   });
 }
 
-export function useHealthQuery(period) {
+export function useHealthQuery(period, agentInstanceId) {
   const { api } = useApi();
   const { token } = useAuth();
+  const headers = agentInstanceId ? { 'X-Agora-Agent-Instance': agentInstanceId } : undefined;
   return useQuery({
-    queryKey: ['health', period],
+    queryKey: ['health', agentInstanceId, period],
     queryFn: async () => {
       const [health, activity] = await Promise.all([
-        api('/api/agent/health'),
-        api(`/api/agent/analytics?period=${encodeURIComponent(period)}`).catch(() => null),
+        api('/api/agent/health', { headers }),
+        api(`/api/agent/analytics?period=${encodeURIComponent(period)}`, { headers }).catch(() => null),
       ]);
       return { health, activity };
     },
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(agentInstanceId),
+    // A liveness board that only updates when you press a button is not a
+    // liveness board. The manual refresh stays for "is it back yet?".
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
   });
 }
 
-export function useAuditQuery(page, limit) {
+export function useAuditQuery(page, limit, includeTechnicalNoise = false) {
   const { api } = useApi();
   const { token } = useAuth();
   const fetchSize = Math.min(limit + 1, 500);
   return useQuery({
-    queryKey: ['audit', page, limit],
+    queryKey: ['audit', page, limit, includeTechnicalNoise],
     queryFn: async () => {
-      const events = await api(`/audit?limit=${encodeURIComponent(fetchSize)}&page=${page}`);
+      const params = new URLSearchParams({
+        limit: String(fetchSize),
+        page: String(page),
+        includeTechnicalNoise: String(includeTechnicalNoise),
+      });
+      const events = await api(`/audit?${params.toString()}`);
       return { events: events.slice(0, limit), hasMore: events.length > limit };
     },
     enabled: Boolean(token),
@@ -94,6 +104,20 @@ export function useCreateInstance() {
   });
 }
 
+/** Suspend or resume an instance. Suspending stops the poller touching that
+ * mailbox and closes its workspace, without destroying anything. */
+export function useSetInstanceActive() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, active }) => api(
+      `/agent-instances/${encodeURIComponent(id)}/${active ? 'activate' : 'deactivate'}`,
+      { method: 'POST' },
+    ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-instances'] }),
+  });
+}
+
 export function useDeleteInstance() {
   const { api } = useApi();
   const queryClient = useQueryClient();
@@ -125,10 +149,32 @@ export function useUpdateUser() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, role, department }) => api(`/users/${encodeURIComponent(id)}`, {
+    mutationFn: ({ id, role, department, email }) => api(`/users/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      body: JSON.stringify({ role, department: department || null }),
+      body: JSON.stringify({ role, department: department || null, email: email ?? null }),
     }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useAnonymizeUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/anonymize`, { method: 'POST' }),
+    // Grants and instances change too, so the whole admin view is refetched.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['instance-grants'] });
+    },
+  });
+}
+
+export function useDeleteUser() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 }
@@ -137,7 +183,10 @@ export function useInviteUser() {
   const { api } = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/invite`, { method: 'POST' }),
+    mutationFn: ({ id, email } = {}) => api(`/users/${encodeURIComponent(id)}/invite`, {
+      method: 'POST',
+      body: JSON.stringify({ email: email || undefined }),
+    }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 }
@@ -145,7 +194,10 @@ export function useInviteUser() {
 export function useInstanceGrantsQuery(instances, enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
-  const ids = (instances || []).map((instance) => instance.id).filter(Boolean);
+  const ids = (instances || [])
+    .filter((instance) => instance.effective_role === 'owner')
+    .map((instance) => instance.id)
+    .filter(Boolean);
   return useQuery({
     queryKey: ['instance-grants', ids.join('|')],
     queryFn: async () => {
@@ -154,6 +206,26 @@ export function useInstanceGrantsQuery(instances, enabled = true) {
         return grants.map((grant) => ({ ...grant, agent_instance_id: grant.agent_instance_id || id }));
       }));
       return pairs.flat();
+    },
+    enabled: Boolean(token) && enabled && ids.length > 0,
+  });
+}
+
+export function useAdminAccessQuery(instances, enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const ids = (instances || [])
+    .filter((instance) => instance.effective_role === 'owner')
+    .map((instance) => instance.id)
+    .filter(Boolean);
+  return useQuery({
+    queryKey: ['admin-access', ids.join('|')],
+    queryFn: async () => {
+      const pairs = await Promise.all(ids.map(async (id) => {
+        const events = await api(`/agent-instances/${encodeURIComponent(id)}/admin-access`);
+        return [id, events];
+      }));
+      return Object.fromEntries(pairs);
     },
     enabled: Boolean(token) && enabled && ids.length > 0,
   });
@@ -187,12 +259,68 @@ export function useRemoveInstanceGrant() {
   });
 }
 
-// --- Validation (pending-approval queue) ---
+// --- Own account (any signed-in role) ---
 
-export function usePendingRunsQuery(page, filters = {}) {
+export function useMyProfileQuery() {
   const { api } = useApi();
   const { token } = useAuth();
-  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['me'],
+    queryFn: () => api('/me'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useUpdateMyProfile() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body) => api('/me', { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['me'] });
+      // The team page renders the same display name from its own cached list.
+      // Invalidating only ['me'] left it showing the old value until a hard
+      // reload, which looks exactly like a save that did not save.
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+}
+
+export function useChangeMyPassword() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ currentPassword, newPassword }) => api('/me/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  });
+}
+
+export function useResetUserMfa() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api(`/users/${encodeURIComponent(id)}/mfa/reset`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useSetUserPassword() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: ({ id, password }) => api(`/users/${encodeURIComponent(id)}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    }),
+  });
+}
+
+// --- Validation (pending-approval queue) ---
+
+export function usePendingRunsQuery(page, filters = {}, enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId, hasContentRole } = useInstance();
   const params = new URLSearchParams({
     status: 'pending_approval',
     limit: String(PENDING_PAGE_SIZE),
@@ -205,7 +333,7 @@ export function usePendingRunsQuery(page, filters = {}) {
   return useQuery({
     queryKey: ['pending-runs', instanceId, page, filters.category || '', filters.priority || '', filters.q || '', filters.since || ''],
     queryFn: () => api(`/api/agent/runs?${params.toString()}`),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId) && enabled && hasContentRole('viewer'),
     refetchInterval: 30_000,
   });
 }
@@ -232,6 +360,15 @@ export function useRejectRun() {
   return useMutation({
     mutationFn: (runId) => api(`/api/agent/run/${runId}/reject`, { method: 'POST' }),
     onSuccess: () => invalidatePendingRuns(queryClient),
+  });
+}
+
+// Stages a file for a pending run's draft/send — the returned attachment_id is
+// carried in the eventual approve/respond call, never exposed to the model.
+export function useUploadRunAttachment() {
+  const { apiUpload } = useApi();
+  return useMutation({
+    mutationFn: ({ runId, file }) => apiUpload(`/api/agent/run/${runId}/attachments`, file),
   });
 }
 
@@ -294,24 +431,6 @@ export function useSyncGmail() {
   });
 }
 
-// --- Drafts ---
-
-export function useDraftsQuery(category, priority, q = '', since = '') {
-  const { api } = useApi();
-  const { token } = useAuth();
-  const { instanceId } = useInstance();
-  const params = new URLSearchParams({ limit: '100' });
-  if (category) params.set('category', category);
-  if (priority) params.set('priority', priority);
-  if (q) params.set('q', q);
-  if (since) params.set('since', since);
-  return useQuery({
-    queryKey: ['drafts', instanceId, category, priority, q, since],
-    queryFn: async () => (await api(`/api/agent/drafts?${params.toString()}`)).drafts || [],
-    enabled: Boolean(token),
-  });
-}
-
 // --- Inbox ---
 
 const INBOX_PAGE_SIZE = 25;
@@ -328,11 +447,11 @@ export const inboxQueryPath = (mailbox = 'inbox', refresh = false) => {
 export function useInboxQuery(mailbox = 'inbox', refreshNonce = 0) {
   const { api } = useApi();
   const { token } = useAuth();
-  const { instanceId } = useInstance();
+  const { instanceId, hasContentRole } = useInstance();
   return useQuery({
     queryKey: [...inboxQueryKey(instanceId, mailbox), refreshNonce],
     queryFn: () => api(inboxQueryPath(mailbox, refreshNonce > 0)),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && Boolean(instanceId) && hasContentRole('viewer'),
     placeholderData: (previous) => previous,
   });
 }
@@ -356,7 +475,6 @@ export function useForceAgentOnMessage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inbox', instanceId] });
       queryClient.invalidateQueries({ queryKey: ['pending-runs', instanceId] });
-      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
     },
   });
 }
@@ -366,10 +484,11 @@ export function useForceAgentOnMessage() {
 export function useRunDetailQuery(runId) {
   const { api } = useApi();
   const { token } = useAuth();
+  const { hasContentRole } = useInstance();
   return useQuery({
     queryKey: ['run-detail', runId],
     queryFn: () => api(`/api/agent/run/${runId}/detail`),
-    enabled: Boolean(token && runId),
+    enabled: Boolean(token && runId) && hasContentRole('viewer'),
   });
 }
 
@@ -395,7 +514,6 @@ export function useGmailSyncNow() {
     mutationFn: () => api('/api/agent/sync', { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gmail-status', instanceId] });
-      queryClient.invalidateQueries({ queryKey: ['drafts', instanceId] });
     },
   });
 }
@@ -513,7 +631,10 @@ export function useSavePersona() {
   const { instanceId } = useInstance();
   return useMutation({
     mutationFn: (persona) => api('/api/agent/persona', { method: 'PUT', body: JSON.stringify(persona) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config', instanceId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['persona', instanceId] });
+      queryClient.invalidateQueries({ queryKey: ['config', instanceId] });
+    },
   });
 }
 
@@ -617,6 +738,16 @@ export function useUploadSignatureImage() {
   const { apiUpload } = useApi();
   return useMutation({
     mutationFn: (file) => apiUpload('/api/agent/signature/image', file),
+  });
+}
+
+export function useImportSignatureImageFromUrl() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: (url) => api('/api/agent/signature/image/from-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
   });
 }
 
@@ -732,6 +863,10 @@ export function useUnreadCountQuery() {
     queryFn: () => api('/api/agent/notifications/unread-count'),
     enabled: Boolean(token) && Boolean(instanceId),
     refetchInterval: 30_000,
+    // A badge count silently retrying is normal background chatter, not a
+    // page failing to load — it shouldn't raise the same alarm as a query the
+    // page actually depends on to render.
+    meta: { silentFailure: true },
   });
 }
 
@@ -1059,9 +1194,9 @@ export function useAddGrant() {
   const queryClient = useQueryClient();
   const { instanceId } = useInstance();
   return useMutation({
-    mutationFn: ({ userId, role }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
+    mutationFn: ({ userId, role, expiresAt }) => api(`/agent-instances/${encodeURIComponent(instanceId)}/grants`, {
       method: 'POST',
-      body: JSON.stringify({ user_id: userId, role }),
+      body: JSON.stringify({ user_id: userId, role, expires_at: expiresAt || null }),
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['grants', instanceId] }),
   });
@@ -1177,14 +1312,14 @@ export function useDismissCategoryProposal() {
 
 // --- Junk gate ---
 
-export function useJunkQuery() {
+export function useJunkQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
     queryKey: ['junk', instanceId],
     queryFn: () => api('/api/agent/junk'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -1195,6 +1330,27 @@ export function useSaveJunk() {
   return useMutation({
     mutationFn: (payload) => api('/api/agent/junk', { method: 'PUT', body: JSON.stringify(payload) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['junk', instanceId] }),
+  });
+}
+
+export function useSensitivityQuery(enabled = true) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  const { instanceId } = useInstance();
+  return useQuery({
+    queryKey: ['sensitivity', instanceId],
+    queryFn: () => api('/api/agent/sensitivity'),
+    enabled: Boolean(token) && enabled,
+  });
+}
+
+export function useSaveSensitivity() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  const { instanceId } = useInstance();
+  return useMutation({
+    mutationFn: (payload) => api('/api/agent/sensitivity', { method: 'PUT', body: JSON.stringify(payload) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sensitivity', instanceId] }),
   });
 }
 
@@ -1210,14 +1366,14 @@ export function useJunkSuggestionsQuery(enabled = false) {
   });
 }
 
-export function useStarterRulesQuery() {
+export function useStarterRulesQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
     queryKey: ['starter-rules', instanceId],
     queryFn: () => api('/api/agent/rules/starter'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -1247,14 +1403,14 @@ export function useRulesQuery() {
   });
 }
 
-export function useRuleSuggestionsQuery() {
+export function useRuleSuggestionsQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
   const { instanceId } = useInstance();
   return useQuery({
     queryKey: ['rule-suggestions', instanceId],
     queryFn: () => api('/api/agent/rules/suggestions'),
-    enabled: Boolean(token),
+    enabled: Boolean(token) && enabled,
   });
 }
 
@@ -1474,5 +1630,65 @@ export function useRequeueDlqEntry() {
   return useMutation({
     mutationFn: (entryId) => api(`/api/agent/dlq/${encodeURIComponent(entryId)}/requeue`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dlq', instanceId] }),
+  });
+}
+
+// --- Reports ("Signaler un problème") ---
+
+export function useSubmitReport() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: (payload) => api('/reports', { method: 'POST', body: JSON.stringify(payload) }),
+  });
+}
+
+export function useReportsQuery(status) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['reports', status || 'all'],
+    queryFn: () => api(status ? `/reports?status=${encodeURIComponent(status)}` : '/reports'),
+    enabled: Boolean(token),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUpdateReportStatus() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }) => api(`/reports/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ status }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['reports'] }),
+  });
+}
+
+// --- Platform audit ---
+
+export function useRunPlatformAudit() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api('/audit/run', { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['audit-runs'] }),
+  });
+}
+
+export function useAuditRunsQuery() {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['audit-runs'],
+    queryFn: () => api('/audit/runs'),
+    enabled: Boolean(token),
+  });
+}
+
+export function useAuditRunDetailQuery(id) {
+  const { api } = useApi();
+  const { token } = useAuth();
+  return useQuery({
+    queryKey: ['audit-run-detail', id],
+    queryFn: () => api(`/audit/runs/${encodeURIComponent(id)}`),
+    enabled: Boolean(token) && id != null,
   });
 }

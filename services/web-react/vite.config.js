@@ -7,9 +7,14 @@ const gatewayProxyTarget = process.env.VITE_GATEWAY_PROXY_TARGET || 'http://loca
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // `@/` resolves to src, so deep pages can import shared modules without
+    // counting `../` segments.
+    alias: { '@': new URL('./src', import.meta.url).pathname },
+  },
   server: {
     proxy: {
-      '^/(api/|auth/|audit|users|agents|agent-instances|mailboxes|health)': {
+      '^/(api/|auth/|audit|users|me|agents|agent-instances|mailboxes|health|reports)': {
         target: gatewayProxyTarget,
         changeOrigin: true,
       },

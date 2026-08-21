@@ -79,6 +79,8 @@ class MailProvider(Protocol):
         ...
 
     # --- read ------------------------------------------------------------
+    def get_message_headers(self, msg_id: str) -> dict: ...
+
     def get_message(self, msg_id: str) -> dict: ...
 
     def fetch_thread(self, thread_id: str) -> list[dict]: ...
@@ -126,21 +128,38 @@ class MailProvider(Protocol):
         ...
 
     # --- send ------------------------------------------------------------
-    def send_message(self, to: str, subject: str, body: str) -> dict: ...
+    def send_message(
+        self, to: str, subject: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
+        """`attachments` items are `{filename, mime_type, data}` with `data` as bytes."""
+        ...
 
     def send_html_message(
         self, to: str, subject: str, html: str, text: str, respect_dry_run: bool = True
     ) -> dict: ...
 
     def create_draft(
-        self, to: str, subject: str, body: str, thread_id: str | None = None
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        attachments: list[dict] | None = None,
+    ) -> dict:
+        """`attachments` items are `{filename, mime_type, data}` with `data` as bytes."""
+        ...
+
+    def forward_message(
+        self, message_id: str, to: str, note: str, attachments: list[dict] | None = None
     ) -> dict: ...
 
-    def forward_message(self, message_id: str, to: str, note: str) -> dict: ...
+    def notify_internal_message(
+        self, to: str | list[str], subject: str, note: str, attachments: list[dict] | None = None
+    ) -> dict: ...
 
-    def notify_internal_message(self, to: str | list[str], subject: str, note: str) -> dict: ...
-
-    def reply_all_message(self, message_id: str, body: str) -> dict: ...
+    def reply_all_message(
+        self, message_id: str, body: str, attachments: list[dict] | None = None
+    ) -> dict: ...
 
     # --- identity --------------------------------------------------------
     def self_address(self) -> str:

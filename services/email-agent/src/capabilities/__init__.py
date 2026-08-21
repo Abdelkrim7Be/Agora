@@ -16,6 +16,21 @@ current_gmail_thread_id: ContextVar[str | None] = ContextVar(
     "current_gmail_thread_id", default=None
 )
 
+# Attachment metadata ({filename, mime_type, size, attachment_id}) carried by the
+# message currently being handled. Bytes are fetched on demand — this only tells a
+# tool what is available to reattach, the same trust boundary as current_email_id.
+# Tuple default (like current_route_targets) so nothing can mutate the shared default.
+current_email_attachments: ContextVar[tuple[dict, ...]] = ContextVar(
+    "current_email_attachments", default=()
+)
+
+# Attachments a reviewer staged via POST /run/{id}/attachments before approving,
+# already resolved to {filename, mime_type, data}. tool_node injects these —
+# the model never sees the upload and cannot set this itself.
+current_uploaded_attachments: ContextVar[tuple[dict, ...]] = ContextVar(
+    "current_uploaded_attachments", default=()
+)
+
 # Trusted recipients. These are the reason a prompt injection cannot redirect
 # mail: the model is never asked where something goes.
 #

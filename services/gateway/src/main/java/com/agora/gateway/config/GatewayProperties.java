@@ -10,17 +10,38 @@ public class GatewayProperties {
 
     private Upstream upstream = new Upstream();
     private String defaultAgentInstance = "default-email-agent";
+    // Mailbox the seeded instance expects OAuth to authorize. Blank on purpose:
+    // the email-agent treats an empty identity as "no expectation" and skips
+    // mailbox verification, which is the legacy single-user path. Any non-blank
+    // value is compared against the address Google actually authorized and fails
+    // closed on a mismatch — so a placeholder here makes the instance impossible
+    // to connect. Set it to a real address to pin the seeded instance to one mailbox.
+    private String defaultAgentMailbox = "";
     private List<AgentType> agentTypes = new ArrayList<>(List.of(AgentType.defaultEmailAgent()));
     private Jwt jwt = new Jwt();
+    private String agentSharedSecret = "";
     private Mfa mfa = new Mfa();
     private LoginRateLimit loginRateLimit = new LoginRateLimit();
     private Credentials owner = new Credentials();
     private Credentials viewer = new Credentials();
     private Credentials admin = new Credentials();
+    /**
+     * Dev/demo convenience only — never set in a real deployment.
+     *
+     * The seeder normally leaves an existing seeded account's password alone
+     * forever, so a stale local Postgres volume drifts out of sync with
+     * whatever {@code GATEWAY_*_PASSWORD} says today and the documented demo
+     * credentials silently stop working. With this on, boot re-syncs a seeded
+     * account's password (and re-enables it) to match its env credentials
+     * every time — the account becomes a mirror of the env vars, not a
+     * once-created row nobody remembers the password of.
+     */
+    private boolean seedResetPassword = false;
     /** Public base URL of the web app; invitation links are built from it. */
     private String appUrl = "http://localhost:5173";
     private long inviteExpiryHours = 48;
     private Smtp smtp = new Smtp();
+    private Llm llm = new Llm();
 
     public String getAppUrl() { return appUrl; }
     public void setAppUrl(String appUrl) { this.appUrl = appUrl; }
@@ -31,17 +52,26 @@ public class GatewayProperties {
     public Smtp getSmtp() { return smtp; }
     public void setSmtp(Smtp smtp) { this.smtp = smtp; }
 
+    public Llm getLlm() { return llm; }
+    public void setLlm(Llm llm) { this.llm = llm; }
+
     public Upstream getUpstream() { return upstream; }
     public void setUpstream(Upstream upstream) { this.upstream = upstream; }
 
     public String getDefaultAgentInstance() { return defaultAgentInstance; }
     public void setDefaultAgentInstance(String defaultAgentInstance) { this.defaultAgentInstance = defaultAgentInstance; }
 
+    public String getDefaultAgentMailbox() { return defaultAgentMailbox; }
+    public void setDefaultAgentMailbox(String defaultAgentMailbox) { this.defaultAgentMailbox = defaultAgentMailbox; }
+
     public List<AgentType> getAgentTypes() { return agentTypes; }
     public void setAgentTypes(List<AgentType> agentTypes) { this.agentTypes = agentTypes; }
 
     public Jwt getJwt() { return jwt; }
     public void setJwt(Jwt jwt) { this.jwt = jwt; }
+
+    public String getAgentSharedSecret() { return agentSharedSecret; }
+    public void setAgentSharedSecret(String agentSharedSecret) { this.agentSharedSecret = agentSharedSecret; }
 
     public Mfa getMfa() { return mfa; }
     public void setMfa(Mfa mfa) { this.mfa = mfa; }
@@ -58,11 +88,57 @@ public class GatewayProperties {
     public Credentials getAdmin() { return admin; }
     public void setAdmin(Credentials admin) { this.admin = admin; }
 
+    public boolean isSeedResetPassword() { return seedResetPassword; }
+    public void setSeedResetPassword(boolean seedResetPassword) { this.seedResetPassword = seedResetPassword; }
+
     public static class Upstream {
         private String emailAgentUrl = "http://localhost:8000";
+        /**
+         * How long to wait for the agent to answer a proxied request, in seconds.
+         *
+         * The slow calls are the ones that run a model: a tone rewrite or a
+         * redraft against a local CPU-hosted model takes minutes, not seconds.
+         * At the old fixed 150s the gateway aborted while the agent was still
+         * working, and the browser was left on a spinner that never resolved —
+         * so this has to follow the deployment's inference speed.
+         */
+        private int responseTimeoutSeconds = 150;
+        /**
+         * How long a per-instance summary may be reused, in seconds.
+         *
+         * Each summary costs three upstream calls and the listing builds one per
+         * instance, so without this the landing page is O(instances x 3) round
+         * trips every view. These are dashboard counters, not decisions. Set 0 to
+         * disable — which is what the tests do, so a cached figure from one case
+         * can never be served to the next.
+         */
+        private int summaryCacheSeconds = 15;
+        /**
+         * How long an agent's self-declared manifest may be reused, in seconds.
+         *
+         * A manifest only changes when a container is redeployed, so this is
+         * generous. Set 0 to disable — the tests do, so one case's manifest can
+         * never be served to the next.
+         */
+        private int manifestCacheSeconds = 60;
 
         public String getEmailAgentUrl() { return emailAgentUrl; }
         public void setEmailAgentUrl(String emailAgentUrl) { this.emailAgentUrl = emailAgentUrl; }
+
+        public int getManifestCacheSeconds() { return manifestCacheSeconds; }
+        public void setManifestCacheSeconds(int manifestCacheSeconds) {
+            this.manifestCacheSeconds = manifestCacheSeconds;
+        }
+
+        public int getSummaryCacheSeconds() { return summaryCacheSeconds; }
+        public void setSummaryCacheSeconds(int summaryCacheSeconds) {
+            this.summaryCacheSeconds = summaryCacheSeconds;
+        }
+
+        public int getResponseTimeoutSeconds() { return responseTimeoutSeconds; }
+        public void setResponseTimeoutSeconds(int responseTimeoutSeconds) {
+            this.responseTimeoutSeconds = responseTimeoutSeconds;
+        }
     }
 
     public static class AgentType {
@@ -72,8 +148,39 @@ public class GatewayProperties {
         private List<String> capabilities = new ArrayList<>();
         private String basePath = "";
         private String healthPath = "/health";
+        private String manifestPath = "/manifest";
+        private List<SettingSection> settingsSchema = new ArrayList<>();
         private String color = "";
         private String icon = "";
+
+        /**
+         * A copy carrying the agent's own declaration where the agent owns the field.
+         *
+         * Routing ({@code basePath}, {@code healthPath}, {@code manifestPath}) and the
+         * palette are NOT taken from the manifest: an agent that could name its own
+         * proxy prefix could claim another agent's traffic.
+         */
+        public AgentType withManifest(String displayName, String description,
+                                      List<String> capabilities, List<SettingSection> settingsSchema) {
+            AgentType merged = new AgentType();
+            merged.id = this.id;
+            merged.basePath = this.basePath;
+            merged.healthPath = this.healthPath;
+            merged.manifestPath = this.manifestPath;
+            merged.color = this.color;
+            merged.icon = this.icon;
+            merged.displayName = isBlank(displayName) ? this.displayName : displayName;
+            merged.description = isBlank(description) ? this.description : description;
+            merged.capabilities = (capabilities == null || capabilities.isEmpty())
+                    ? this.capabilities : capabilities;
+            merged.settingsSchema = (settingsSchema == null || settingsSchema.isEmpty())
+                    ? this.settingsSchema : settingsSchema;
+            return merged;
+        }
+
+        private static boolean isBlank(String value) {
+            return value == null || value.isBlank();
+        }
 
         public static AgentType defaultEmailAgent() {
             AgentType type = new AgentType();
@@ -83,6 +190,13 @@ public class GatewayProperties {
             type.setCapabilities(List.of("email_triage", "draft_approval", "gmail_sync", "style_learning", "cost_observability"));
             type.setBasePath("/api/agent");
             type.setHealthPath("/health");
+            type.setSettingsSchema(List.of(
+                    new SettingSection("persona", "Persona", "Background, triage rules, response preferences and writing style.", "/persona"),
+                    new SettingSection("categories", "Categories", "Workflow categories, routing, policies and templates.", "/categories"),
+                    new SettingSection("rules", "Rules", "Deterministic automation, starter rules, digest and follow-up settings.", "/rules"),
+                    new SettingSection("capabilities", "Capabilities", "Enabled tools and approval gates for this agent instance.", "/capabilities"),
+                    new SettingSection("permissions", "Permissions", "Per-instance mailbox access grants.", "/permissions")
+            ));
             type.setColor("#38bdf8");
             type.setIcon("mail");
             return type;
@@ -106,12 +220,22 @@ public class GatewayProperties {
         public String getHealthPath() { return healthPath; }
         public void setHealthPath(String healthPath) { this.healthPath = healthPath; }
 
+        public String getManifestPath() { return manifestPath; }
+        public void setManifestPath(String manifestPath) { this.manifestPath = manifestPath; }
+
+        public List<SettingSection> getSettingsSchema() { return settingsSchema; }
+        public void setSettingsSchema(List<SettingSection> settingsSchema) {
+            this.settingsSchema = settingsSchema;
+        }
+
         public String getColor() { return color; }
         public void setColor(String color) { this.color = color; }
 
         public String getIcon() { return icon; }
         public void setIcon(String icon) { this.icon = icon; }
     }
+
+    public record SettingSection(String key, String label, String description, String path) {}
 
     public static class LoginRateLimit {
         private boolean enabled = true;
@@ -191,14 +315,44 @@ public class GatewayProperties {
         public void setFrom(String from) { this.from = from; }
     }
 
+    /**
+     * The same local-first Ollama endpoint every other service in this stack talks
+     * to (OpenAI-compatible). Used only for a best-effort "suggested action" on a
+     * user report — never on a path anything else depends on, so a slow or absent
+     * model degrades to no suggestion rather than a failed request.
+     */
+    public static class Llm {
+        private String baseUrl = "http://ollama:11434/v1";
+        private String model = "qwen2.5:3b-8k";
+        private int timeoutSeconds = 20;
+
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
+
+        public int getTimeoutSeconds() { return timeoutSeconds; }
+        public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+    }
+
     public static class Credentials {
         private String username = "";
         private String password = "";
+        /**
+         * Optional. Without it a seeded account has no address, so the team page
+         * cannot invite, re-invite or reach it — the one thing an admin wants to
+         * do with the accounts that exist before anyone signs up.
+         */
+        private String email = "";
 
         public String getUsername() { return username; }
         public void setUsername(String username) { this.username = username; }
 
         public String getPassword() { return password; }
         public void setPassword(String password) { this.password = password; }
+
+        public String getEmail() { return email; }
+        public void setEmail(String email) { this.email = email; }
     }
 }

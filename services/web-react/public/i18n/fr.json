@@ -5,6 +5,8 @@
     "agentTypes": "Catalogue d’agents",
     "health": "Santé système",
     "audit": "Audit & conformité",
+    "platformAudit": "Audit plateforme",
+    "reports": "Signalements",
     "users": "Équipe",
     "account": "Compte"
   },
@@ -148,6 +150,16 @@
       "title": "File d’erreurs",
       "kicker": "Exploitation",
       "description": "Inspectez les actions bloquées ou en échec et relancez uniquement ce qui peut l’être."
+    },
+    "reports": {
+      "title": "Signalements",
+      "kicker": "Support",
+      "description": "Problèmes remontés par les utilisateurs de la plateforme, avec une suggestion d’action générée par IA."
+    },
+    "platformAudit": {
+      "title": "Audit de la plateforme",
+      "kicker": "Exploitation",
+      "description": "Lancez une vérification de santé sur toutes les instances d’agents et la plateforme, en un clic."
     },
     "setup": {
       "title": "Configuration de l’instance",

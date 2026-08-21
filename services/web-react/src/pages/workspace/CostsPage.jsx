@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
-import { Pager } from '../../components/ui/Pager';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
-import { usePager } from '../../hooks/usePager';
 import { useCostsQuery } from '../../api/queries';
 import { formatCount, formatCost } from '../../utils/format';
 
@@ -25,10 +25,9 @@ function costRows(rows, emptyLabel, firstColumn) {
 }
 
 export default function CostsPage() {
-  const { instanceId } = useInstance();
+  const { instanceId, currentInstance } = useInstance();
   const { setStatus } = useStatus();
   const [period, setPeriod] = useState('session');
-  const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
@@ -51,14 +50,16 @@ export default function CostsPage() {
     setStatus(`Impossible de charger les coûts : ${query.error.message}`, 'error');
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const unpriced = summary?.unpriced_models || [];
+  const entryPager = usePagination(entries, COST_PAGE_SIZE);
+
   useEffect(() => {
-    pager.reset();
+    entryPager.setPage(0);
   }, [period]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const modelRows = Object.entries(summary?.by_model || {}).sort((a, b) => (b[1].calls || 0) - (a[1].calls || 0));
   const currentModel = modelRows[0]?.[0] || entries[0]?.model || 'unknown';
-  const pageEntries = entries.slice(pager.page * COST_PAGE_SIZE, pager.page * COST_PAGE_SIZE + COST_PAGE_SIZE);
-  const hasMore = (pager.page + 1) * COST_PAGE_SIZE < entries.length;
+  const pageEntries = entryPager.visible;
 
   return (
     <>
@@ -72,11 +73,19 @@ export default function CostsPage() {
         <button type="button" onClick={() => query.refetch()}>
           <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger les coûts</span>
         </button>
-        <span className="counter">{summary?.agent_instance_id || instanceId}</span>
+        <span className="counter">{currentInstance?.display_name || summary?.agent_instance_id || instanceId}</span>
       </div>
       <div className="cost-summary-grid">
         <div><strong>{currentModel}</strong><span>Modèle actuel</span></div>
-        <div><strong>{formatCost(totals.cost_eur)}</strong><span>Dépense totale</span></div>
+        <div>
+          <strong>{formatCost(totals.cost_eur)}</strong>
+          <span>Dépense totale</span>
+          <small className="metric-hint">
+            {unpriced.length
+              ? `Estimation incomplète : aucun tarif pour ${unpriced.join(', ')}`
+              : 'Modèles locaux : coût de calcul estimé, pas une facture fournisseur.'}
+          </small>
+        </div>
         <div><strong>{formatCount(totals.calls)}</strong><span>Appels LLM</span></div>
         <div><strong>{formatCount(totals.input_tokens)}</strong><span>Tokens entrée</span></div>
         <div><strong>{formatCount(totals.output_tokens)}</strong><span>Tokens sortie</span></div>
@@ -84,8 +93,8 @@ export default function CostsPage() {
       <div className="cost-layout">
         <div>
           <h2 className="section-title">Par modèle</h2>
-          <div className="table-wrap">
-            <table className="data-table">
+          <div className="table-wrap cost-table-wrap">
+            <table className="data-table cost-table">
               <thead><tr><th>Modèle</th><th>Appels</th><th>Entrée</th><th>Sortie</th><th>Total</th><th>EUR</th></tr></thead>
               <tbody>{costRows(summary?.by_model, 'Aucun coût par modèle enregistré.', 'model')}</tbody>
             </table>
@@ -93,8 +102,8 @@ export default function CostsPage() {
         </div>
         <div>
           <h2 className="section-title">Par nœud</h2>
-          <div className="table-wrap">
-            <table className="data-table">
+          <div className="table-wrap cost-table-wrap">
+            <table className="data-table cost-table">
               <thead><tr><th>Nœud</th><th>Appels</th><th>Entrée</th><th>Sortie</th><th>Total</th><th>EUR</th></tr></thead>
               <tbody>{costRows(summary?.by_node, 'Aucun coût par nœud enregistré.', 'node')}</tbody>
             </table>
@@ -103,8 +112,8 @@ export default function CostsPage() {
       </div>
       <div className="cost-recent">
         <h2 className="section-title">Appels récents</h2>
-        <div className="table-wrap">
-          <table className="data-table">
+        <div className="table-wrap cost-table-wrap cost-recent-table-wrap">
+          <table className="data-table cost-table cost-recent-table">
             <thead>
               <tr><th>Heure</th><th>Nœud</th><th>Modèle</th><th>Run</th><th>Tokens in/out/total</th><th>EUR</th></tr>
             </thead>
@@ -121,8 +130,17 @@ export default function CostsPage() {
               )) : <tr><td colSpan={6} className="empty-cell">Aucune entrée de coût enregistrée.</td></tr>}
             </tbody>
           </table>
-          <Pager page={pager.page} hasMore={hasMore} onPrev={pager.prev} onNext={pager.next} />
         </div>
+        <TablePager
+          className="cost-table-pager"
+          page={entryPager.page}
+          pageCount={entryPager.pageCount}
+          total={entryPager.total}
+          size={entryPager.size}
+          onPage={entryPager.setPage}
+          onSize={entryPager.setSize}
+          unit="appels"
+        />
       </div>
     </>
   );

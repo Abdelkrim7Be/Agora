@@ -91,6 +91,9 @@ class GmailProvider:
         return gmail_client.watch_mailbox(topic_name, resource=self.resource)
 
     # --- read ------------------------------------------------------------
+    def get_message_headers(self, msg_id: str) -> dict:
+        return gmail_client.get_message_headers(msg_id, resource=self.resource)
+
     def get_message(self, msg_id: str) -> dict:
         return gmail_client.get_message(msg_id, resource=self.resource)
 
@@ -163,8 +166,12 @@ class GmailProvider:
         return gmail_client.ensure_label(name, resource=self._deferred)
 
     # --- send ------------------------------------------------------------
-    def send_message(self, to: str, subject: str, body: str) -> dict:
-        return gmail_client.send_message(to, subject, body, resource=self._deferred)
+    def send_message(
+        self, to: str, subject: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
+        return gmail_client.send_message(
+            to, subject, body, attachments=attachments, resource=self._deferred
+        )
 
     def send_html_message(
         self, to: str, subject: str, html: str, text: str, respect_dry_run: bool = True
@@ -174,20 +181,37 @@ class GmailProvider:
         )
 
     def create_draft(
-        self, to: str, subject: str, body: str, thread_id: str | None = None
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> dict:
         return gmail_client.create_draft(
-            to, subject, body, thread_id=thread_id, resource=self._deferred
+            to, subject, body, thread_id=thread_id, attachments=attachments, resource=self._deferred
         )
 
-    def forward_message(self, message_id: str, to: str, note: str) -> dict:
-        return gmail_client.forward_message(message_id, to, note, resource=self._deferred)
+    def forward_message(
+        self, message_id: str, to: str, note: str, attachments: list[dict] | None = None
+    ) -> dict:
+        return gmail_client.forward_message(
+            message_id, to, note, attachments=attachments, resource=self._deferred
+        )
 
-    def notify_internal_message(self, to: str | list[str], subject: str, note: str) -> dict:
-        return gmail_client.notify_internal_message(to, subject, note, resource=self._deferred)
+    def notify_internal_message(
+        self, to: str | list[str], subject: str, note: str, attachments: list[dict] | None = None
+    ) -> dict:
+        return gmail_client.notify_internal_message(
+            to, subject, note, attachments=attachments, resource=self._deferred
+        )
 
-    def reply_all_message(self, message_id: str, body: str) -> dict:
-        return gmail_client.reply_all_message(message_id, body, resource=self._deferred)
+    def reply_all_message(
+        self, message_id: str, body: str, attachments: list[dict] | None = None
+    ) -> dict:
+        return gmail_client.reply_all_message(
+            message_id, body, attachments=attachments, resource=self._deferred
+        )
 
     # --- identity --------------------------------------------------------
     def self_address(self) -> str:

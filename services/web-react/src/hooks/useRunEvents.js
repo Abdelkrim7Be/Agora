@@ -23,7 +23,6 @@ export function useRunEvents() {
       streamApi('/api/agent/events', { signal: controller.signal }, ({ event, data }) => {
         if (event === 'run_updated') {
           queryClient.invalidateQueries({ queryKey: ['pending-runs'] });
-          queryClient.invalidateQueries({ queryKey: ['drafts'] });
           queryClient.invalidateQueries({ queryKey: ['notifications'] });
           queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
           if (document.hidden && window.Notification?.permission === 'granted') {

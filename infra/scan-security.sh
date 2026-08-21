@@ -20,7 +20,14 @@ scan_image() {
   image="$1"
   context="$2"
 
-  docker build --pull -t "agora-${image}:ci" "${ROOT}/services/${context}"
+  # email-agent's Dockerfile COPYs platform-core/ as a sibling, so it needs
+  # the parent `services` dir as build context — a service-local context
+  # can't see that directory at all.
+  if [ "$image" = "email-agent" ]; then
+    docker build --pull -t "agora-${image}:ci" -f "${ROOT}/services/${context}/Dockerfile" "${ROOT}/services"
+  else
+    docker build --pull -t "agora-${image}:ci" "${ROOT}/services/${context}"
+  fi
   run_trivy image \
     --scanners vuln \
     --pkg-types os,library \

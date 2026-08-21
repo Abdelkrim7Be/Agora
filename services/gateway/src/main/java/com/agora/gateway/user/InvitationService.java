@@ -65,6 +65,22 @@ public class InvitationService {
 
     @Transactional
     public Issued create(AppUser user, String createdBy) {
+        return issue(user, createdBy, UserInvitation.PURPOSE_INVITE);
+    }
+
+    /**
+     * A self-service password reset.
+     *
+     * Same token machinery as an invitation — the caller is just the account
+     * holder instead of an administrator — but redeeming it must never enable a
+     * disabled account. See {@link UserInvitation#PURPOSE_RESET}.
+     */
+    @Transactional
+    public Issued createForReset(AppUser user) {
+        return issue(user, user.getUsername(), UserInvitation.PURPOSE_RESET);
+    }
+
+    private Issued issue(AppUser user, String createdBy, String purpose) {
         // Supersede anything outstanding: two live tokens for one account means a
         // resend does not actually retire the link that may have gone astray.
         for (UserInvitation previous : invitations.findByUserIdAndConsumedAtIsNull(user.getId())) {
@@ -77,7 +93,7 @@ public class InvitationService {
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
         Instant expiresAt = Instant.now().plus(properties.getInviteExpiryHours(), ChronoUnit.HOURS);
 
-        invitations.save(new UserInvitation(user.getId(), hash(token), expiresAt, createdBy));
+        invitations.save(new UserInvitation(user.getId(), hash(token), expiresAt, createdBy, purpose));
         return new Issued(token, buildSetupLink(token), expiresAt);
     }
 
@@ -122,9 +138,14 @@ public class InvitationService {
 
         AppUser target = user.get();
         target.setPasswordHash(passwordEncoder.encode(password));
-        // An invited account is usable the moment its password is set; leaving it
-        // disabled would make the invitation link look broken.
-        target.setEnabled(true);
+        if (!invitation.isReset()) {
+            // An invited account is usable the moment its password is set; leaving
+            // it disabled would make the invitation link look broken. A reset never
+            // does this: an account disabled after the link was sent must stay
+            // disabled, or being locked out would be undoable by the locked-out
+            // person.
+            target.setEnabled(true);
+        }
         users.save(target);
 
         invitation.setConsumedAt(Instant.now());

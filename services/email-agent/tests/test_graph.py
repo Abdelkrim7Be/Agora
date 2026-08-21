@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+from types import SimpleNamespace
+
 from conftest import ai_tool_call, patch_provider
 
 from src.graph import _recover_tool_call_from_failed_generation, email_assistant
@@ -34,6 +36,14 @@ def test_recovers_groq_failed_write_email_tool_call():
         "subject": "Re: question",
         "content": "Here you go.",
     }
+
+
+def test_prompt_memory_is_bounded(monkeypatch):
+    import src.graph as g
+
+    monkeypatch.setattr(g.settings, "memory_prompt_max_chars", 10)
+
+    assert g._prompt_memory("1234567890abcdef") == "1234567890\n[truncated]"
 
 
 def test_respond_email_routes_to_agent(fake_llms, respond_email):
@@ -162,7 +172,7 @@ def test_notify_workflow_fan_out_approval_notifies_all_recipients(monkeypatch, f
     patch_provider(
         monkeypatch,
         email_tools,
-        notify_internal_message=lambda to, subject, note: sent_to.append(to) or {"id": "sent-notify"},
+        notify_internal_message=lambda to, subject, note, attachments=None: sent_to.append(to) or {"id": "sent-notify"},
     )
     monkeypatch.setattr(email_tools.settings, "dry_run", False)
 
@@ -451,6 +461,45 @@ def test_triage_attaches_category_metadata(monkeypatch, fake_llms, respond_email
     assert result["workflow_route_to"] == ["support@example.com"]
 
 
+def test_triage_cache_reuses_repeated_sender_subject_decision(monkeypatch):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cache = {}
+    calls = []
+
+    class _CountingRouter:
+        def invoke(self, _messages, config=None):
+            calls.append(config)
+            return SimpleNamespace(classification="notify", category=None)
+
+    monkeypatch.setattr(g, "llm_router", _CountingRouter())
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g.settings, "triage_cache_ttl_seconds", 60)
+    monkeypatch.setattr(g, "cache_get_json", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        g,
+        "cache_set_json",
+        lambda key, value, ttl_seconds: cache.setdefault(key, value) is value,
+    )
+
+    first = {
+        "author": "Digest <updates@example.com>",
+        "to": "Me <me@example.com>",
+        "subject": "Daily report 123",
+        "email_thread": "Here is today's report.",
+    }
+    second = {
+        **first,
+        "subject": "Daily report 456",
+        "email_thread": "A different body should not matter for this cache key.",
+    }
+
+    assert email_assistant.invoke({"email_input": first}, _cfg())["classification_decision"] == "notify"
+    assert email_assistant.invoke({"email_input": second}, _cfg())["classification_decision"] == "notify"
+    assert len(calls) == 1
+
+
 def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, respond_email):
     import src.graph as g
     from src.categories import CategoriesConfig
@@ -492,3 +541,39 @@ def test_auto_draft_category_routes_to_pending_approval(monkeypatch, fake_llms, 
     request = result["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "write_email"
     assert request["action_request"]["args"]["subject"] == "Re: Quick question about the API"
+
+
+def test_triage_cache_never_stores_or_replays_ignore(monkeypatch):
+    import src.graph as g
+    from src.categories import CategoriesConfig
+
+    cache = {}
+    calls = []
+
+    class _CountingRouter:
+        def invoke(self, _messages, config=None):
+            calls.append(config)
+            return SimpleNamespace(classification="ignore", category=None)
+
+    monkeypatch.setattr(g, "llm_router", _CountingRouter())
+    monkeypatch.setattr(g, "load_categories", lambda *a, **kw: CategoriesConfig(enabled=False))
+    monkeypatch.setattr(g.settings, "triage_cache_ttl_seconds", 60)
+    monkeypatch.setattr(g, "cache_get_json", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        g,
+        "cache_set_json",
+        lambda key, value, ttl_seconds: cache.setdefault(key, value) is value,
+    )
+
+    email = {
+        "author": "Someone <someone@example.com>",
+        "to": "Me <me@example.com>",
+        "subject": "Ambiguous 123",
+        "email_thread": "Hard to tell whether this matters.",
+    }
+
+    assert email_assistant.invoke({"email_input": email}, _cfg())["classification_decision"] == "ignore"
+    assert email_assistant.invoke({"email_input": email}, _cfg())["classification_decision"] == "ignore"
+
+    assert cache == {}
+    assert len(calls) == 2

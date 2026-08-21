@@ -8,9 +8,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
-import { useApi } from '../../api/useApi';
 import { currentUsername } from '../../utils/jwt';
-import { agentTypeLabel, instanceIdentity, instanceSummaryFields } from '../../utils/format';
+import { agentTypeLabel, instanceSummaryFields } from '../../utils/format';
 import {
   useAgentInstancesQuery,
   useAgentTypesQuery,
@@ -18,6 +17,8 @@ import {
   useDeleteInstance,
   useCreateInstance,
   useUsersQuery,
+  useSetInstanceActive,
+  useTestMailboxConnection,
 } from '../../api/queries';
 
 const EMPTY_CREATE_FORM = { agentType: '', displayName: '', assignedTo: '' };
@@ -34,12 +35,13 @@ export default function InstancesPage() {
   const { setStatus } = useStatus();
   const { confirmDialog, promptDialog } = useDialog();
   const navigate = useNavigate();
-  const { api } = useApi();
   const query = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const usersQuery = useUsersQuery(globalRole === 'admin');
   const renameInstance = useRenameInstance();
   const deleteInstance = useDeleteInstance();
+  const setInstanceActive = useSetInstanceActive();
+  const testConnection = useTestMailboxConnection();
   const createInstance = useCreateInstance();
   const isAdmin = globalRole === 'admin';
   const username = currentUsername(token);
@@ -49,6 +51,10 @@ export default function InstancesPage() {
   const selfServiceLimitReached = !isAdmin && ownEmailInstanceCount >= SELF_SERVICE_LIMIT;
   const canCreate = isAdmin || !selfServiceLimitReached;
   const canManage = isAdmin;
+  // The access list and the admin-access trail used to render here. They made
+  // every card a wall of chips — and the admin trail was mostly the browser's
+  // own polling. Both belong in a per-user view, not on every instance card;
+  // dropping them also removes two fan-out queries (one request per instance).
   const announcedInitialLoad = useRef(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
@@ -74,12 +80,6 @@ export default function InstancesPage() {
       setCreateError(`Limite atteinte : ${SELF_SERVICE_LIMIT} instances email-agent maximum par utilisateur.`);
       return;
     }
-    const oauthPopup = window.open('', 'agora-gmail-connect', 'popup=yes,width=520,height=720');
-    if (!oauthPopup) {
-      setCreateError('Popup bloquée. Autorisez les popups pour ce site puis recréez l’instance.');
-      return;
-    }
-    oauthPopup.document.write('<!doctype html><title>Connexion Gmail</title><body style="font-family:system-ui,sans-serif;padding:24px;background:#0b1326;color:#dae2fd">Création de l’instance puis ouverture du consentement Google...</body>');
     try {
       const created = await createInstance.mutateAsync({
         agentType: createForm.agentType,
@@ -90,25 +90,14 @@ export default function InstancesPage() {
       setCreateOpen(false);
       if (created?.id) {
         setInstanceId(created.id);
-        // Keep the app on setup while Google OAuth happens in a separate window.
-        // The setup screen polls Gmail status and starts onboarding when the
-        // callback stores the token.
-        try {
-          const result = await api(
-            `/api/agent/agent-instances/${encodeURIComponent(created.id)}/connect/gmail/start`
-          );
-          navigate(`/instance/${created.id}/setup`);
-          oauthPopup.location.href = result.authorization_url;
-          oauthPopup.focus();
-          setStatus('Connectez Gmail dans la fenêtre Google. La configuration démarrera automatiquement.', 'ok');
-        } catch (gmailError) {
-          oauthPopup.close();
-          setStatus(`Instance « ${displayName} » créée, mais connexion Gmail impossible : ${gmailError.message}`, 'error');
-          navigate(`/instance/${created.id}`);
-        }
+        // Land inside the instance's own setup/dashboard and let the person
+        // connect Gmail from there (Boîte connectée) — a popup fired from
+        // this dialog opened Google's consent screen before anyone had seen
+        // the instance they just created, and every instance-scoped connect
+        // action already lives on that screen. One connect entry point.
+        navigate(`/instance/${created.id}/setup`);
       }
     } catch (error) {
-      oauthPopup.close();
       setCreateError(error.message);
     }
   };
@@ -129,6 +118,7 @@ export default function InstancesPage() {
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpen = (instance) => {
+    if (!instance?.effective_role) return;
     setInstanceId(instance.id);
     const setupStatus = instance.summary?.setup_status;
     const needsSetup = setupStatus !== 'ready';
@@ -151,6 +141,46 @@ export default function InstancesPage() {
       setStatus(`Instance renommée en « ${nextName} ».`, 'ok');
     } catch (error) {
       setStatus(`Impossible de renommer l’instance : ${error.message}`, 'error');
+    }
+  };
+
+  // Suspending is the reversible half of "stop this agent": the poller leaves the
+  // mailbox alone and the workspace closes, but nothing is destroyed. Deleting was
+  // the only control here before, which made "pause it for now" mean "lose it".
+  const handleToggleActive = async (instance) => {
+    const label = instance.display_name || instance.id;
+    const active = isInstanceActive(instance);
+    if (active) {
+      const confirmed = await confirmDialog({
+        title: 'Suspendre l’instance',
+        message: `${label} cessera de relever sa boîte et son espace de travail sera fermé. Rien n’est supprimé : vous pouvez la réactiver à tout moment.`,
+        confirmLabel: 'Suspendre',
+        confirmIcon: 'pause',
+        variant: 'danger',
+      });
+      if (!confirmed) return;
+    }
+    try {
+      await setInstanceActive.mutateAsync({ id: instance.id, active: !active });
+      setStatus(active ? `Instance « ${label} » suspendue.` : `Instance « ${label} » réactivée.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de changer l’état : ${error.message}`, 'error');
+    }
+  };
+
+  // Answers "is this mailbox actually reachable right now", which the status
+  // badge cannot: that reflects the last sync, not this moment.
+  const handleTest = async (instance) => {
+    const label = instance.display_name || instance.id;
+    try {
+      const result = await testConnection.mutateAsync(instance.id);
+      if (result?.ok) {
+        setStatus(`${label} : boîte joignable (${result.mailbox || 'compte vérifié'}).`, 'ok');
+      } else {
+        setStatus(`${label} : ${result?.error || 'boîte injoignable'}.`, 'error');
+      }
+    } catch (error) {
+      setStatus(`${label} : test impossible — ${error.message}`, 'error');
     }
   };
 
@@ -186,9 +216,9 @@ export default function InstancesPage() {
           <span className="material-symbols-outlined" aria-hidden="true">add</span>
           <span>Ajouter une instance</span>
         </button>
-        <button type="button" onClick={async () => { await query.refetch(); setStatus('Instances d’agents chargées.', 'ok'); }}>
+        <button type="button" disabled={query.isFetching} onClick={async () => { await query.refetch(); setStatus('Instances d’agents chargées.', 'ok'); }}>
           <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
-          <span>Actualiser</span>
+          <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
         </button>
       </div>
       {!isAdmin ? (
@@ -206,20 +236,23 @@ export default function InstancesPage() {
             const active = isInstanceActive(instance);
             const health = summary.service_health || status || 'unknown';
             const typeLabel = agentTypeLabel(instance.agent_type, typesQuery.data || []);
-            const identity = instanceIdentity(instance);
-            const openTitle = active ? 'Ouvrir l’espace de travail' : 'Activez cette instance avant de l’ouvrir';
+            const identity = instance.mailbox_identity || '';
+            const canOpen = active && Boolean(instance.effective_role);
+            const openTitle = !active
+              ? 'Activez cette instance avant de l’ouvrir'
+              : (canOpen ? 'Ouvrir l’espace de travail' : 'Accès boîte requis');
             const renameTitle = canManage ? 'Renommer l’instance' : 'Administration requise';
             const deleteTitle = canManage ? 'Supprimer l’instance' : 'Administration requise';
             return (
               <Card key={instance.id} className={`instance-card ${active ? '' : 'inactive'}`}>
                 <div className="card-header">
                   <div className="instance-heading">
-                    <h2>{instance.display_name || instance.id}</h2>
+                    <h2 title={instance.display_name || instance.id}>{instance.display_name || instance.id}</h2>
                     <div className="instance-meta">
                       <div className="instance-primary-meta">
                         <span>{typeLabel}</span>
-                        <span className="meta-separator" aria-hidden="true">·</span>
-                        <span className="instance-identity" title={identity}>{identity}</span>
+                        {identity ? <span className="meta-separator" aria-hidden="true">·</span> : null}
+                        {identity ? <span className="instance-identity" title={identity}>{identity}</span> : null}
                       </div>
                       <div className="instance-status-row">
                         <StatusBadge status={status} />
@@ -227,38 +260,62 @@ export default function InstancesPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="card-actions instance-actions">
-                    <button
-                      className="primary icon-button"
-                      type="button"
-                      disabled={!active}
-                      title={openTitle}
-                      aria-label={openTitle}
-                      onClick={() => handleOpen(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">open_in_new</span>
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!canManage}
-                      title={renameTitle}
-                      aria-label={renameTitle}
-                      onClick={() => handleRename(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">edit</span>
-                    </button>
-                    <button
-                      className="danger icon-button"
-                      type="button"
-                      disabled={!canManage}
-                      title={deleteTitle}
-                      aria-label={deleteTitle}
-                      onClick={() => handleDelete(instance)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">delete</span>
-                    </button>
-                  </div>
+                </div>
+                <div className="card-actions instance-actions">
+                  <button
+                    className="primary icon-button"
+                    type="button"
+                    disabled={!canOpen}
+                    title={openTitle}
+                    aria-label={openTitle}
+                    onClick={() => handleOpen(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">open_in_new</span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!canManage}
+                    title={renameTitle}
+                    aria-label={renameTitle}
+                    onClick={() => handleRename(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">edit</span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!canManage || !active}
+                    title={active ? 'Tester la boîte connectée' : 'Activez l’instance pour la tester'}
+                    aria-label={`Tester ${instance.display_name || instance.id}`}
+                    onClick={() => handleTest(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">network_check</span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!canManage}
+                    title={canManage
+                      ? (active ? 'Suspendre l’instance' : 'Réactiver l’instance')
+                      : 'Administration requise'}
+                    aria-label={`${active ? 'Suspendre' : 'Réactiver'} ${instance.display_name || instance.id}`}
+                    onClick={() => handleToggleActive(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">
+                      {active ? 'pause_circle' : 'play_circle'}
+                    </span>
+                  </button>
+                  <button
+                    className="danger icon-button"
+                    type="button"
+                    disabled={!canManage}
+                    title={deleteTitle}
+                    aria-label={deleteTitle}
+                    onClick={() => handleDelete(instance)}
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">delete</span>
+                  </button>
                 </div>
                 <div className="summary-grid compact-summary">
                   {instanceSummaryFields(instance, summary).map(([label, value]) => (

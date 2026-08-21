@@ -16,6 +16,10 @@ public interface AuditRepository extends Repository<AuditEvent, Long> {
 
     List<AuditEvent> findAllByOrderByTimestampDesc(Pageable pageable);
 
+    List<AuditEvent> findByActionAndPathOrderByTimestampDesc(String action, String path, Pageable pageable);
+
+    List<AuditEvent> findByPathAndActionInOrderByTimestampDesc(String path, List<String> actions, Pageable pageable);
+
     // Insertion order (id), not timestamp: two events can share a millisecond and
     // the hash chain must walk in the exact order rows were linked and saved.
     List<AuditEvent> findAllByOrderByIdAsc();

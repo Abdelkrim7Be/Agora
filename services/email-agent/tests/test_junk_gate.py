@@ -1,3 +1,5 @@
+import pytest
+
 from src.junk_gate import is_junk
 
 
@@ -66,6 +68,29 @@ def test_partial_input_is_safe():
 def test_marketing_local_part_is_junk():
     junk, _ = is_junk(_email(author="Boutique <marketing@boutique.fr>"))
     assert junk
+
+
+def test_own_component_alert_is_junk():
+    """The admin alert recipient is frequently the monitored mailbox itself —
+    a down/up alert must not loop back into triage as ordinary mail."""
+    junk, reason = is_junk(_email(subject="Alerte Agora AI : Poller hors service"))
+    assert junk
+    assert reason == "system:self-alert"
+
+
+def test_own_component_resolution_is_junk():
+    junk, reason = is_junk(_email(subject="Resolution Agora AI : Poller de nouveau actif"))
+    assert junk
+    assert reason == "system:self-alert"
+
+
+def test_own_alert_is_junk_even_from_an_allowed_sender():
+    from src.junk_config import JunkConfig
+
+    config = JunkConfig(allowed_senders=["jean.dupont@example.com"])
+    junk, reason = is_junk(_email(subject="Alerte Agora AI : Securite hors service"), config)
+    assert junk
+    assert reason == "system:self-alert"
 
 
 def test_junk_reason_survives_into_the_run_record(tmp_path, monkeypatch):
@@ -163,3 +188,39 @@ def test_junk_suggestions_ignore_ordinary_correspondents():
 
     messages = [{"from": "Sarah <sarah@client.example>", "subject": "Devis"} for _ in range(9)]
     assert suggest_junk_senders(messages, JunkConfig()) == []
+
+
+# Senders that reached the model and were ignored anyway, taken from the live
+# corpus. Each one is a triage call the deterministic path now avoids for good.
+BULK_SENDERS_FROM_LIVE_MAIL = [
+    ("Quora Digest <english-quora-digest@quora.com>", "sender:bulk-domain"),
+    ("ByteByteGo <bytebytego@substack.com>", "sender:bulk-domain"),
+    ("Bitdefender <bitdefender@hello.bitdefender.com>", "sender:bulk-subdomain"),
+    ("BlaBlaCar <hello@community.blablacar.com>", "sender:bulk-subdomain"),
+    ("Temu <temu@eu.temuemail.com>", "sender:esp-domain"),
+]
+
+
+@pytest.mark.parametrize("author,expected_reason", BULK_SENDERS_FROM_LIVE_MAIL)
+def test_known_bulk_platforms_never_reach_the_model(author, expected_reason):
+    junk, reason = is_junk(_email(author=author))
+
+    assert junk
+    assert reason == expected_reason
+
+
+@pytest.mark.parametrize(
+    "author",
+    [
+        # Transactional mail a business mailbox must see, on subdomains close to
+        # the bulk ones. These are why "orders"/"billing"/"invoice" are not in the
+        # bulk-subdomain list.
+        "Fournisseur <orders@orders.fournisseur.fr>",
+        "Comptabilité <invoice@billing.fournisseur.fr>",
+        "Jean Dupont <jean.dupont@boutique.fr>",
+    ],
+)
+def test_transactional_senders_still_pass(author):
+    junk, _ = is_junk(_email(author=author))
+
+    assert not junk

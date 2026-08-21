@@ -3,6 +3,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { Pager } from '../../components/ui/Pager';
 import { useStatus } from '../../contexts/StatusContext';
+import { useBusy } from '../../contexts/BusyContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { usePager } from '../../hooks/usePager';
 import {
@@ -53,6 +54,7 @@ function campaignStatusClass(status) {
 
 export default function CampaignsPage() {
   const { setStatus } = useStatus();
+  const { runBusy } = useBusy();
   const { confirmDialog } = useDialog();
 
   const [segmentId, setSegmentId] = useState('');
@@ -195,9 +197,24 @@ export default function CampaignsPage() {
     }
   };
 
+  const handleUseTemplate = (template) => {
+    const currentMatches = campaignTemplateMatchesSegment(template, referenceSegment);
+    if (!currentMatches) {
+      const compatibleSegment = segments.find((s) => campaignTemplateMatchesSegment(template, s));
+      if (!compatibleSegment) {
+        setStatus(`Aucun segment ne correspond à l'audience du modèle "${template.name}".`, 'error');
+        return;
+      }
+      setSegmentId(compatibleSegment.id);
+    }
+    setTemplateName(template.name);
+    document.getElementById('new-campaign-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setStatus(`Modèle "${template.name}" chargé dans le formulaire de nouvelle campagne.`, 'ok');
+  };
+
   const handleApprove = async (campaignId) => {
     try {
-      const result = await approveCampaign.mutateAsync(campaignId);
+      const result = await runBusy('Envoi de la campagne', () => approveCampaign.mutateAsync(campaignId));
       const message = result.status === 'scheduled'
         ? 'Campagne approuvée et programmée.'
         : result.status === 'sent'
@@ -211,7 +228,7 @@ export default function CampaignsPage() {
 
   const handleReject = async (campaignId) => {
     try {
-      await rejectCampaign.mutateAsync(campaignId);
+      await runBusy('Annulation de la campagne', () => rejectCampaign.mutateAsync(campaignId));
       setStatus('Campagne annulée.', 'ok');
     } catch (error) {
       setStatus(`Impossible de rejeter la campagne : ${error.message}`, 'error');
@@ -230,11 +247,16 @@ export default function CampaignsPage() {
       <PageHeading view="campaigns" />
       <div className="notice"><strong>Campagne :</strong> envoi sortant groupé. Vous choisissez un segment de contacts, un modèle, une date éventuelle, puis la campagne attend une validation humaine avant envoi.</div>
       <div className="campaigns-grid">
-        <Card>
+        <Card id="new-campaign-card">
           <div className="card-header">
             <div><h2>Nouvelle campagne</h2><p>Ciblez un segment, voyez l'aperçu en direct, puis mettez l'envoi en file d'approbation.</p></div>
-            <button type="button" onClick={() => { segmentsQuery.refetch(); templatesQuery.refetch(); pendingQuery.refetch(); }}>
-              <span className="material-symbols-outlined" aria-hidden="true">refresh</span><span>Actualiser</span>
+            <button
+              type="button"
+              disabled={segmentsQuery.isFetching || templatesQuery.isFetching || pendingQuery.isFetching}
+              onClick={() => { segmentsQuery.refetch(); templatesQuery.refetch(); pendingQuery.refetch(); }}
+            >
+              <span className="material-symbols-outlined" aria-hidden="true">refresh</span>
+              <span>{segmentsQuery.isFetching || templatesQuery.isFetching || pendingQuery.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
             </button>
           </div>
           <form className="login-form" onSubmit={handlePrepare}>
@@ -335,6 +357,9 @@ export default function CampaignsPage() {
                       </div>
                     </div>
                     <div className="directory-actions">
+                      <button type="button" onClick={() => handleUseTemplate(template)}>
+                        <span className="material-symbols-outlined" aria-hidden="true">arrow_upward</span><span>Utiliser</span>
+                      </button>
                       <button className="danger" type="button" onClick={() => handleDeleteTemplate(template.name)}>
                         <span className="material-symbols-outlined" aria-hidden="true">delete</span><span>Supprimer</span>
                       </button>

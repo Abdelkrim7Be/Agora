@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 # Triage system prompt — decides ignore / notify / respond.
+# Blocks are ordered most-stable first so a provider can cache the longest
+# possible prefix: literal text, then per-instance config, then learned rules.
 triage_system_prompt = """
 
 < Role >
 Your role is to triage incoming emails based upon instructs and background information below.
 </ Role >
-
-< Background >
-{background}
-</ Background >
 
 < Instructions >
 Categorize each email into one of three categories:
@@ -19,10 +17,14 @@ Categorize each email into one of three categories:
 Classify the below email into one of these categories.
 </ Instructions >
 
+< Background >
+{background}
+</ Background >
+{category_section}
+
 < Rules >
 {triage_instructions}
-</ Rules >
-{category_section}"""
+</ Rules >"""
 
 # Triage user prompt — the email to classify.
 triage_user_prompt = """
@@ -35,15 +37,13 @@ Attachments: {attachments}
 {email_thread}"""
 
 # Response agent system prompt (email-only; calendar tools added in a later slice).
+# Blocks are ordered most-stable first so a provider can cache the longest
+# possible prefix: literal text, then per-instance config, then learned
+# preferences, then the per-email workflow section.
 agent_system_prompt = """
 < Role >
 You are a top-notch executive assistant who cares about helping your executive perform as well as possible.
 </ Role >
-
-< Tools >
-You have access to the following tools to help manage communications:
-{tools_prompt}
-</ Tools >
 
 < Instructions >
 When handling emails, follow these steps:
@@ -54,14 +54,6 @@ When handling emails, follow these steps:
 5. Once the email has been sent, use the Done tool to indicate that the task is complete
 </ Instructions >
 
-< Background >
-{background}
-</ Background >
-
-< Response Preferences >
-{response_preferences}
-</ Response Preferences >
-
 < Email Format — MANDATORY >
 Every email body you write MUST follow this structure, with a BLANK LINE between
 each block (never a single dense paragraph):
@@ -71,9 +63,22 @@ each block (never a single dense paragraph):
 Do not add a signature block yourself — it is appended automatically.
 </ Email Format — MANDATORY >
 
+< Tools >
+You have access to the following tools to help manage communications:
+{tools_prompt}
+</ Tools >
+
+< Background >
+{background}
+</ Background >
+
 < Language >
 {reply_language}
 </ Language >
+
+< Response Preferences >
+{response_preferences}
+</ Response Preferences >
 
 < Writing Style >
 Write in this person's established voice:

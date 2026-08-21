@@ -148,7 +148,9 @@ async def test_emission_failure_does_not_break_caller(monkeypatch):
 
     context = instance_setup.SetupContext(user_id="u1", agent_instance_id="i1")
     detail = await instance_setup._step_finalize(context)  # must not raise
-    assert detail == {}
+    # The contract under test is "a notification outage does not break finalize",
+    # not the exact payload — finalize also reports the memory it seeded.
+    assert detail.get("seeded_memory") == []
 
 
 def test_delete_notification():

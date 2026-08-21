@@ -33,6 +33,24 @@ def test_get_llm_uses_default_local_profile(monkeypatch):
 
     assert model.model_name == "openai:qwen2.5:3b-8k"
     assert captured["kwargs"]["base_url"] == "http://localhost:11434/v1"
+    assert "prompt_cache_key" not in captured["kwargs"].get("extra_body", {})
+
+
+def test_prod_profile_adds_prompt_cache_key(monkeypatch):
+    monkeypatch.setenv("AGENT_LLM_PROFILE", "prod")
+    monkeypatch.setattr("src.llm.settings.llm_prompt_cache_enabled", True)
+    captured = []
+
+    def fake_init_chat_model(model_name, **kwargs):
+        captured.append((model_name, kwargs))
+        return SimpleNamespace(model_name=model_name, kwargs=kwargs)
+
+    monkeypatch.setattr("src.llm.init_chat_model", fake_init_chat_model)
+
+    get_llm("draft")
+
+    assert captured[0][0] == "openai:agora-draft"
+    assert captured[0][1]["extra_body"]["prompt_cache_key"] == "agora-email-agent:prod:draft"
 
 
 def test_loads_prod_profile_mapping(monkeypatch):

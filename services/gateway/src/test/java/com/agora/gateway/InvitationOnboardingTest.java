@@ -146,6 +146,67 @@ class InvitationOnboardingTest {
     }
 
     @Test
+    void resending_invitation_can_override_the_destination_address() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "typo@example.test",
+                                "role", "viewer",
+                                "email", "typoo@example.test"
+                        ))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString());
+        long userId = created.get("id").asLong();
+
+        mockMvc.perform(post("/users/" + userId + "/invite")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("email", "typo@example.test"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("typo@example.test"));
+
+        mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == " + userId + ")].email").value(org.hamcrest.Matchers.contains("typo@example.test")));
+    }
+
+    @Test
+    void enabled_accounts_do_not_expose_invitation_expiry_in_the_user_list() throws Exception {
+        String adminToken = login("admin", "adminpass");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "configured@example.test",
+                                "role", "viewer"
+                        ))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.invitationExpiresAt").exists())
+                .andReturn().getResponse().getContentAsString());
+        long userId = created.get("id").asLong();
+
+        mockMvc.perform(post("/users/" + userId + "/enable")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(true))
+                .andExpect(jsonPath("$.pendingInvitation").value(false))
+                .andExpect(jsonPath("$.invitationExpiresAt").isEmpty());
+
+        JsonNode listed = objectMapper.readTree(mockMvc.perform(get("/users")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        JsonNode user = findUser(listed, userId);
+        assertTrue(user.get("enabled").asBoolean());
+        assertFalse(user.get("pendingInvitation").asBoolean());
+        assertTrue(user.get("invitationExpiresAt").isNull());
+    }
+
+    @Test
     void the_clear_token_is_never_stored_or_audited() throws Exception {
         String adminToken = login("admin", "adminpass");
         JsonNode created = objectMapper.readTree(mockMvc.perform(post("/users")
@@ -272,5 +333,12 @@ class InvitationOnboardingTest {
     private static String tokenFromSetupLink(String setupLink) {
         String path = URI.create(setupLink).getPath();
         return path.substring(path.lastIndexOf('/') + 1);
+    }
+
+    private static JsonNode findUser(JsonNode users, long userId) {
+        for (JsonNode user : users) {
+            if (user.get("id").asLong() == userId) return user;
+        }
+        throw new AssertionError("user not listed: " + userId);
     }
 }

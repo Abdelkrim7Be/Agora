@@ -1,5 +1,6 @@
 package com.agora.gateway.user;
 
+import com.agora.gateway.agent.InstanceGrantService;
 import com.agora.gateway.audit.AuditService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -33,18 +34,24 @@ public class UserController {
     private final AuditService auditService;
     private final InvitationService invitations;
     private final InvitationMailer mailer;
+    private final UserAnonymizationService anonymization;
+    private final InstanceGrantService grants;
     private final SecureRandom random = new SecureRandom();
 
     public UserController(UserRepository users,
                           PasswordEncoder passwordEncoder,
                           AuditService auditService,
                           InvitationService invitations,
-                          InvitationMailer mailer) {
+                          InvitationMailer mailer,
+                          UserAnonymizationService anonymization,
+                          InstanceGrantService grants) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
         this.invitations = invitations;
         this.mailer = mailer;
+        this.anonymization = anonymization;
+        this.grants = grants;
     }
 
     public record UserResponse(
@@ -56,14 +63,18 @@ public class UserController {
             boolean enabled,
             boolean pendingInvitation,
             boolean invitationExpired,
-            Instant invitationExpiresAt
+            Instant invitationExpiresAt,
+            boolean mfaEnabled,
+            String displayName
     ) {
         static UserResponse from(AppUser u, UserInvitation invitation) {
+            UserInvitation visibleInvitation = u.isEnabled() ? null : invitation;
             Instant now = Instant.now();
-            boolean pending = invitation != null && invitation.isUsable(now);
-            boolean expired = invitation != null && !invitation.isConsumed() && invitation.isExpired(now);
+            boolean pending = visibleInvitation != null && visibleInvitation.isUsable(now);
+            boolean expired = visibleInvitation != null && !visibleInvitation.isConsumed() && visibleInvitation.isExpired(now);
             return new UserResponse(u.getId(), u.getUsername(), u.getEmail(), u.getRole(), u.getDepartment(),
-                    u.isEnabled(), pending, expired, invitation != null ? invitation.getExpiresAt() : null);
+                    u.isEnabled(), pending, expired, visibleInvitation != null ? visibleInvitation.getExpiresAt() : null,
+                    u.isMfaEnabled(), u.getDisplayName());
         }
     }
 
@@ -80,7 +91,10 @@ public class UserController {
             String department
     ) {}
 
-    public record UpdateUserRequest(@NotBlank String role, String department) {}
+    public record UpdateUserRequest(@NotBlank String role, String department, String email) {}
+
+    /** Admin setting someone else's password: no current password, they do not have it. */
+    public record SetPasswordRequest(@NotBlank String password) {}
 
     @GetMapping
     public List<UserResponse> list() {
@@ -117,10 +131,22 @@ public class UserController {
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 
-    /** Re-issue an invitation, retiring whatever link was outstanding. */
+    public record InviteRequest(String email) {}
+
+    /** Re-issue an invitation, retiring whatever link was outstanding.
+     *
+     * An optional email in the body overrides — and persists as — the address
+     * the invite goes to. Without it, an admin fixing a typo'd address before
+     * sending had no way to do that except a separate save-then-invite round
+     * trip, and the invite would go out to the stale one in between. */
     @PostMapping("/{id}/invite")
-    public ResponseEntity<?> invite(@PathVariable Long id, Authentication auth) {
+    public ResponseEntity<?> invite(@PathVariable Long id, @RequestBody(required = false) InviteRequest req, Authentication auth) {
         return users.findById(id).map(user -> {
+            String override = req != null ? req.email() : null;
+            if (override != null && !override.isBlank()) {
+                user.setEmail(override.strip());
+                users.save(user);
+            }
             Map<String, Object> body = userBody(user);
             body.putAll(issueInvitation(user, auth));
             return ResponseEntity.ok(body);
@@ -178,11 +204,74 @@ public class UserController {
             return ResponseEntity.badRequest().body(java.util.Map.of("error", "invalid role: " + req.role()));
         }
         return users.findById(id).map(u -> {
+            boolean promotedToAdmin = !"admin".equals(u.getRole()) && "admin".equals(role);
             u.setRole(role);
             u.setDepartment(req.department());
+            if (req.email() != null) {
+                u.setEmail(req.email().isBlank() ? null : req.email().strip());
+            }
             users.save(u);
+            if (promotedToAdmin) {
+                // Any instance grant this user already held (e.g. a permanent owner
+                // grant from before they were an admin) must retroactively fall under
+                // the same 24h cap admin-targeted grants get going forward — otherwise
+                // promoting someone to admin is a way to hand them standing tenant
+                // access forever.
+                grants.capGrantsForNewAdmin(u.getUsername());
+            }
             audit(auth, "update_user", "/users/" + id, "success");
             return ResponseEntity.ok(UserResponse.from(u, currentInvitation(u)));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Set another account's password.
+     *
+     * Kept separate from the profile update so it never rides along with a role
+     * change by accident, and so the audit trail records the two as different
+     * actions. The new password is never echoed back or logged.
+     */
+    @PutMapping("/{id}/password")
+    public ResponseEntity<?> setPassword(@PathVariable Long id,
+                                         @Valid @RequestBody SetPasswordRequest req,
+                                         Authentication auth) {
+        String rejection = rejectWeakPassword(req.password());
+        if (rejection != null) {
+            return ResponseEntity.badRequest().body(Map.of("error", rejection));
+        }
+        return users.findById(id).map(u -> {
+            u.setPasswordHash(passwordEncoder.encode(req.password()));
+            users.save(u);
+            audit(auth, "set_user_password", "/users/" + id + "/password", "success");
+            return ResponseEntity.ok(Map.of("status", "updated"));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    static String rejectWeakPassword(String password) {
+        if (password == null || password.strip().length() < 12) {
+            return "password must be at least 12 characters";
+        }
+        return null;
+    }
+
+    /**
+     * Clear an account's second factor.
+     *
+     * Every other MFA route is self-service — you prove possession of the device
+     * to change anything about it. That leaves nobody able to help someone who
+     * lost the device, so the account was locked out permanently. This is the
+     * recovery path, and it is why it is administrator-only and audited: it
+     * removes a security control from someone else's account.
+     */
+    @PostMapping("/{id}/mfa/reset")
+    public ResponseEntity<?> resetMfa(@PathVariable Long id, Authentication auth) {
+        return users.findById(id).map(u -> {
+            u.setMfaEnabled(false);
+            u.setMfaSecret(null);
+            u.getMfaRecoveryCodeHashes().clear();
+            users.save(u);
+            audit(auth, "reset_user_mfa", "/users/" + id + "/mfa/reset", "success");
+            return ResponseEntity.ok(Map.of("status", "reset"));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -194,6 +283,50 @@ public class UserController {
     @PostMapping("/{id}/enable")
     public ResponseEntity<?> enable(@PathVariable Long id, Authentication auth) {
         return setEnabled(id, true, auth, "enable_user");
+    }
+
+    /**
+     * Right to erasure. Irreversible: the account keeps its id but loses every
+     * identifying field, its access, and its name in the audit trail.
+     */
+    @PostMapping("/{id}/anonymize")
+    public ResponseEntity<?> anonymize(@PathVariable Long id, Authentication auth) {
+        return users.findById(id).map(u -> {
+            // Same guard as disable, for a stronger reason: an admin erasing
+            // their own account leaves the platform with no way back in.
+            if (auth != null && u.getUsername().equals(auth.getName())) {
+                audit(auth, "anonymize_user", "/users/" + id + "/anonymize", "denied");
+                return ResponseEntity.badRequest().body(Map.of("error", "cannot anonymize current user"));
+            }
+            if (u.getUsername().equals(UserAnonymizationService.pseudonymFor(id))) {
+                return ResponseEntity.badRequest().body(Map.of("error", "user is already anonymized"));
+            }
+            return ResponseEntity.ok((Object) anonymization.anonymize(u));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Purge an already-anonymized account's row. Only reachable once
+     * {@code /anonymize} has already scrubbed it — deleting a live account
+     * belongs to anonymize, not this.
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> purge(@PathVariable Long id, Authentication auth) {
+        return users.findById(id).map(u -> {
+            if (!u.getUsername().equals(UserAnonymizationService.pseudonymFor(id))) {
+                return ResponseEntity.badRequest().body(Map.of("error", "user must be anonymized before it can be deleted"));
+            }
+            anonymization.purge(u, auth != null ? auth.getName() : null, actorRole(auth));
+            return ResponseEntity.ok(Map.of("status", "deleted"));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    private static String actorRole(Authentication auth) {
+        return auth != null
+                ? auth.getAuthorities().stream().findFirst().map(Object::toString)
+                        .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
+                        .orElse(null)
+                : null;
     }
 
     private ResponseEntity<?> setEnabled(Long id, boolean enabled, Authentication auth, String action) {
@@ -215,11 +348,6 @@ public class UserController {
 
     private void audit(Authentication auth, String action, String path, String outcome) {
         String actor = auth != null ? auth.getName() : null;
-        String actorRole = auth != null
-                ? auth.getAuthorities().stream().findFirst().map(Object::toString)
-                        .map(a -> a.startsWith("ROLE_") ? a.substring(5).toLowerCase() : a)
-                        .orElse(null)
-                : null;
-        auditService.record(actor, actorRole, action, "POST", path, null, outcome);
+        auditService.record(actor, actorRole(auth), action, "POST", path, null, outcome);
     }
 }

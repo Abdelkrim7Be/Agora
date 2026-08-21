@@ -75,8 +75,20 @@ def test_forced_rls_blocks_cross_tenant_reads_and_writes(monkeypatch) -> None:
                         """
                     )
 
+    # A run belongs to the mailbox, not to whoever happened to trigger it: two
+    # people validating the same shared instance is the normal case, so bob sees
+    # alice's run on the instance they both work.
     with user_context("bob"):
         with agent_instance_context("finance"):
+            with tenant_connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT run_id FROM agent_runs")
+                    assert cursor.fetchall() == [("alice-run",)]
+
+    # The instance is still the wall. Another instance cannot read that run, and
+    # cannot write one into finance either.
+    with user_context("bob"):
+        with agent_instance_context("legal"):
             with tenant_connection() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT run_id FROM agent_runs")
@@ -88,7 +100,7 @@ def test_forced_rls_blocks_cross_tenant_reads_and_writes(monkeypatch) -> None:
                                 run_id, user_id, agent_instance_id, status, priority,
                                 workflow_route_to, created_at, updated_at
                             ) VALUES (
-                                'forged-run', 'alice', 'finance', 'completed', 'normal',
+                                'forged-run', 'bob', 'finance', 'completed', 'normal',
                                 '[]'::jsonb, NOW(), NOW()
                             )
                             """

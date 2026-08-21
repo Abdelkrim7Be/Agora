@@ -17,6 +17,9 @@ def _env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).lower() == "true"
 
 
+LOCAL_LLM_PROFILES = frozenset({"local", "local-host", "local-docker", "safe"})
+
+
 def _parse_user_map() -> dict[str, str]:
     """Map an external identity (e.g. a Gmail address) to the platform user id.
 
@@ -49,6 +52,7 @@ class Settings:
     )
     llm_config_path: str = os.getenv("AGENT_LLM_CONFIG_PATH", "")
     llm_streaming_enabled: bool = _env_bool("AGENT_LLM_STREAMING_ENABLED", "true")
+    llm_prompt_cache_enabled: bool = _env_bool("AGENT_LLM_PROMPT_CACHE_ENABLED", "true")
     roles_path: str = os.getenv("AGENT_ROLES_PATH", "roles.yaml")
     contacts_path: str = os.getenv("AGENT_CONTACTS_PATH", "contacts.yaml")
     gmail_credentials_path: str = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json")
@@ -88,8 +92,16 @@ class Settings:
     # The API and poller are separate processes sharing the same store, so this is
     # a server-side change-detection loop, not a client-visible poll.
     events_poll_interval_seconds: float = float(os.getenv("AGENT_EVENTS_POLL_INTERVAL_SECONDS", "2"))
+    triage_cache_ttl_seconds: int = int(os.getenv("AGENT_TRIAGE_CACHE_TTL_SECONDS", "604800"))
+    memory_prompt_max_chars: int = int(os.getenv("AGENT_MEMORY_PROMPT_MAX_CHARS", "3000"))
     # Cap how many of a thread's most-recent messages are fed as context (token budget).
     thread_max_messages: int = int(os.getenv("AGENT_THREAD_MAX_MESSAGES", "10"))
+    # Ceiling on the body that reaches a model, applied at prompt-build time.
+    # ~12k chars is roughly 3k tokens, above the largest real prompt measured
+    # (2 207 tokens) and below anything that threatens the context window. The
+    # body is paid twice per email — triage, then drafting — so this is the only
+    # unbounded input on the hot path. 0 disables the cap.
+    email_body_max_chars: int = int(os.getenv("AGENT_EMAIL_BODY_MAX_CHARS", "12000"))
     dry_run: bool = _env_bool("AGENT_DRY_RUN", "true")
     default_send_mode: str = os.getenv("AGENT_DEFAULT_SEND_MODE", "simulation").strip().lower()
     # Hard cap on who the agent may ever send real mail to, enforced at the Gmail
@@ -111,9 +123,14 @@ class Settings:
     # PDF text extraction (gated — default off to avoid downloading large files).
     extract_attachments: bool = _env_bool("AGENT_EXTRACT_ATTACHMENTS", "false")
     attachment_max_chars: int = int(os.getenv("AGENT_ATTACHMENT_MAX_CHARS", "3000"))
+    # Cap for attachments carried onto an outgoing draft/send — original-message
+    # reattachment and human-uploaded files at approval both count against this.
+    max_attachment_bytes: int = int(os.getenv("AGENT_MAX_ATTACHMENT_BYTES", str(10 * 1024 * 1024)))
+    max_attachment_count: int = int(os.getenv("AGENT_MAX_ATTACHMENT_COUNT", "5"))
     # Security service integration (off by default — no behavior change until opted in).
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
+    gateway_shared_secret: str = os.getenv("GATEWAY_AGENT_SHARED_SECRET", "")
     # 10s was tuned for a hosted classifier call; against a single shared local
     # Ollama instance that's also serving triage/draft/persona generation, the
     # classifier queues behind whatever else is running and 10s isn't enough —
@@ -155,6 +172,11 @@ class Settings:
     traces_path: str = os.getenv("AGENT_TRACES_PATH", "logs/llm_traces.jsonl")
     alerts_path: str = os.getenv("AGENT_ALERTS_PATH", "alerts.yaml")
     alerts_state_path: str = os.getenv("AGENT_ALERT_STATE_PATH", "logs/alert_state.yaml")
+    # Deployment-wide defaults for a fresh instance that has never saved its own
+    # alert settings. Without these, component and token-cap alerts stayed off on
+    # every new deployment until someone opened the settings page.
+    alerts_enabled_default: bool = _env_bool("AGENT_ALERTS_ENABLED", "false")
+    alert_admin_recipient_default: str = os.getenv("AGENT_ALERT_ADMIN_RECIPIENT", "")
     retention_path: str = os.getenv("AGENT_RETENTION_PATH", "retention.yaml")
     dlq_backend: str = os.getenv("AGENT_DLQ_BACKEND", "redis" if redis_url else ("postgres" if database_url else "json"))
     dlq_path: str = os.getenv("AGENT_DLQ_PATH", "logs/dlq.json")
@@ -168,6 +190,7 @@ class Settings:
     gmail_sync_path: str = os.getenv("GMAIL_SYNC_PATH", "logs/gmail_sync.json")
     # Per-instance sync observability state (connection status, last success/failure, etc.).
     gmail_sync_status_path: str = os.getenv("GMAIL_SYNC_STATUS_PATH", "logs/gmail_sync_status.json")
+    connected_mailboxes_path: str = os.getenv("AGENT_CONNECTED_MAILBOXES_PATH", "logs/connected_mailboxes.json")
     # Uploaded media (signature images, contact photos) — compose mounts /app/data/media.
     media_dir: str = os.getenv("AGENT_MEDIA_DIR", "logs/instances")
     # local (default, dev/single-VPS) | s3 (OVH Object Storage / any S3-compatible bucket in prod).
@@ -223,6 +246,71 @@ class Settings:
 settings = Settings()
 
 
+def active_llm_profile_name(config: Settings | None = None) -> str:
+    config = config or settings
+    return (os.getenv("AGENT_LLM_PROFILE", config.llm_profile).strip() or "local").lower()
+
+
+def validate_model_redaction(config: Settings | None = None) -> None:
+    config = config or settings
+    profile = active_llm_profile_name(config)
+    if profile in LOCAL_LLM_PROFILES or config.redact_for_model:
+        return
+    raise RuntimeError(
+        "AGENT_REDACT_FOR_MODEL=false is not allowed with hosted LLM profile "
+        f"'{profile}'. Use a local profile or enable model redaction."
+    )
+
+
+def validate_live_send_config(config: Settings | None = None) -> None:
+    """Live send with no outbound allowlist is a footgun, not a configuration.
+
+    AGENT_DRY_RUN=false plus an empty AGENT_OUTBOUND_ALLOWLIST means every
+    send-style tool call the agent (or a background poller) makes can reach any
+    real address, unattended. That combination is only ever meant for a
+    deliberately scoped live test against known mailboxes — never the default
+    for a running instance — so it fails closed at startup instead of silently
+    running wide open.
+    """
+    config = config or settings
+    if config.dry_run:
+        return
+    if config.outbound_allowlist:
+        return
+    raise RuntimeError(
+        "AGENT_DRY_RUN=false requires a non-empty AGENT_OUTBOUND_ALLOWLIST. "
+        "Live send with no allowlist can reach any address unattended."
+    )
+
+
+def validate_gmail_webhook_config(config: Settings | None = None) -> None:
+    config = config or settings
+    if not config.gmail_webhook_enabled:
+        return
+    missing = []
+    if not config.gmail_webhook_topic.strip():
+        missing.append("GMAIL_WEBHOOK_TOPIC")
+    if not config.gmail_webhook_secret.strip():
+        missing.append("GMAIL_WEBHOOK_SECRET")
+    if missing:
+        raise RuntimeError(
+            "Gmail webhooks are enabled but required settings are missing: "
+            + ", ".join(missing)
+        )
+    if not config.polling_fallback_enabled:
+        raise RuntimeError(
+            "GMAIL_POLLING_FALLBACK_ENABLED must stay true while Gmail webhooks are enabled."
+        )
+
+
+def validate_gateway_shared_secret(config: Settings | None = None) -> None:
+    config = config or settings
+    if config.gateway_shared_secret.strip():
+        return
+    if config.database_url.strip() or config.storage_backend == "postgres":
+        raise RuntimeError("GATEWAY_AGENT_SHARED_SECRET must be set for deployed email-agent instances.")
+
+
 # --- Behavior config (config.yaml) — separate concern from Settings above. ---
 # Settings = secrets & infra from .env (never committed).
 # AgentConfig = behavior & persona from config.yaml (committed, customizable).
@@ -241,9 +329,20 @@ class AgentBehavior(BaseModel):
 
 
 class StyleLearningConfig(BaseModel):
-    """Opt-in style learning from the selected mailbox's sent mail."""
+    """Style learning from the selected mailbox's sent mail.
 
-    enabled: bool = False
+    On by default. It was opt-in, which meant the `learn_style` setup step was
+    skipped on every new instance — so an agent started writing in a generic
+    register and the owner had to discover the feature and press a button to get
+    their own voice. Learning it while the mailbox is being connected is the
+    only moment where it costs nothing extra: the sent samples are already being
+    read for the setup wizard.
+
+    What it costs when on: one model call over `max_samples` sent messages at
+    instance setup. Only the distilled profile is kept, never the raw mail.
+    """
+
+    enabled: bool = True
     max_samples: int = Field(default=8, ge=1, le=50)
 
 

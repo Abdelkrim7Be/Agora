@@ -9,7 +9,7 @@ import yaml
 from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, Field
 
-from src.config import SERVICE_ROOT, settings
+from src.config import LOCAL_LLM_PROFILES, SERVICE_ROOT, settings
 from src.metrics import inc_counter
 
 REQUIRED_LLM_ROLES = ("triage", "draft", "reason", "memory_style", "quarantine")
@@ -202,7 +202,28 @@ def get_llm_model_name(
     raise ValueError(f"Unsupported LLM role '{role}'. Expected one of: {supported}")
 
 
-def _model_kwargs(profile: LlmProfile, role_cfg: RoleConfig | None = None) -> dict[str, Any]:
+def _extra_body(kwargs: dict[str, Any]) -> dict[str, Any]:
+    body = kwargs.get("extra_body")
+    if not isinstance(body, dict):
+        body = {}
+        kwargs["extra_body"] = body
+    return body
+
+
+def _prompt_cache_key(role: str, profile_name: str | None = None) -> str | None:
+    active = (profile_name or active_profile_name()).strip().lower()
+    if not settings.llm_prompt_cache_enabled or active in LOCAL_LLM_PROFILES:
+        return None
+    return f"agora-email-agent:{active}:{role}"
+
+
+def _model_kwargs(
+    profile: LlmProfile,
+    role_cfg: RoleConfig | None = None,
+    *,
+    role: str = "",
+    profile_name: str | None = None,
+) -> dict[str, Any]:
     temperature = role_cfg.temperature if role_cfg and role_cfg.temperature is not None else profile.temperature
     max_tokens = role_cfg.max_tokens if role_cfg and role_cfg.max_tokens is not None else profile.max_tokens
     kwargs: dict[str, Any] = {"temperature": temperature}
@@ -213,11 +234,14 @@ def _model_kwargs(profile: LlmProfile, role_cfg: RoleConfig | None = None) -> di
             # langchain-openai serializes max_tokens as max_completion_tokens,
             # which OpenAI-compatible backends like Ollama ignore; send the raw
             # field via extra_body so local models are actually capped.
-            kwargs["extra_body"] = {"max_tokens": max_tokens}
+            _extra_body(kwargs)["max_tokens"] = max_tokens
         else:
             kwargs["max_tokens"] = max_tokens
     if profile.timeout is not None:
         kwargs["timeout"] = profile.timeout
+    cache_key = _prompt_cache_key(role, profile_name=profile_name) if role else None
+    if cache_key and profile.endpoint:
+        _extra_body(kwargs)["prompt_cache_key"] = cache_key
     return kwargs
 
 
@@ -244,7 +268,7 @@ def get_llm(
 ):
     profile = load_llm_profile(profile_name=profile_name, config_path=config_path)
     model_names = _role_models(profile, role)
-    kwargs = _model_kwargs(profile, profile.role_config(role))
+    kwargs = _model_kwargs(profile, profile.role_config(role), role=role, profile_name=profile_name)
     built = [(model_name, init_chat_model(model_name, **kwargs)) for model_name in model_names]
     model = built[0][1] if len(built) == 1 else FallbackChatModel(role, built)
     if role == "quarantine":

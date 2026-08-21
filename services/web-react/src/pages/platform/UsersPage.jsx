@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { useStatus } from '../../contexts/StatusContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { useDialog } from '../../contexts/DialogContext';
+import { useNavigate } from 'react-router-dom';
 import { currentUsername } from '../../utils/jwt';
 import { agentTypeLabel, formatDateTimeFr, roleLabelFr } from '../../utils/format';
 import {
@@ -11,6 +15,10 @@ import {
   useSetUserEnabled,
   useInviteUser,
   useUpdateUser,
+  useSetUserPassword,
+  useResetUserMfa,
+  useAnonymizeUser,
+  useDeleteUser,
   useAgentInstancesQuery,
   useAgentTypesQuery,
   useInstanceGrantsQuery,
@@ -25,14 +33,63 @@ function onboardingState(user) {
   return { label: 'À inviter', tone: 'warn' };
 }
 
+const PLATFORM_ROLES = [
+  {
+    key: 'admin',
+    label: 'Administrateur',
+    icon: 'admin_panel_settings',
+    tone: 'error',
+    summary: 'Administration de la plateforme : comptes, instances, coûts, file d’erreurs, audit.',
+    grants: ['Toutes les routes plateforme (/users, /audit, /api/agent/costs, /api/agent/dlq, /api/agent/capabilities)', 'Lecture et administration de toute instance'],
+  },
+  {
+    key: 'owner',
+    label: 'Propriétaire',
+    icon: 'verified_user',
+    tone: 'primary',
+    summary: 'Autorité complète sur les instances qu’il crée ou auxquelles il est autorisé : configuration, envoi, approbation.',
+    grants: ['Écriture sur l’instance (config, règles, cas métier, signature, persona)', 'Approuver / rejeter / répondre'],
+  },
+  {
+    key: 'approver',
+    label: 'Validateur',
+    icon: 'fact_check',
+    tone: 'warn',
+    summary: 'Peut approuver, rejeter ou répondre aux actions proposées dans les instances où il est autorisé — pas de configuration.',
+    grants: ['Approuver / rejeter / répondre', 'Lecture de l’instance'],
+  },
+  {
+    key: 'viewer',
+    label: 'Lecteur',
+    icon: 'visibility',
+    tone: 'ok',
+    summary: 'Accès en lecture seule aux instances autorisées — aucune approbation, aucune écriture.',
+    grants: ['Lecture de l’instance et des surfaces plateforme autorisées'],
+  },
+];
+
+const TABS = [
+  { key: 'comptes', label: 'Comptes' },
+  { key: 'acces', label: 'Accès aux instances' },
+  { key: 'roles', label: 'Gestion des rôles' },
+];
+
 export default function UsersPage() {
   const { setStatus } = useStatus();
   const { token } = useAuth();
+  const { promptDialog, confirmDialog } = useDialog();
+  const navigate = useNavigate();
+  const [openUser, setOpenUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('comptes');
   const query = useUsersQuery();
   const createUser = useCreateUser();
   const setUserEnabled = useSetUserEnabled();
   const inviteUser = useInviteUser();
   const updateUser = useUpdateUser();
+  const setUserPassword = useSetUserPassword();
+  const resetUserMfa = useResetUserMfa();
+  const anonymizeUser = useAnonymizeUser();
+  const deleteUser = useDeleteUser();
   const instancesQuery = useAgentInstancesQuery();
   const typesQuery = useAgentTypesQuery();
   const grantsQuery = useInstanceGrantsQuery(instancesQuery.data || [], true);
@@ -59,6 +116,7 @@ export default function UsersPage() {
   }, [query.error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const users = query.data || [];
+  const userPager = usePagination(users);
   const instances = instancesQuery.data || [];
   const agentTypes = typesQuery.data || [];
   const grants = grantsQuery.data || [];
@@ -76,6 +134,7 @@ export default function UsersPage() {
   const editFormFor = (user) => editForms[user.id] || {
     role: user.role || 'viewer',
     department: user.department || '',
+    email: user.email || '',
   };
 
   const setEditForm = (user, patch) => {
@@ -103,10 +162,23 @@ export default function UsersPage() {
   };
 
   const handleInvite = async (user) => {
+    // The stored address is whatever was typed in at account creation — often
+    // not double-checked. Confirming (or overriding) it right before the send
+    // beats finding out later that the invite went to a typo, and this is the
+    // one moment the actual destination is on screen.
+    const email = await promptDialog({
+      title: `Inviter ${user.username}`,
+      message: 'Adresse à laquelle envoyer le lien d’invitation.',
+      placeholder: 'personne@exemple.com',
+      defaultValue: user.email || '',
+      confirmLabel: 'Envoyer l’invitation',
+      required: true,
+    });
+    if (!email) return;
     try {
-      const result = await inviteUser.mutateAsync(user.id);
+      const result = await inviteUser.mutateAsync({ id: user.id, email });
       setInviteLink(result.setupLink || '');
-      setStatus(result.setupLink ? `Invitation recréée pour ${user.username}.` : `Invitation envoyée à ${user.email || user.username}.`, 'ok');
+      setStatus(result.setupLink ? `Invitation recréée pour ${user.username}.` : `Invitation envoyée à ${email}.`, 'ok');
     } catch (error) {
       setStatus(`Impossible d’envoyer l’invitation : ${error.message}`, 'error');
     }
@@ -116,6 +188,96 @@ export default function UsersPage() {
     if (!inviteLink) return;
     await navigator.clipboard?.writeText(inviteLink);
     setStatus('Lien d’invitation copié.', 'ok');
+  };
+
+  // An administrator resets a password without knowing the old one — that is the
+  // point of a reset. It is deliberately a separate action from the role/e-mail
+  // save so it can never ride along with an unrelated edit.
+  const handleSetPassword = async (user) => {
+    const password = await promptDialog({
+      title: `Définir le mot de passe de ${user.username}`,
+      message: 'Au moins 12 caractères. Communiquez-le par un canal sûr — il ne sera plus affiché ensuite.',
+      placeholder: 'Nouveau mot de passe',
+      confirmLabel: 'Définir',
+      required: true,
+    });
+    if (!password) return;
+    if (password.length < 12) {
+      setStatus('Le mot de passe doit faire au moins 12 caractères.', 'error');
+      return;
+    }
+    try {
+      await setUserPassword.mutateAsync({ id: user.id, password });
+      setStatus(`Mot de passe de ${user.username} défini.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de définir le mot de passe : ${error.message}`, 'error');
+    }
+  };
+
+  // Every other MFA route is self-service, which leaves nobody able to help a
+  // person who lost their device. This is that recovery path.
+  const handleResetMfa = async (user) => {
+    const confirmed = await confirmDialog({
+      title: `Réinitialiser la double authentification de ${user.username}`,
+      message: "Le second facteur sera retiré du compte. La personne pourra se reconnecter avec son seul mot de passe, puis reconfigurer son application d'authentification.",
+      confirmLabel: 'Réinitialiser',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await resetUserMfa.mutateAsync(user.id);
+      setStatus(`Double authentification réinitialisée pour ${user.username}.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de réinitialiser la 2FA : ${error.message}`, 'error');
+    }
+  };
+
+  // Right to erasure. Irreversible, and it rewrites the audit trail, so the
+  // dialog says both instead of leaving the admin to find out afterwards.
+  const handleAnonymize = async (user) => {
+    if (user.username === username) {
+      setStatus('Vous ne pouvez pas anonymiser votre propre compte.', 'error');
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: `Anonymiser définitivement ${user.username}`,
+      message:
+        "Le nom, l'adresse e-mail et le mot de passe seront effacés, les accès aux boîtes retirés, "
+        + "et le nom remplacé par un pseudonyme dans le journal d'audit. "
+        + "Cette action est irréversible. Les données côté agent (exécutions, brouillons, mémoire) "
+        + "s'effacent séparément depuis la page RGPD.",
+      confirmLabel: 'Anonymiser',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      const result = await anonymizeUser.mutateAsync(user.id);
+      setStatus(
+        `${user.username} anonymisé en ${result.pseudonym} : `
+        + `${result.grantsRevoked} accès retiré(s), `
+        + `${result.auditEventsRenamed} entrée(s) d'audit renommée(s).`,
+        'ok',
+      );
+    } catch (error) {
+      setStatus(`Impossible d'anonymiser le compte : ${error.message}`, 'error');
+    }
+  };
+
+  // Purge: only reachable once anonymized, so this just drops an already-scrubbed row.
+  const handleDelete = async (user) => {
+    const confirmed = await confirmDialog({
+      title: `Supprimer définitivement ${user.username}`,
+      message: 'Le compte anonymisé sera supprimé de la liste. Le journal d’audit conserve son pseudonyme.',
+      confirmLabel: 'Supprimer',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await deleteUser.mutateAsync(user.id);
+      setStatus(`${user.username} supprimé.`, 'ok');
+    } catch (error) {
+      setStatus(`Impossible de supprimer le compte : ${error.message}`, 'error');
+    }
   };
 
   const handleToggle = async (user) => {
@@ -135,7 +297,12 @@ export default function UsersPage() {
   const handleUpdateUser = async (user) => {
     const edit = editFormFor(user);
     try {
-      await updateUser.mutateAsync({ id: user.id, role: edit.role, department: edit.department });
+      await updateUser.mutateAsync({
+        id: user.id,
+        role: edit.role,
+        department: edit.department,
+        email: edit.email,
+      });
       setStatus(`Accès de ${user.username} mis à jour.`, 'ok');
     } catch (error) {
       setStatus(`Impossible de mettre à jour ${user.username} : ${error.message}`, 'error');
@@ -165,15 +332,30 @@ export default function UsersPage() {
   return (
     <>
       <PageHeading view="users" />
+      <div className="page-tabs" role="tablist" aria-label="Sections Équipe">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            className={activeTab === tab.key ? 'active' : ''}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {activeTab === 'comptes' && (
       <Card className="users-card">
         <div className="card-header">
           <div>
             <h2>Utilisateurs et invitations</h2>
             <div className="meta"><span>Comptes, rôles et accès initial</span></div>
           </div>
-          <button type="button" onClick={async () => { await query.refetch(); setStatus('Utilisateurs chargés.', 'ok'); }}>
+          <button type="button" disabled={query.isFetching} onClick={async () => { await query.refetch(); setStatus('Utilisateurs chargés.', 'ok'); }}>
             <span className="material-symbols-outlined" aria-hidden="true">sync</span>
-            <span>Actualiser</span>
+            <span>{query.isFetching ? 'Actualisation…' : 'Actualiser'}</span>
           </button>
         </div>
         <div className="notice">
@@ -193,17 +375,26 @@ export default function UsersPage() {
         ) : null}
         <div className="table-wrap users-table">
           <table className="data-table">
-            <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle plateforme</th><th>Département</th><th>Configuration</th><th></th></tr></thead>
+            <thead><tr><th>Utilisateur</th><th>E-mail</th><th>Rôle plateforme</th><th>Département</th><th>Configuration</th><th>2FA</th><th></th></tr></thead>
             <tbody>
-              {users.map((user) => {
+              {userPager.visible.map((user) => {
                 const selfDisable = user.enabled && user.username === username;
+                const anonymized = user.username === `deleted-user-${user.id}`;
                 const label = user.enabled ? 'Désactiver' : 'Activer';
                 const onboarding = onboardingState(user);
                 const edit = editFormFor(user);
                 return (
                   <tr key={user.id}>
                     <td>{user.username}</td>
-                    <td>{user.email || '—'}</td>
+                    <td>
+                      <input
+                        type="email"
+                        value={edit.email}
+                        placeholder="aucune adresse"
+                        aria-label={`Adresse e-mail de ${user.username}`}
+                        onChange={(event) => setEditForm(user, { email: event.target.value })}
+                      />
+                    </td>
                     <td>
                       <select value={edit.role} onChange={(event) => setEditForm(user, { role: event.target.value })}>
                         <option value="viewer">lecteur</option>
@@ -221,24 +412,64 @@ export default function UsersPage() {
                     </td>
                     <td>
                       <span className={`status-pill ${onboarding.tone}`.trim()}>{onboarding.label}</span>
-                      {user.invitationExpiresAt ? <small className="muted">Expire {formatDateTimeFr(user.invitationExpiresAt)}</small> : null}
+                      {!user.enabled && user.invitationExpiresAt ? (
+                        <small className="muted">Lien expire {formatDateTimeFr(user.invitationExpiresAt)}</small>
+                      ) : null}
                     </td>
                     <td>
-                      <button type="button" onClick={() => handleUpdateUser(user)}>
-                        Enregistrer
-                      </button>
-                      <button type="button" onClick={() => handleInvite(user)}>
-                        Inviter
-                      </button>
-                      <button
-                        type="button"
-                        disabled={selfDisable}
-                        title={selfDisable ? 'Vous ne pouvez pas désactiver votre propre compte actif' : undefined}
-                        aria-label={`${label} ${user.username || 'utilisateur'}`}
-                        onClick={() => handleToggle(user)}
-                      >
-                        {label}
-                      </button>
+                      <span className={`status-pill ${user.mfaEnabled ? 'ok' : ''}`.trim()}>
+                        {user.mfaEnabled ? 'Activée' : 'Non configurée'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="actions">
+                        {anonymized ? (
+                          <button
+                            type="button"
+                            className="danger"
+                            aria-label={`Supprimer ${user.username || 'utilisateur'}`}
+                            onClick={() => handleDelete(user)}
+                          >
+                            Supprimer
+                          </button>
+                        ) : (
+                        <>
+                        <button type="button" onClick={() => handleUpdateUser(user)}>
+                          Enregistrer
+                        </button>
+                        <button type="button" onClick={() => handleInvite(user)}>
+                          Inviter
+                        </button>
+                        <button type="button" onClick={() => handleSetPassword(user)}>
+                          Mot de passe
+                        </button>
+                        {user.mfaEnabled ? (
+                          <button type="button" onClick={() => handleResetMfa(user)}>
+                            Réinitialiser 2FA
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          disabled={selfDisable}
+                          title={selfDisable ? 'Vous ne pouvez pas désactiver votre propre compte actif' : undefined}
+                          aria-label={`${label} ${user.username || 'utilisateur'}`}
+                          onClick={() => handleToggle(user)}
+                        >
+                          {label}
+                        </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            disabled={user.username === username}
+                            title={user.username === username ? 'Vous ne pouvez pas anonymiser votre propre compte' : undefined}
+                            aria-label={`Anonymiser ${user.username || 'utilisateur'}`}
+                            onClick={() => handleAnonymize(user)}
+                          >
+                            Anonymiser
+                          </button>
+                        </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -246,7 +477,17 @@ export default function UsersPage() {
             </tbody>
           </table>
         </div>
-        {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
+        {users.length ? (
+          <TablePager
+            page={userPager.page}
+            pageCount={userPager.pageCount}
+            total={userPager.total}
+            size={userPager.size}
+            onPage={userPager.setPage}
+            onSize={userPager.setSize}
+            unit="comptes"
+          />
+        ) : <div className="notice">Aucun compte utilisateur pour le moment.</div>}
         <form className="user-create-form" style={{ marginTop: '1rem' }} onSubmit={handleCreate}>
           <input
             placeholder="Nom d'utilisateur"
@@ -287,6 +528,9 @@ export default function UsersPage() {
           </button>
         </form>
       </Card>
+      )}
+      {activeTab === 'acces' && (
+      <>
       <Card className="users-card user-instances-card">
         <div className="card-header">
           <div>
@@ -341,16 +585,53 @@ export default function UsersPage() {
           {users.map((user) => {
             const userInstances = instancesForUser(user);
             return (
-              <div className="user-instance-row" key={user.id}>
-                <div>
-                  <strong>{user.username}</strong>
-                  <span>{roleLabelFr(user.role)} · {user.department || 'sans département'}</span>
-                </div>
-                <div className="user-instance-pills">
+              <div
+                className={'user-instance-row' + (openUser === user.id ? ' is-open' : '')}
+                key={user.id}
+              >
+                {/* Every account used to spill its whole access list along the
+                    right edge, so a dozen users produced a wall of chips and no
+                    row could be read. The list is the summary now; the accesses
+                    open on the account you actually asked about. */}
+                <button
+                  type="button"
+                  className="user-instance-summary"
+                  aria-expanded={openUser === user.id}
+                  onClick={() => setOpenUser(openUser === user.id ? null : user.id)}
+                >
+                  <span className="material-symbols-outlined" aria-hidden="true">
+                    {openUser === user.id ? 'expand_more' : 'chevron_right'}
+                  </span>
+                  <span className="user-instance-identity">
+                    <strong>{user.displayName || user.username}</strong>
+                    <span>{roleLabelFr(user.role)} · {user.department || 'sans département'}</span>
+                  </span>
+                  <span className="counter">
+                    {userInstances.length
+                      ? `${userInstances.length} instance${userInstances.length > 1 ? 's' : ''}`
+                      : 'aucune instance'}
+                  </span>
+                </button>
+                <div className="user-instance-pills" hidden={openUser !== user.id}>
                   {userInstances.length ? userInstances.map((instance) => (
-                    <span className="mini-chip grant-chip" key={instance.id}>
-                      {instance.display_name || instance.id} · {agentTypeLabel(instance.agent_type, agentTypes)}
+                    <span
+                      className={`mini-chip grant-chip${String(instance.status || 'active').toLowerCase() === 'active' ? '' : ' suspended'}`}
+                      key={instance.id}
+                    >
+                      {/* A suspended instance still shows here: the person keeps the
+                          access, the agent simply is not running. Hiding it would
+                          make "why can't they see it" impossible to answer. */}
+                      <button
+                        type="button"
+                        className="link-button"
+                        title="Ouvrir cette instance"
+                        onClick={() => navigate(`/instance/${encodeURIComponent(instance.id)}`)}
+                      >
+                        {instance.display_name || instance.id}
+                      </button>
+                      {' · '}{agentTypeLabel(instance.agent_type, agentTypes)}
                       {instance.created_by === user.username ? ' · créateur' : ` · ${roleLabelFr(grantFor(user, instance)?.role)}`}
+                      {String(instance.status || 'active').toLowerCase() === 'active' ? '' : ' · suspendue'}
                       {instance.created_by !== user.username ? (
                         <button type="button" aria-label={`Retirer ${instance.display_name || instance.id} à ${user.username}`} onClick={() => handleRemoveGrant(instance.id, user.username)}>
                           <span className="material-symbols-outlined" aria-hidden="true">close</span>
@@ -365,6 +646,43 @@ export default function UsersPage() {
         </div>
         {!users.length && <div className="notice">Aucun compte utilisateur pour le moment.</div>}
       </Card>
+      </>
+      )}
+      {activeTab === 'roles' && (
+      <Card className="users-card">
+        <div className="card-header">
+          <div>
+            <h2>Rôles plateforme</h2>
+            <div className="meta"><span>Distinct de l’annuaire des rôles d’une instance (routage métier vers une adresse) — ceci définit ce qu’un compte a le droit de faire sur la plateforme.</span></div>
+          </div>
+        </div>
+        <div className="platform-role-grid">
+          {PLATFORM_ROLES.map((role) => {
+            const count = users.filter((user) => (user.role || 'viewer') === role.key).length;
+            return (
+              <div className={`platform-role-card tone-${role.tone}`} key={role.key}>
+                <div className="platform-role-head">
+                  <span className={`platform-role-icon tone-${role.tone}`}>
+                    <span className="material-symbols-outlined" aria-hidden="true">{role.icon}</span>
+                  </span>
+                  <span className="platform-role-count">{count} compte{count === 1 ? '' : 's'}</span>
+                </div>
+                <strong className="platform-role-label">{role.label}</strong>
+                <p>{role.summary}</p>
+                <ul className="platform-role-grants">
+                  {role.grants.map((grant, index) => (
+                    <li key={index}>
+                      <span className="material-symbols-outlined" aria-hidden="true">check</span>
+                      <span>{grant}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+      )}
     </>
   );
 }

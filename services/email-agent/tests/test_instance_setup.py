@@ -272,3 +272,52 @@ async def test_run_step_generic_exception_marks_failed_not_ready():
 
     result = get_setup("user-a", "instance-a")
     assert result["status"] == "failed"
+
+
+def test_finalize_seeds_default_memory_so_a_new_instance_is_not_blank():
+    """Memory used to appear only after the first email was processed.
+
+    get_memory writes the config default lazily on first read, and that read
+    happens inside a run — so a freshly created instance showed an empty Memory
+    page, which reads as "not configured" rather than "using your defaults".
+    """
+    import asyncio
+    from langgraph.store.memory import InMemoryStore
+    from src.instance_setup import SetupContext, _seed_default_memory
+    from src.memory import namespace, preferences_text
+
+    store = InMemoryStore()
+    ctx = SetupContext(user_id="owner", agent_instance_id="inst-seed", store=store)
+
+    seeded = asyncio.run(_seed_default_memory(ctx))
+
+    assert set(seeded) == {"triage_preferences", "response_preferences"}
+    for key in seeded:
+        item = store.get(namespace(key, "owner", "inst-seed"), "user_preferences")
+        assert item is not None
+        assert preferences_text(item.value).strip()
+
+
+def test_finalize_memory_seed_does_not_overwrite_existing_preferences():
+    import asyncio
+    from langgraph.store.memory import InMemoryStore
+    from src.instance_setup import SetupContext, _seed_default_memory
+    from src.memory import ORIGIN_MANUAL, namespace, preferences_text, wrap_preferences
+
+    store = InMemoryStore()
+    ns = namespace("triage_preferences", "owner", "inst-keep")
+    store.put(ns, "user_preferences", wrap_preferences("what the human typed", ORIGIN_MANUAL))
+
+    ctx = SetupContext(user_id="owner", agent_instance_id="inst-keep", store=store)
+    seeded = asyncio.run(_seed_default_memory(ctx))
+
+    assert "triage_preferences" not in seeded
+    assert preferences_text(store.get(ns, "user_preferences").value) == "what the human typed"
+
+
+def test_memory_seed_is_a_noop_without_a_store():
+    import asyncio
+    from src.instance_setup import SetupContext, _seed_default_memory
+
+    ctx = SetupContext(user_id="owner", agent_instance_id="inst-nostore", store=None)
+    assert asyncio.run(_seed_default_memory(ctx)) == []

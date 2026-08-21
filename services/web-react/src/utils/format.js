@@ -138,12 +138,14 @@ export function formatCountFr(value, digits = 0) {
 }
 
 export function formatPercentFr(value) {
-  if (value === null || value === undefined) return '—';
+  // "n/d" (non disponible) says the value has not been computed yet. A bare dash
+  // reads as a broken cell.
+  if (value === null || value === undefined) return 'n/d';
   return `${Number(value).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} %`;
 }
 
 export function formatDurationFr(seconds) {
-  if (seconds === null || seconds === undefined) return '—';
+  if (seconds === null || seconds === undefined) return 'n/d';
   const totalMinutes = Math.max(0, Math.round(Number(seconds) / 60));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -249,7 +251,9 @@ export const ACTION_ARG_LABELS_FR = {
 // Runtime-supplied context, never editable by the approver. `_recipients` is
 // the resolved destination the agent reports for preview; it is rendered by the
 // route banner above, not as a text field someone could retarget.
-export const ACTION_ARG_HIDDEN = new Set(['email_id', 'gmail_thread_id', 'run_id', 'action_id', '_recipients']);
+// include_attachments gets its own checkbox in ActionArgsEditor rather than the
+// generic textarea a boolean would otherwise render as.
+export const ACTION_ARG_HIDDEN = new Set(['email_id', 'gmail_thread_id', 'run_id', 'action_id', '_recipients', 'include_attachments']);
 
 export function actionArgLabel(key) {
   if (ACTION_ARG_LABELS_FR[key]) return ACTION_ARG_LABELS_FR[key];

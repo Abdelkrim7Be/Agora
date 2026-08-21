@@ -109,7 +109,11 @@ def test_prepared_token_file_encrypts_at_rest_as_envelope(monkeypatch, tmp_path)
     assert not plaintext.exists()
     envelope = _load_envelope(encrypted.read_bytes())
     assert encrypted.is_file()
+    assert envelope["version"] == 3
     assert envelope["key_id"] == "k1"
+    assert envelope["tenant_scope"] == normalize_agent_instance_id(
+        settings.default_agent_instance_id
+    )
     assert envelope["wrapped_data_key"]
     assert envelope["ciphertext"]
     assert b"secret-oauth" not in encrypted.read_bytes()
@@ -153,6 +157,37 @@ def test_rotation_rewraps_to_new_key_id(monkeypatch, tmp_path) -> None:
     assert _load_envelope(encrypted.read_bytes())["key_id"] == "k2"
 
 
+def test_tenant_scoped_envelope_rejects_wrong_instance_key(monkeypatch, tmp_path) -> None:
+    key_file = tmp_path / "token-key.json"
+    monkeypatch.setattr(
+        settings,
+        "token_encryption_key_file",
+        _write_key_file(
+            key_file,
+            {"active_key_id": "k1", "keys": {"k1": "tenant-secret"}},
+        ),
+    )
+    monkeypatch.setattr(settings, "token_encryption_key", "")
+    monkeypatch.setattr(settings, "token_encryption_required", True)
+    monkeypatch.setattr(settings, "gmail_token_store_path", str(tmp_path / "tokens.json"))
+
+    with prepared_token_file(agent_instance_id="tenant-a") as token_path:
+        Path(token_path).write_text('{"token":"tenant-a"}', encoding="utf-8")
+
+    encrypted = token_file_for_user(agent_instance_id="tenant-a").with_name(
+        "instance__tenant-a.json.enc"
+    )
+    envelope = _load_envelope(encrypted.read_bytes())
+    assert envelope["tenant_scope"] == "tenant-a"
+
+    with pytest.raises(ValueError, match="different tenant scope"):
+        _decrypt_envelope(
+            encrypted.read_bytes(),
+            {"k1": "tenant-secret"},
+            tenant_scope="tenant-b",
+        )
+
+
 def test_legacy_encrypted_blob_still_decrypts(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(settings, "token_encryption_key_file", "")
     monkeypatch.setattr(settings, "token_encryption_key", "legacy-secret")
@@ -166,7 +201,12 @@ def test_legacy_encrypted_blob_still_decrypts(monkeypatch, tmp_path) -> None:
     with prepared_token_file("alice@example.com") as token_path:
         assert json.loads(Path(token_path).read_text(encoding="utf-8"))["token"] == "legacy"
 
-    assert _load_envelope(enc_path.read_bytes())["key_id"] == DEFAULT_KEY_ID
+    envelope = _load_envelope(enc_path.read_bytes())
+    assert envelope["key_id"] == DEFAULT_KEY_ID
+    assert envelope["version"] == 3
+    assert envelope["tenant_scope"] == normalize_agent_instance_id(
+        settings.default_agent_instance_id
+    )
 
 
 def test_require_encryption_without_key_raises_and_creates_no_plaintext(monkeypatch, tmp_path) -> None:

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
-import { Pager } from '../../components/ui/Pager';
+import { TablePager } from '../../components/ui/TablePager';
+import { usePagination } from '../../hooks/usePagination';
 import { useInstance } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { useDialog } from '../../contexts/DialogContext';
-import { usePager } from '../../hooks/usePager';
 import { useSegmentsQuery, useSaveSegment, useDeleteSegment } from '../../api/queries';
 import { compactText } from '../../utils/format';
 
@@ -25,7 +25,6 @@ export default function SegmentsPage() {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState('');
-  const pager = usePager(0);
   const announcedInitialLoad = useRef(false);
   const announcedError = useRef(null);
 
@@ -109,8 +108,8 @@ export default function SegmentsPage() {
     }
   };
 
-  const pageSegments = segments.slice(pager.page * PAGE_SIZE, pager.page * PAGE_SIZE + PAGE_SIZE);
-  const hasMore = (pager.page + 1) * PAGE_SIZE < segments.length;
+  const pager = usePagination(segments, PAGE_SIZE);
+  const pageSegments = pager.visible;
 
   return (
     <>
@@ -187,7 +186,15 @@ export default function SegmentsPage() {
                     </div>
                   );
                 })}
-                <Pager page={pager.page} hasMore={hasMore} onPrev={pager.prev} onNext={pager.next} />
+                <TablePager
+                  page={pager.page}
+                  pageCount={pager.pageCount}
+                  total={pager.total}
+                  size={pager.size}
+                  onPage={pager.setPage}
+                  onSize={pager.setSize}
+                  unit="segments"
+                />
               </>
             )}
           </div>

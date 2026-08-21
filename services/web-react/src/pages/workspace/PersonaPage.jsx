@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { PageHeading } from '../../components/layout/PageHeading';
 import { Card } from '../../components/ui/Card';
 import { SyncProgressBar } from '../../components/ui/SyncProgressBar';
@@ -23,13 +23,35 @@ const EMPTY_PERSONA = {
 const TONE_LABELS = { professionnel: 'Professionnel', chaleureux: 'Chaleureux', direct: 'Direct', formel: 'Formel' };
 const LANGUE_LABELS = { fr: 'Français', en: 'Anglais', auto: 'Langue de l’expéditeur' };
 
-function ChipsField({ label, items, onAdd, onRemove, placeholder }) {
+function ChipsField({ label, items, onAdd, onRemove, placeholder, suggestions = [] }) {
   const [draft, setDraft] = useState('');
+  const [focused, setFocused] = useState(false);
+  const inputId = useId();
 
   const commit = () => {
     const value = draft.trim().replace(/,+$/, '').trim();
     if (value && !items.includes(value)) onAdd(value);
     setDraft('');
+  };
+  const options = useMemo(() => {
+    const query = draft.trim().toLowerCase();
+    const seen = new Set();
+    return suggestions
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .filter((value) => {
+        const key = value.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return !query || key.includes(query);
+      })
+      .slice(0, 8);
+  }, [draft, suggestions]);
+  const showOptions = focused && options.length > 0;
+
+  const pick = (value) => {
+    setDraft('');
+    if (!items.includes(value)) onAdd(value);
   };
 
   return (
@@ -43,15 +65,42 @@ function ChipsField({ label, items, onAdd, onRemove, placeholder }) {
           </span>
         ))}
       </div>
-      <input
-        placeholder={placeholder}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); commit(); }
-        }}
-        onBlur={commit}
-      />
+      <div className="chips-input-wrap">
+        <input
+          id={inputId}
+          placeholder={placeholder}
+          value={draft}
+          onFocus={() => setFocused(true)}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); commit(); }
+            if (event.key === 'Escape') setFocused(false);
+          }}
+          onBlur={() => {
+            commit();
+            window.setTimeout(() => setFocused(false), 120);
+          }}
+          aria-autocomplete="list"
+          aria-expanded={showOptions}
+          aria-controls={`${inputId}-options`}
+        />
+        {showOptions ? (
+          <div className="chips-suggestion-menu" id={`${inputId}-options`} role="listbox">
+            {options.map((option) => (
+              <button
+                type="button"
+                key={option}
+                role="option"
+                aria-selected={items.includes(option)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -110,6 +159,15 @@ export default function PersonaPage() {
       setStatus('Persona chargé.', 'ok');
     }
   }, [query.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleReloadPersona = async () => {
+    try {
+      await query.refetch({ throwOnError: true });
+      setStatus('Persona chargé.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible de charger le persona : ${error.message}`, 'error');
+    }
+  };
 
   useEffect(() => {
     if (!query.error || announcedError.current === query.error.message) return;
@@ -224,6 +282,12 @@ export default function PersonaPage() {
   };
 
   const rows = suggestion ? suggestionRows(suggestion) : [];
+  const scopeSuggestions = useMemo(() => ([
+    ...(persona.perimetre.repond_a || []),
+    ...(persona.perimetre.ne_repond_jamais_a || []),
+    ...(suggestion?.repond_a || []),
+    ...(suggestion?.ne_repond_jamais_a || []),
+  ]), [persona.perimetre.repond_a, persona.perimetre.ne_repond_jamais_a, suggestion]);
 
   return (
     <>
@@ -268,8 +332,9 @@ export default function PersonaPage() {
       )}
 
       <div className="toolbar">
-        <button type="button" onClick={() => query.refetch()}>
-          <span className="material-symbols-outlined" aria-hidden="true">sync</span><span>Charger le persona</span>
+        <button type="button" disabled={query.isFetching} onClick={handleReloadPersona}>
+          <span className={`material-symbols-outlined${query.isFetching ? ' spin' : ''}`} aria-hidden="true">sync</span>
+          <span>{query.isFetching ? 'Chargement…' : 'Charger le persona'}</span>
         </button>
         <button className="primary" type="button" onClick={handleSave}>
           <span className="material-symbols-outlined" aria-hidden="true">save</span><span>Enregistrer le persona</span>
@@ -293,6 +358,7 @@ export default function PersonaPage() {
           <ChipsField
             label="Je réponds à"
             items={persona.perimetre.repond_a}
+            suggestions={scopeSuggestions}
             placeholder="candidats, clients… (Entrée pour ajouter)"
             onAdd={(value) => setPersona({ ...persona, perimetre: { ...persona.perimetre, repond_a: [...persona.perimetre.repond_a, value] } })}
             onRemove={(index) => setPersona({ ...persona, perimetre: { ...persona.perimetre, repond_a: persona.perimetre.repond_a.filter((_, i) => i !== index) } })}
@@ -300,6 +366,7 @@ export default function PersonaPage() {
           <ChipsField
             label="Je ne réponds jamais à"
             items={persona.perimetre.ne_repond_jamais_a}
+            suggestions={scopeSuggestions}
             placeholder="newsletters, démarchage… (Entrée pour ajouter)"
             onAdd={(value) => setPersona({ ...persona, perimetre: { ...persona.perimetre, ne_repond_jamais_a: [...persona.perimetre.ne_repond_jamais_a, value] } })}
             onRemove={(index) => setPersona({ ...persona, perimetre: { ...persona.perimetre, ne_repond_jamais_a: persona.perimetre.ne_repond_jamais_a.filter((_, i) => i !== index) } })}

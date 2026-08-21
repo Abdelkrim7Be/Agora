@@ -45,8 +45,21 @@ def _state_path() -> Path:
 
 
 def load_alert_settings(agent_instance_id: str | None = None) -> AlertSettings:
+    """Instance settings on top of the deployment defaults.
+
+    An instance that has never saved its own alert settings inherits whatever the
+    stack was deployed with, so component and token-cap alerts do not silently
+    stay off on a fresh install. An explicit saved value always wins.
+    """
     raw = read_instance_text("alerts", _settings_path(), agent_instance_id=agent_instance_id)
     data = yaml.safe_load(raw) or {}
+    defaults = {
+        "enabled": settings.alerts_enabled_default,
+        "admin_recipient": settings.alert_admin_recipient_default,
+    }
+    for key, value in defaults.items():
+        if data.get(key) in (None, "", False) and value:
+            data[key] = value
     return AlertSettings(**data)
 
 
@@ -88,30 +101,43 @@ def evaluate_alerts(health_snapshot: dict, now: datetime | None = None) -> list[
 
     alerts_enabled = bool(config.enabled)
 
+    def emit(kind: str, subject: str, body: str, **fields: Any) -> None:
+        """Record the event, and mail it only when alerting is switched on.
+
+        The event is recorded either way so a caller can see what would have
+        been sent without turning delivery on.
+        """
+        sent = notify_admin_alert(config.admin_recipient, subject, body) if alerts_enabled else False
+        events.append({"kind": kind, **fields, "sent": sent})
+
     if config.component_alerts:
         for key, label in COMPONENT_LABELS.items():
             snapshot = health_snapshot.get(key) or {}
             current_status = str(snapshot.get("status") or "unknown")
             previous_status = component_state.get(key)
             component_state[key] = current_status
+            # Alerts fire on the transition, so a component that stays down is
+            # reported once rather than on every evaluation.
             if previous_status == current_status:
                 continue
-            if current_status == "down" and previous_status != "down":
-                subject = f"Alerte Agora : {label} hors service"
-                body = (
+            if current_status == "down":
+                emit(
+                    "component_down",
+                    f"Alerte Agora AI : {label} hors service",
                     f"Le composant {label} de l'instance {current_agent_instance_id()} est passe a l'etat hors service."
                     f" Statut actuel: {current_status}."
-                    f"{_component_detail(key, snapshot)}"
+                    f"{_component_detail(key, snapshot)}",
+                    component=key,
+                    status=current_status,
                 )
-                sent = notify_admin_alert(config.admin_recipient, subject, body) if alerts_enabled else False
-                events.append({"kind": "component_down", "component": key, "status": current_status, "sent": sent})
             elif previous_status == "down" and current_status == "up":
-                subject = f"Resolution Agora : {label} de nouveau actif"
-                body = (
-                    f"Le composant {label} de l'instance {current_agent_instance_id()} est revenu a l'etat actif."
+                emit(
+                    "component_up",
+                    f"Resolution Agora AI : {label} de nouveau actif",
+                    f"Le composant {label} de l'instance {current_agent_instance_id()} est revenu a l'etat actif.",
+                    component=key,
+                    status=current_status,
                 )
-                sent = notify_admin_alert(config.admin_recipient, subject, body) if alerts_enabled else False
-                events.append({"kind": "component_up", "component": key, "status": current_status, "sent": sent})
 
     state["components"] = component_state
 
@@ -128,32 +154,25 @@ def evaluate_alerts(health_snapshot: dict, now: datetime | None = None) -> list[
         state["token_cap_near"] = near_cap
         state["token_cap_total_tokens"] = total_tokens
         state["token_cap_threshold_tokens"] = threshold_tokens
-        if previous_near_cap is None:
-            if near_cap:
-                subject = "Alerte Agora : plafond de tokens bientot atteint"
-                body = (
-                    f"L'instance {current_agent_instance_id()} a consomme {total_tokens} tokens aujourd'hui, "
-                    f"au-dela du seuil d'alerte {threshold_tokens}/{config.daily_token_cap}."
-                )
-                sent = notify_admin_alert(config.admin_recipient, subject, body) if alerts_enabled else False
-                events.append({"kind": "token_cap_near", "total_tokens": total_tokens, "sent": sent})
-        elif previous_near_cap != near_cap:
-            if near_cap:
-                subject = "Alerte Agora : plafond de tokens bientot atteint"
-                body = (
-                    f"L'instance {current_agent_instance_id()} a consomme {total_tokens} tokens aujourd'hui, "
-                    f"au-dela du seuil d'alerte {threshold_tokens}/{config.daily_token_cap}."
-                )
-                sent = notify_admin_alert(config.admin_recipient, subject, body) if alerts_enabled else False
-                events.append({"kind": "token_cap_near", "total_tokens": total_tokens, "sent": sent})
-            else:
-                subject = "Resolution Agora : consommation de tokens revenue sous le seuil"
-                body = (
-                    f"L'instance {current_agent_instance_id()} est revenue sous le seuil de tokens: "
-                    f"{total_tokens}/{config.daily_token_cap} aujourd'hui."
-                )
-                sent = notify_admin_alert(config.admin_recipient, subject, body) if alerts_enabled else False
-                events.append({"kind": "token_cap_clear", "total_tokens": total_tokens, "sent": sent})
+        # A first observation under the threshold is not a resolution — there
+        # was never an alert to clear.
+        crossed = near_cap if previous_near_cap is None else previous_near_cap != near_cap
+        if crossed and near_cap:
+            emit(
+                "token_cap_near",
+                "Alerte Agora AI : plafond de tokens bientot atteint",
+                f"L'instance {current_agent_instance_id()} a consomme {total_tokens} tokens aujourd'hui, "
+                f"au-dela du seuil d'alerte {threshold_tokens}/{config.daily_token_cap}.",
+                total_tokens=total_tokens,
+            )
+        elif crossed:
+            emit(
+                "token_cap_clear",
+                "Resolution Agora AI : consommation de tokens revenue sous le seuil",
+                f"L'instance {current_agent_instance_id()} est revenue sous le seuil de tokens: "
+                f"{total_tokens}/{config.daily_token_cap} aujourd'hui.",
+                total_tokens=total_tokens,
+            )
 
     state["updated_at"] = now.isoformat(timespec="seconds")
     save_alert_state(state)

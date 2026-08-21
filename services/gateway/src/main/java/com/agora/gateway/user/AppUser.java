@@ -35,6 +35,11 @@ public class AppUser {
     @Column(nullable = false)
     private String role;
 
+    /** How the person wants to be named in the interface. Held here rather than in
+     * the browser: it used to live in localStorage, so it was lost on a new
+     * machine and invisible to everyone else. */
+    private String displayName;
+
     /** Free-text department label (HR, Finance, ...); references the same vocabulary
      * as the email-agent role/actor directory. Null for users with no department
      * scope (owner, admin, viewer). */
@@ -71,6 +76,14 @@ public class AppUser {
 
     public Long getId() { return id; }
     public String getUsername() { return username; }
+
+    /**
+     * The login identity is fixed for the life of the account — every grant,
+     * audit row and agent-side record keys off it. The one exception is
+     * right-to-erasure, which replaces it with a pseudonym; named rather than a
+     * plain setter so nothing renames an account by accident.
+     */
+    void anonymizeUsername(String pseudonym) { this.username = pseudonym; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
@@ -79,6 +92,9 @@ public class AppUser {
     public void setRole(String role) { this.role = role; }
     public String getDepartment() { return department; }
     public void setDepartment(String department) { this.department = department; }
+
+    public String getDisplayName() { return displayName; }
+    public void setDisplayName(String displayName) { this.displayName = displayName; }
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
 
