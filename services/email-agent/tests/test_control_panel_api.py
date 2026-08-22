@@ -129,7 +129,6 @@ def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
     monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
-    monkeypatch.setattr(api, "SERVICE_ROOT", tmp_path)
     monkeypatch.setattr(rules_router, "SERVICE_ROOT", tmp_path)
 
     with TestClient(app) as client:
@@ -200,7 +199,6 @@ def test_workflow_suggestion_promotes_and_dismisses(monkeypatch, tmp_path):
     monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
     monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
     _patch_categories_path(monkeypatch, categories_path)
-    monkeypatch.setattr(api, "SERVICE_ROOT", tmp_path)
     monkeypatch.setattr(rules_router, "SERVICE_ROOT", tmp_path)
 
     with TestClient(app) as client:
@@ -1436,10 +1434,11 @@ def _patch_categories_path(monkeypatch, path):
     """
     import src.api as api
     import src.api_shared as api_shared
+    from src.routers import categories as categories_router
     from src.routers import contacts as contacts_router
     from src.routers import rules as rules_router
 
-    for mod in (api, api_shared, contacts_router, rules_router):
+    for mod in (api, api_shared, categories_router, contacts_router, rules_router):
         if hasattr(mod, "DEFAULT_CATEGORIES_PATH"):
             monkeypatch.setattr(mod, "DEFAULT_CATEGORIES_PATH", path)
 
