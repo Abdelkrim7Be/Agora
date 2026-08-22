@@ -1,4 +1,13 @@
-enabled: false
-text: ""
+enabled: true
+mode: preserve_provider_signature
+detected_block: null
+text: ''
 image_url: null
 image_alt: Signature
+image_width: 420
+first_name: ''
+last_name: ''
+title: ''
+company: ''
+phone: ''
+website: ''

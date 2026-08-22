@@ -207,6 +207,6 @@ def test_an_unknown_audience_is_a_422_not_a_500():
 def test_an_audience_is_normalized_at_the_boundary():
     # The domain model trims and lowercases; validating at the API must not
     # make " Client " a rejection.
-    from src.api import ContactInput
+    from src.routers.contacts import ContactInput
 
     assert ContactInput(email="a@b.c", audience=" Client ").audience == "client"

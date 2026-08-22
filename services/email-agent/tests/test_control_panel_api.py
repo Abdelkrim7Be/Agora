@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from src import api
 from src import automation
+from src.routers import notifications as notifications_router
+from src.routers import signature as signature_router
 from src.api import app, _require_run, _run_detail
 from src.categories import CategoriesConfig, Category, CategoryInstructions
 from src.run_registry import list_runs, selected_run_registry_backend, upsert_run
@@ -1864,8 +1866,8 @@ def test_instance_setup_step_retry_rejects_unknown_step(monkeypatch):
 def test_notifications_list_and_unread_count(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "list_notifications", lambda **kw: [{"id": 1, "title": "Setup done"}])
-    monkeypatch.setattr(api, "unread_count", lambda **kw: 3)
+    monkeypatch.setattr(notifications_router, "list_notifications", lambda **kw: [{"id": 1, "title": "Setup done"}])
+    monkeypatch.setattr(notifications_router, "unread_count", lambda **kw: 3)
 
     with TestClient(app) as client:
         listed = client.get("/notifications", headers={"X-Agora-Instance-Role": "viewer"})
@@ -1880,7 +1882,7 @@ def test_notifications_list_and_unread_count(monkeypatch):
 def test_notifications_mark_read_returns_404_when_missing(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "mark_read", lambda notification_id: None)
+    monkeypatch.setattr(notifications_router, "mark_read", lambda notification_id: None)
 
     with TestClient(app) as client:
         response = client.post("/notifications/999/read", headers={"X-Agora-Instance-Role": "viewer"})
@@ -1891,9 +1893,9 @@ def test_notifications_mark_read_returns_404_when_missing(monkeypatch):
 def test_notifications_mark_all_read_and_delete(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "mark_all_read", lambda **kw: 5)
+    monkeypatch.setattr(notifications_router, "mark_all_read", lambda **kw: 5)
     deleted = []
-    monkeypatch.setattr(api, "delete_notification", lambda notification_id: deleted.append(notification_id))
+    monkeypatch.setattr(notifications_router, "delete_notification", lambda notification_id: deleted.append(notification_id))
 
     with TestClient(app) as client:
         mark_all = client.post("/notifications/read-all", headers={"X-Agora-Instance-Role": "viewer"})
@@ -1914,7 +1916,7 @@ def test_signature_endpoint_rejects_unknown_mode(monkeypatch):
 def test_signature_apply_endpoint_composes_final_body(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "load_signature", lambda: api.SignatureConfig(enabled=True, text="Karim"))
+    monkeypatch.setattr(signature_router, "load_signature", lambda: api.SignatureConfig(enabled=True, text="Karim"))
 
     with TestClient(app) as client:
         response = client.post("/signature/apply", json={"content": "Bonjour", "mode": "append_platform_signature"})
@@ -1988,11 +1990,14 @@ def test_contacts_categorize_sender_requires_owner_and_upserts_directory(monkeyp
 
 def test_contacts_categorize_domain_writes_legacy_categories_yaml(monkeypatch, tmp_path):
     import src.api as api
+    import src.routers.contacts as contacts_router
 
     calls = []
-    monkeypatch.setattr(api, "load_categories", lambda *a, **kw: api.CategoriesConfig(enabled=True))
     monkeypatch.setattr(
-        api, "write_instance_text",
+        contacts_router, "load_categories", lambda *a, **kw: api.CategoriesConfig(enabled=True)
+    )
+    monkeypatch.setattr(
+        contacts_router, "write_instance_text",
         lambda kind, content, default, agent_instance_id=None: calls.append((kind, content)),
     )
 
