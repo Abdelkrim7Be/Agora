@@ -7,6 +7,7 @@ the module that includes them — that would be a cycle.
 from __future__ import annotations
 
 import hmac
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
 
@@ -88,8 +89,6 @@ def _serialize_segment(segment: Segment) -> dict:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -100,3 +99,16 @@ def _current_categories() -> tuple[str, CategoriesConfig]:
     data.setdefault("templates", [])
     data.setdefault("contacts", [])
     return categories_yaml, CategoriesConfig(**data)
+
+
+def _run_timestamp_at_or_after(record: dict, since_dt: datetime) -> bool:
+    value = record.get("created_at") or record.get("updated_at")
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) >= since_dt
