@@ -10,6 +10,7 @@ from src import automation
 from src.routers import inbox as inbox_router
 from src.routers import notifications as notifications_router
 from src.routers import rules as rules_router
+from src.routers import settings as settings_router
 from src.routers import signature as signature_router
 from src.api import app, _require_run, _run_detail
 from src.categories import CategoriesConfig, Category, CategoryInstructions
@@ -560,13 +561,13 @@ def test_sensitivity_endpoint_round_trip(monkeypatch):
 
     stored = {"config": SensitivityConfig()}
 
-    monkeypatch.setattr(api, "load_sensitivity", lambda agent_instance_id=None: stored["config"])
+    monkeypatch.setattr(settings_router, "load_sensitivity", lambda agent_instance_id=None: stored["config"])
 
     def fake_save(config, agent_instance_id=None):
         stored["config"] = config
         stored["agent_instance_id"] = agent_instance_id
 
-    monkeypatch.setattr(api, "save_sensitivity", fake_save)
+    monkeypatch.setattr(settings_router, "save_sensitivity", fake_save)
 
     with TestClient(app) as client:
         initial = client.get("/sensitivity", headers={"X-Agora-Agent-Instance": "ceo-email-agent"})
@@ -944,7 +945,7 @@ def test_policy_endpoint_proxies_security_service(monkeypatch):
     async def fake_fetch_policy():
         return {"policy_yaml": "default: deny\n"}
 
-    monkeypatch.setattr("src.api.fetch_policy", fake_fetch_policy)
+    monkeypatch.setattr("src.routers.settings.fetch_policy", fake_fetch_policy)
 
     with TestClient(app) as client:
         response = client.get("/policy")
@@ -961,6 +962,7 @@ def test_update_agent_config_validates_and_writes(tmp_path, monkeypatch):
 
     config_path = tmp_path / "config.yaml"
     monkeypatch.setattr(api, "DEFAULT_CONFIG_PATH", config_path)
+    monkeypatch.setattr(settings_router, "DEFAULT_CONFIG_PATH", config_path)
     payload = {
         "agent": {
             "background": "background",
@@ -997,6 +999,7 @@ auto_organize:
 """
     )
     monkeypatch.setattr(api, "DEFAULT_CONFIG_PATH", config_path)
+    monkeypatch.setattr(settings_router, "DEFAULT_CONFIG_PATH", config_path)
     monkeypatch.setattr("src.config.DEFAULT_CONFIG_PATH", config_path)
 
     with TestClient(app) as client:
@@ -1624,8 +1627,8 @@ def test_category_test_match_endpoint_no_match(monkeypatch, tmp_path):
 def test_alert_and_retention_settings_endpoints_require_owner_role(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "load_alert_settings", lambda: api.AlertSettings())
-    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings())
+    monkeypatch.setattr(settings_router, "load_alert_settings", lambda: settings_router.AlertSettings())
+    monkeypatch.setattr(settings_router, "load_retention_settings", lambda: settings_router.RetentionSettings())
 
     with TestClient(app) as client:
         assert client.get('/alerts/settings', headers={"X-Agora-Instance-Role": "viewer"}).status_code == 403
@@ -1636,9 +1639,9 @@ def test_alert_and_retention_settings_endpoints_require_owner_role(monkeypatch):
 def test_alert_and_retention_settings_endpoints_allow_owner_role(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "load_alert_settings", lambda: api.AlertSettings(enabled=True, admin_recipient="ops@example.com"))
-    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings(retention_days=30))
-    monkeypatch.setattr(api, "preview_retention", lambda: {"enabled": True, "counts": {"runs": 1}})
+    monkeypatch.setattr(settings_router, "load_alert_settings", lambda: settings_router.AlertSettings(enabled=True, admin_recipient="ops@example.com"))
+    monkeypatch.setattr(settings_router, "load_retention_settings", lambda: settings_router.RetentionSettings(retention_days=30))
+    monkeypatch.setattr(settings_router, "preview_retention", lambda: {"enabled": True, "counts": {"runs": 1}})
 
     with TestClient(app) as client:
         alerts_response = client.get('/alerts/settings', headers={"X-Agora-Instance-Role": "owner"})
@@ -1654,8 +1657,8 @@ def test_alert_and_retention_settings_endpoints_allow_owner_role(monkeypatch):
 def test_retention_run_rejects_disabled_policy(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "load_retention_settings", lambda: api.RetentionSettings(retention_days=0))
-    monkeypatch.setattr(api, "run_retention", lambda: {"deleted": {"runs": 1}})
+    monkeypatch.setattr(settings_router, "load_retention_settings", lambda: settings_router.RetentionSettings(retention_days=0))
+    monkeypatch.setattr(settings_router, "run_retention", lambda: {"deleted": {"runs": 1}})
 
     with TestClient(app) as client:
         response = client.post("/retention/run", headers={"X-Agora-Instance-Role": "owner"})
