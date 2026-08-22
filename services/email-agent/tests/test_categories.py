@@ -9,6 +9,7 @@ from langgraph.store.memory import InMemoryStore
 from src.categories import classify_category, load_categories
 from src.run_registry import list_runs, upsert_run
 from tests.conftest import ai_tool_call, patch_provider
+from src.routers import categories as categories_router
 from tests.test_control_panel_api import _patch_categories_path
 
 
@@ -520,8 +521,8 @@ def test_category_proposals_discover_new_domains_and_accept(monkeypatch, tmp_pat
     categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
     state_path = tmp_path / "category_proposals.json"
     _patch_categories_path(monkeypatch, categories_path)
-    monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
-    patch_provider(monkeypatch, api, list_inbox=lambda limit: [
+    monkeypatch.setattr(categories_router, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
+    patch_provider(monkeypatch, categories_router, list_inbox=lambda limit: [
         {"id": "1", "from": "A <a@factures.example>", "subject": "Facture janvier", "snippet": ""},
         {"id": "2", "from": "B <b@factures.example>", "subject": "Facture février", "snippet": ""},
         {"id": "3", "from": "C <c@factures.example>", "subject": "Facture mars", "snippet": ""},
@@ -547,8 +548,8 @@ def test_category_proposals_skip_consumer_mail_domains(monkeypatch, tmp_path):
     categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
     state_path = tmp_path / "category_proposals.json"
     _patch_categories_path(monkeypatch, categories_path)
-    monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
-    patch_provider(monkeypatch, api, list_inbox=lambda limit: [
+    monkeypatch.setattr(categories_router, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
+    patch_provider(monkeypatch, categories_router, list_inbox=lambda limit: [
         {"id": str(i), "from": f"P{i} <p{i}@gmail.com>", "subject": f"Bonjour {i}", "snippet": ""}
         for i in range(8)
     ] + [
