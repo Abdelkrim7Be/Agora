@@ -139,10 +139,25 @@ jobs:
             context: security
           - image: gateway
             context: gateway
-          - image: web
-            context: web
           - image: web-react
             context: web-react
+
+  web-react:
+    name: web-react
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/web-react
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: services/web-react/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
 
   gateway:
     name: gateway
