@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import random
 import socket
@@ -35,6 +36,8 @@ from src.tenant import agent_instance_context, user_context
 from src.token_store import validate_token_security
 from src.trace import setup_trace_store
 
+logger = logging.getLogger(__name__)
+
 WORKER_ID = f"{socket.gethostname()}-{os.getpid()}"
 _STALE_SWEEP_INTERVAL_SECONDS = 60.0
 
@@ -68,7 +71,7 @@ async def run_worker_once(graph) -> bool:
             # Left 'processing' on purpose: requeue_stale_jobs recovers it after
             # the stale timeout instead of losing it to a worker-local exception
             # (e.g. a momentarily revoked Gmail token).
-            print(f"worker: job {job['id']} ({job['instance_id']}/{job['message_id']}) failed: {exc}")
+            logger.warning(f"worker: job {job['id']} ({job['instance_id']}/{job['message_id']}) failed: {exc}")
             return True
     mark_job_done(job["id"])
     return True
@@ -96,16 +99,16 @@ async def run_forever() -> None:
         graph = overall_workflow.compile(
             checkpointer=storage.checkpointer, store=storage.store
         )
-        print(f"worker: {WORKER_ID} ready ({storage.backend})")
+        logger.info(f"worker: {WORKER_ID} ready ({storage.backend})")
         while True:
             now = time.time()
             if now - last_sweep >= _STALE_SWEEP_INTERVAL_SECONDS:
                 requeued = await asyncio.to_thread(requeue_stale_jobs)
                 if requeued:
-                    print(f"worker: requeued {requeued} stale job(s)")
+                    logger.warning(f"worker: requeued {requeued} stale job(s)")
                 requeued_steps = await asyncio.to_thread(requeue_stale_steps)
                 if requeued_steps:
-                    print(f"worker: requeued {requeued_steps} stale setup step(s)")
+                    logger.warning(f"worker: requeued {requeued_steps} stale setup step(s)")
                 last_sweep = now
             # Onboarding beats backlog processing: a new instance should reach
             # 'ready' before the poll-job queue works through its own backlog.
@@ -119,6 +122,10 @@ async def run_forever() -> None:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     asyncio.run(run_forever())
 
 

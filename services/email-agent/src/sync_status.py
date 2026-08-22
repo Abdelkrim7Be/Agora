@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
 from src.config import SERVICE_ROOT, settings
@@ -14,6 +15,8 @@ from src.tenant import (
     normalize_user_id,
     user_context,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_STATUS_PATH = SERVICE_ROOT / "logs" / "gmail_sync_status.json"
 
@@ -338,7 +341,7 @@ def _notify_reconnect_required(user_id: str, instance_id: str, message: str) -> 
     except Exception as exc:
         # A failed notification must never turn a recorded sync failure into an
         # unrecorded one.
-        print(f"sync_status: reconnect notification failed: {exc}")
+        logger.warning(f"sync_status: reconnect notification failed: {exc}")
 
 
 def set_paused(

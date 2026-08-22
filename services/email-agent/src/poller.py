@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import logging
 import random
 import re as _re
 import time
@@ -62,7 +63,7 @@ def _note_gmail_rate_limit(exc: Exception) -> bool:
     _gmail_rate_limit_pause = min(
         max(_gmail_rate_limit_pause, until - now), RATE_LIMIT_PAUSE_MAX_SECONDS
     )
-    print(
+    logger.info(
         f"poller: Gmail rate limit hit; pausing all polling for "
         f"{int(until - now)}s"
     )
@@ -125,6 +126,8 @@ from src.tenant import (
     user_context,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _http_status_code(exc: Exception) -> int | None:
     response = getattr(exc, "resp", None)
@@ -157,7 +160,7 @@ def _notify_sensitive_message(provider, email_input: dict, reason: str) -> None:
     try:
         provider.notify_internal_message(recipient, subject, note)
     except Exception as exc:
-        print(f"poller: sensitive-mail notification failed: {exc}")
+        logger.warning(f"poller: sensitive-mail notification failed: {exc}")
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -198,7 +201,7 @@ async def process_message_with_retry(
             return await process_message(graph, msg_id, provider, rules_config, message=message)
         except Exception as exc:
             if not _is_transient_error(exc):
-                print(f"poller: {msg_id} failed without retry: {exc}")
+                logger.error(f"poller: {msg_id} failed without retry: {exc}")
                 record_failure(str(exc))
                 record_dead_letter({"message_id": msg_id, "reason": "terminal_failure", "error": str(exc), "payload": {"email_id": msg_id}})
                 inc_counter("agora_poller_dlq_total", reason="terminal_failure")
@@ -206,7 +209,7 @@ async def process_message_with_retry(
             attempt += 1
             inc_counter("agora_poller_retry_total", reason="transient")
             if attempt > max_retries:
-                print(f"poller: {msg_id} exhausted retries: {exc}")
+                logger.error(f"poller: {msg_id} exhausted retries: {exc}")
                 record_failure(str(exc))
                 try:
                     message = provider.get_message(msg_id)
@@ -218,7 +221,7 @@ async def process_message_with_retry(
                 inc_counter("agora_poller_dlq_total", reason="retry_exhausted")
                 return (msg_id, "failed", "")
             delay = _backoff_seconds(attempt)
-            print(f"poller: {msg_id} transient failure (attempt {attempt}/{max_retries}): {exc}")
+            logger.warning(f"poller: {msg_id} transient failure (attempt {attempt}/{max_retries}): {exc}")
             await asyncio.sleep(delay)
 
 
@@ -369,7 +372,7 @@ def ensure_watches(
             try:
                 results[instance_id] = ensure_watch()
             except Exception as exc:
-                print(f"poller: {instance_id} gmail watch failed: {exc}")
+                logger.warning(f"poller: {instance_id} gmail watch failed: {exc}")
                 record_failure(str(exc))
                 results[instance_id] = None
     return results
@@ -601,7 +604,7 @@ async def _process_message_locked(
                 agent_instance_id=current_agent_instance_id(),
             )
             _notify_sensitive_message(provider, email_input, sensitive_reason)
-            print(f"poller: sensitivity-gated {msg_id} ({sensitive_reason})")
+            logger.info(f"poller: sensitivity-gated {msg_id} ({sensitive_reason})")
             return (msg_id, "sensitive_hold", run_id)
 
     # A prefetched message (poll_once batch) skips the per-message round-trip.
@@ -642,13 +645,13 @@ async def _process_message_locked(
             None,
         )
         if claiming is not None and claiming.accepts_automated:
-            print(
+            logger.info(
                 f"poller: {msg_id} looks automated ({junk_reason}) but category "
                 f"'{claimed_category}' accepts automated mail; keeping it"
             )
             junk = False
         else:
-            print(
+            logger.warning(
                 f"poller: {msg_id} claimed by category '{claimed_category}' but "
                 f"junk-gated anyway ({junk_reason})"
             )
@@ -663,7 +666,7 @@ async def _process_message_locked(
     if junk_rule_plan and not (junk_rule_plan["tool_calls"] or junk_rule_plan["terminal_status"]):
         junk_rule_plan = None
     if junk and junk_rule_plan:
-        print(
+        logger.info(
             f"poller: {msg_id} is automated ({junk_reason}) but matches "
             f"{', '.join(junk_rule_plan['matched_rules'])}; applying the rule instead"
         )
@@ -685,7 +688,7 @@ async def _process_message_locked(
             agent_instance_id=current_agent_instance_id(),
         )
         provider.mark_as_read(msg_id)
-        print(f"poller: junk-gated {msg_id} ({junk_reason})")
+        logger.info(f"poller: junk-gated {msg_id} ({junk_reason})")
         return (msg_id, "completed", run_id)
 
     thread = provider.fetch_thread(message["threadId"])
@@ -792,7 +795,7 @@ async def _process_message_locked(
     ):
         verdict = await classify_content(email_input.get("email_thread", ""))
         if verdict.get("trust") == "HOSTILE":
-            print(f"🛡️ {msg_id}: draft withdrawn, deep classification returned HOSTILE")
+            logger.warning(f"🛡️ {msg_id}: draft withdrawn, deep classification returned HOSTILE")
             security_flagged = True
             outcome_status = "security_hold"
             result = {**result, "__interrupt__": None}
@@ -875,7 +878,7 @@ def _messages_awaiting_approval() -> set[str]:
     except Exception as exc:
         # Never let a registry hiccup stop detection; worst case is the old
         # behavior of re-fetching mail that will be deduped downstream anyway.
-        print(f"poller: could not list pending approvals, not filtering: {exc}")
+        logger.warning(f"poller: could not list pending approvals, not filtering: {exc}")
         return set()
     return {record["email_id"] for record in pending if record.get("email_id")}
 
@@ -933,7 +936,7 @@ async def _discover_unread_refs(
         except Exception as exc:
             if not provider.is_stale_cursor_error(exc):
                 raise
-            print(f"poller: history window stale; falling back to full unread scan: {exc}")
+            logger.warning(f"poller: history window stale; falling back to full unread scan: {exc}")
     try:
         next_baseline = provider.current_sync_cursor()
     except Exception:
@@ -964,7 +967,7 @@ async def _discover_unread_refs(
                 provider.fetch_messages_batch, [ref["id"] for ref in refs]
             )
         except Exception as exc:
-            print(f"poller: batch message fetch failed, using serial: {exc}")
+            logger.warning(f"poller: batch message fetch failed, using serial: {exc}")
     return refs, prefetched, next_baseline, truncated
 
 
@@ -1060,7 +1063,7 @@ async def enqueue_once(
         inc_counter("agora_poller_processed_total", status=status)
     enqueued_count = sum(1 for _msg_id, status, _run_id in outcomes if status == "enqueued")
     if enqueued_count:
-        print(f"poller: {instance_id} enqueued {enqueued_count} job(s)")
+        logger.info(f"poller: {instance_id} enqueued {enqueued_count} job(s)")
     await asyncio.to_thread(sweep_pending_approval_slas)
     maybe_emit_daily_digest(rules_config)
     return outcomes
@@ -1089,7 +1092,7 @@ def active_email_agent_instance_ids() -> list[str]:
     except Exception as exc:
         # The poller can start before the gateway creates/seeds its registry table.
         # Retry discovery next cycle while preserving the legacy default mailbox.
-        print(f"poller: instance discovery failed; using {default}: {exc}")
+        logger.warning(f"poller: instance discovery failed; using {default}: {exc}")
         return [default]
 
     instances = [normalize_agent_instance_id(row[0]) for row in rows if row and row[0]]
@@ -1117,7 +1120,7 @@ def _instance_owner(instance_id: str) -> str | None:
                 )
                 row = cur.fetchone()
     except Exception as exc:
-        print(f"poller: owner lookup failed for {instance_id}: {exc}")
+        logger.warning(f"poller: owner lookup failed for {instance_id}: {exc}")
         return None
     return row[0] if row and row[0] else None
 
@@ -1169,7 +1172,7 @@ async def maybe_seed_style_profile(instance_id: str, store, provider) -> None:
             return
         samples = await asyncio.to_thread(provider.fetch_sent, load_runtime_settings().style_sent_sample)
         if not samples:
-            print(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
+            logger.info(f"poller: {instance_id} has no sent mail yet; style auto-seed deferred")
             _style_seed_attempted.discard(instance_id)
             return
         from src import graph as graph_module
@@ -1179,10 +1182,10 @@ async def maybe_seed_style_profile(instance_id: str, store, provider) -> None:
         await store.aput(
             namespace("writing_style"), "user_preferences", wrap_preferences(text, ORIGIN_LEARNED)
         )
-        print(f"poller: {instance_id} seeded writing style from {len(samples)} sent email(s)")
+        logger.info(f"poller: {instance_id} seeded writing style from {len(samples)} sent email(s)")
     except Exception as exc:
         # Best-effort: drafts fall back to the configured default style.
-        print(f"poller: {instance_id} style auto-seed skipped: {exc}")
+        logger.warning(f"poller: {instance_id} style auto-seed skipped: {exc}")
 
 
 def _mailbox_sync_dlq_entry_id(instance_id: str) -> str:
@@ -1199,7 +1202,7 @@ async def poll_active_instances_once(
     """Poll every active, connected instance without cross-instance failure spread."""
     if time.time() < _gmail_rate_limited_until:
         remaining = int(_gmail_rate_limited_until - time.time())
-        print(f"poller: Gmail rate-limit pause active ({remaining}s left); skipping cycle")
+        logger.info(f"poller: Gmail rate-limit pause active ({remaining}s left); skipping cycle")
         return {}
     instances = instance_ids or active_email_agent_instance_ids()
     ordered = _rotate_instances(instances)
@@ -1212,11 +1215,11 @@ async def poll_active_instances_once(
           with agent_instance_context(instance_id):
             try:
                 if get_status().get("paused"):
-                    print(f"poller: {instance_id} is paused")
+                    logger.info(f"poller: {instance_id} is paused")
                     results[instance_id] = []
                     continue
                 if not has_stored_token(instance_id):
-                    print(f"poller: {instance_id} has no Gmail token; skipping")
+                    logger.info(f"poller: {instance_id} has no Gmail token; skipping")
                     results[instance_id] = []
                     continue
                 try:
@@ -1228,7 +1231,7 @@ async def poll_active_instances_once(
                     else:
                         outcomes = await poll_once(graph, provider=provider)
                 except Exception as exc:
-                    print(f"poller: {instance_id} poll failed: {exc}")
+                    logger.warning(f"poller: {instance_id} poll failed: {exc}")
                     record_failure(str(exc))
                     # A mailbox-level failure (OAuth, network) never reaches per-message
                     # dead-lettering — no message was even fetched — so it was invisible
@@ -1252,7 +1255,7 @@ async def poll_active_instances_once(
 
                 results[instance_id] = outcomes
                 if outcomes:
-                    print(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
+                    logger.info(f"poller: {instance_id} processed {len(outcomes)} email(s): {outcomes}")
                 record_success("polling")
                 # Close out any mailbox_sync_failure entry this instance left open —
                 # a no-op when there isn't one (claim only succeeds from "dead_letter").
@@ -1274,16 +1277,16 @@ async def _run_instance_maintenance(instance_id: str) -> None:
         retention_result = await asyncio.to_thread(run_retention)
         deleted_runs = int((retention_result.get("deleted") or {}).get("runs") or 0)
         if deleted_runs:
-            print(f"poller: {instance_id} purged {deleted_runs} old run(s)")
+            logger.info(f"poller: {instance_id} purged {deleted_runs} old run(s)")
     except Exception as exc:
-        print(f"poller: {instance_id} retention sweep failed: {exc}")
+        logger.warning(f"poller: {instance_id} retention sweep failed: {exc}")
     try:
         health_snapshot = await aggregate_health()
         events = await asyncio.to_thread(evaluate_alerts, health_snapshot)
         if events:
-            print(f"poller: {instance_id} emitted {len(events)} alert event(s): {events}")
+            logger.info(f"poller: {instance_id} emitted {len(events)} alert event(s): {events}")
     except Exception as exc:
-        print(f"poller: {instance_id} alert evaluation failed: {exc}")
+        logger.warning(f"poller: {instance_id} alert evaluation failed: {exc}")
 
 
 async def sweep_active_instances_once(
@@ -1303,7 +1306,7 @@ async def sweep_active_instances_once(
                     reload_config()
                     results[instance_id] = await asyncio.to_thread(sweep_pending_approval_slas)
                 except Exception as exc:
-                    print(f"poller: {instance_id} SLA sweep failed: {exc}")
+                    logger.warning(f"poller: {instance_id} SLA sweep failed: {exc}")
                     record_failure(str(exc))
                     results[instance_id] = []
             finally:
@@ -1341,7 +1344,7 @@ async def run_forever() -> None:
             mode = "watch-only"
         else:
             mode = "idle"
-        print(
+        logger.info(
             f"poller: {mode} every {interval_minutes} min "
             f"({storage.backend})"
         )
@@ -1353,20 +1356,24 @@ async def run_forever() -> None:
                 watches = await asyncio.to_thread(ensure_watches)
                 registered = sum(1 for value in watches.values() if value)
                 if registered:
-                    print(f"poller: gmail watch registered for {registered} instance(s)")
+                    logger.info(f"poller: gmail watch registered for {registered} instance(s)")
             if settings.polling_fallback_enabled:
                 await poll_active_instances_once(graph, store=storage.store)
             else:
                 escalations = await sweep_active_instances_once()
                 for instance_id, items in escalations.items():
                     if items:
-                        print(f"poller: {instance_id} escalated {len(items)} overdue approval(s): {items}")
+                        logger.info(f"poller: {instance_id} escalated {len(items)} overdue approval(s): {items}")
             # Jitter so a fleet of pollers (or many instances) never hits Gmail in
             # lockstep — synced bursts look robotic to Google's abuse limiter.
             await asyncio.sleep(interval * random.uniform(0.85, 1.15))
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     asyncio.run(run_forever())
 
 

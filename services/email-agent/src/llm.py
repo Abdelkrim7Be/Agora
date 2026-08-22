@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from src.config import LOCAL_LLM_PROFILES, SERVICE_ROOT, settings
 from src.metrics import inc_counter
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_LLM_ROLES = ("triage", "draft", "reason", "memory_style", "quarantine")
 # Local-first: the platform runs on the host Ollama by default; cloud profiles
@@ -103,7 +106,7 @@ class FallbackChatModel:
                 last_exc = exc
                 if index == len(self._models) - 1:
                     raise
-                print(
+                logger.warning(
                     f"llm: role '{self._role}' model '{model_name}' failed; trying fallback: {exc}"
                 )
                 next_model = self._models[index + 1][0]
@@ -127,7 +130,7 @@ class FallbackChatModel:
                 last_exc = exc
                 if index == len(self._models) - 1:
                     raise
-                print(
+                logger.warning(
                     f"llm: role '{self._role}' model '{model_name}' stream failed; trying fallback: {exc}"
                 )
                 next_model = self._models[index + 1][0]

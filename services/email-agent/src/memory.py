@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pydantic import BaseModel, Field
 
 from src.config import settings
@@ -11,6 +12,8 @@ from src.tenant import (
     normalize_agent_instance_id,
     normalize_user_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class UserPreferences(BaseModel):
@@ -132,14 +135,14 @@ def update_memory(
     try:
         result = _invoke_memory_llm(llm, prompt_messages, invoke_config)
     except Exception as exc:
-        print(f"memory: preference update skipped: {exc}")
+        logger.warning(f"memory: preference update skipped: {exc}")
         return
     updated = (result.user_preferences or "").strip()
     # Guard against destructive rewrites: small models sometimes replace the
     # whole profile with a one-line summary of the latest feedback. A real
     # incremental update never collapses an established profile.
     if current_origin != ORIGIN_DEFAULT and current and len(current) > 200 and len(updated) < len(current) // 2:
-        print(
+        logger.warning(
             f"memory: preference update rejected for {ns}: proposed profile "
             f"({len(updated)} chars) would collapse the current one ({len(current)} chars)"
         )
@@ -148,7 +151,7 @@ def update_memory(
         namespace_label = "/".join(str(part) for part in ns)
         verdict = sanitize_memory_write(namespace_label, updated)
         if verdict.get("injection_detected") or verdict.get("classification") == "malicious":
-            print(
+            logger.warning(
                 f"memory: preference update rejected for {ns}: sanitize flagged "
                 f"synthesized text ({verdict.get('reasons')})"
             )

@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import urllib.parse
 from pathlib import Path
@@ -31,6 +32,8 @@ from src.config import settings
 from src.connected_mailboxes import claim_mailbox, release_mailbox
 from src.oauth_state import build_state, sign_state, validate_state  # noqa: F401 — re-exported
 from src.token_store import delete_token, has_stored_token, prepared_token_file
+
+logger = logging.getLogger(__name__)
 
 PROVIDER = "outlook"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -184,7 +187,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any], state: str
     try:
         payload = _post_token(form)
     except ValueError as exc:
-        print(f"oauth: outlook token exchange failed for {agent_instance_id}: {exc}")
+        logger.warning(f"oauth: outlook token exchange failed for {agent_instance_id}: {exc}")
         raise
 
     access_token = payload.get("access_token") or ""
@@ -195,7 +198,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any], state: str
     actual_mailbox = _verify_mailbox(access_token, expected_mailbox or None)
 
     if not payload.get("refresh_token"):
-        print(
+        logger.info(
             f"oauth: WARNING — no refresh_token returned for {agent_instance_id}; "
             "the connection will drop when the access token expires"
         )
@@ -207,7 +210,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any], state: str
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload))
     except Exception as exc:
-        print(f"oauth: outlook token persistence failed for {agent_instance_id}: {exc!r}")
+        logger.warning(f"oauth: outlook token persistence failed for {agent_instance_id}: {exc!r}")
         raise RuntimeError(
             f"Outlook authorized but the token could not be stored ({exc}). "
             "Check the token store volume and encryption key, then reconnect."
@@ -218,7 +221,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any], state: str
         delete_token(user_id, agent_instance_id, provider=PROVIDER)
         raise
 
-    print(f"oauth: outlook token stored for {agent_instance_id}")
+    logger.info(f"oauth: outlook token stored for {agent_instance_id}")
     return path
 
 

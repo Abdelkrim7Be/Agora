@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parseaddr
+import logging
 from pathlib import Path
 from threading import RLock
 from typing import Any, Awaitable, Callable
@@ -21,6 +22,8 @@ from src.tenant import (
     normalize_user_id,
     user_context,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_INSTANCE_SETUP_PATH = SERVICE_ROOT / "logs" / "instance_setup.json"
 
@@ -1007,7 +1010,7 @@ async def _step_finalize(context: SetupContext) -> dict:
         seeded_memory = await _seed_default_memory(context)
     except Exception as exc:
         # Never fail setup over this: the lazy path in get_memory still applies.
-        print(f"instance_setup: memory seeding failed: {exc}")
+        logger.warning(f"instance_setup: memory seeding failed: {exc}")
 
     try:
         from src.notification_store import create_notification
@@ -1021,7 +1024,7 @@ async def _step_finalize(context: SetupContext) -> dict:
             agent_instance_id=context.agent_instance_id,
         )
     except Exception as exc:
-        print(f"instance_setup: notification emission failed: {exc}")
+        logger.warning(f"instance_setup: notification emission failed: {exc}")
     return {"seeded_memory": seeded_memory}
 
 
@@ -1052,7 +1055,7 @@ async def run_step(step: dict, context: SetupContext) -> None:
     except SkipStep as exc:
         skip_step(setup_id, step_key, exc.reason)
     except Exception as exc:
-        print(f"instance_setup: step {step_key} ({setup_id}) failed: {exc}")
+        logger.warning(f"instance_setup: step {step_key} ({setup_id}) failed: {exc}")
         fail_step(setup_id, step_key, str(exc))
         return
     if step_key == "finalize":
