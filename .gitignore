@@ -68,39 +68,15 @@ logs/
 htmlcov/
 .mypy_cache/
 
-# Planning docs (local only)
-services/saas-hardening.md
-docs/plans/
-
-# Local planning docs
-RAPPORT_AVANCEMENT.md
-security-phase3-plan.md
-
 # Local MCP config
 .mcp.json
 
-# Node / playwright test tooling (local, reinstallable) — services/ root only;
-# nested package.json/package-lock.json (e.g. services/web-react/) are real source.
+# Node modules (web-react)
 node_modules/
-/services/package.json
-/services/package-lock.json
-.playwright-mcp/
-.tmp_playwright_ui_check.js
-test-artifacts/
+
+# Scanner cache and local DB backups
 .trivy-cache/
 infra/backups/
-
-# Design tool exports / UI screenshots (local)
-stitch-export/
-*-desktop.png
-agora-control-panel*.png
---full-page
-style.png
-
-# agent-browser local state / dogfood runs (local)
-.agents/
-skills-lock.json
-dogfood-output/
 
 # Claude Code local settings (local)
 .claude/
