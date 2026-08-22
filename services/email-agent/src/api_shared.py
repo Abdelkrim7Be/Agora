@@ -10,7 +10,11 @@ import hmac
 
 from fastapi import HTTPException, Request
 
+import yaml
+
+from src.categories import CategoriesConfig, DEFAULT_CATEGORIES_PATH
 from src.config import settings
+from src.instance_config import read_instance_text
 from src.contacts import Contact, Segment, resolve_segment
 from src.tenant import current_agent_instance_id
 
@@ -87,3 +91,12 @@ def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _current_categories() -> tuple[str, CategoriesConfig]:
+    categories_yaml = read_instance_text("categories", DEFAULT_CATEGORIES_PATH)
+    data = yaml.safe_load(categories_yaml) or {}
+    data.setdefault("categories", [])
+    data.setdefault("templates", [])
+    data.setdefault("contacts", [])
+    return categories_yaml, CategoriesConfig(**data)

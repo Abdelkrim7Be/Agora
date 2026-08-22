@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from src import api
 from src import automation
 from src.routers import notifications as notifications_router
+from src.routers import rules as rules_router
 from src.routers import signature as signature_router
 from src.api import app, _require_run, _run_detail
 from src.categories import CategoriesConfig, Category, CategoryInstructions
@@ -29,7 +30,7 @@ def test_rule_and_section_toggle(monkeypatch, tmp_path):
         "  enabled: false\n"
     )
     monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
-    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
 
     with TestClient(app) as client:
         # Per-rule toggle off.
@@ -56,7 +57,7 @@ def test_rule_crud_and_section_config(monkeypatch, tmp_path):
     rules_path = tmp_path / "rules.yaml"
     rules_path.write_text("enabled: true\nrules: []\n")
     monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
-    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
 
     with TestClient(app) as client:
         # Add a rule via structured form (no YAML).
@@ -127,8 +128,9 @@ def test_rule_suggestions_listed_and_promoted(monkeypatch, tmp_path):
         }, sort_keys=True) + "\n"
     )
     monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
-    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
     monkeypatch.setattr(api, "SERVICE_ROOT", tmp_path)
+    monkeypatch.setattr(rules_router, "SERVICE_ROOT", tmp_path)
 
     with TestClient(app) as client:
         listed = client.get("/rules/suggestions")
@@ -196,9 +198,10 @@ def test_workflow_suggestion_promotes_and_dismisses(monkeypatch, tmp_path):
         }, sort_keys=True) + "\n"
     )
     monkeypatch.setattr(automation, "DEFAULT_RULES_PATH", rules_path)
-    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
+    _patch_categories_path(monkeypatch, categories_path)
     monkeypatch.setattr(api, "SERVICE_ROOT", tmp_path)
+    monkeypatch.setattr(rules_router, "SERVICE_ROOT", tmp_path)
 
     with TestClient(app) as client:
         promoted = client.post("/rules/suggestions/0/promote")
@@ -406,7 +409,7 @@ def test_categories_endpoint_validates_yaml(monkeypatch, tmp_path):
     import src.api as api
 
     path = tmp_path / "categories.yaml"
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+    _patch_categories_path(monkeypatch, path)
 
     body = """enabled: true
 categories:
@@ -1012,7 +1015,7 @@ def test_update_rules_validates_yaml(tmp_path, monkeypatch):
     import src.api as api
 
     rules_path = tmp_path / "rules.yaml"
-    monkeypatch.setattr(api, "DEFAULT_RULES_PATH", rules_path)
+    monkeypatch.setattr(rules_router, "DEFAULT_RULES_PATH", rules_path)
 
     with TestClient(app) as client:
         response = client.put(
@@ -1424,11 +1427,28 @@ contacts: []
 """
 
 
+def _patch_categories_path(monkeypatch, path):
+    """Redirect DEFAULT_CATEGORIES_PATH on every module that binds it.
+
+    `from src.categories import DEFAULT_CATEGORIES_PATH` binds a new name per
+    module, so patching only `src.api` stops working the moment a route moves
+    into a router module — and the test then writes the real categories.yaml.
+    """
+    import src.api as api
+    import src.api_shared as api_shared
+    from src.routers import contacts as contacts_router
+    from src.routers import rules as rules_router
+
+    for mod in (api, api_shared, contacts_router, rules_router):
+        if hasattr(mod, "DEFAULT_CATEGORIES_PATH"):
+            monkeypatch.setattr(mod, "DEFAULT_CATEGORIES_PATH", path)
+
+
 def _seed_categories(monkeypatch, tmp_path):
     import src.api as api
 
     path = tmp_path / "categories.yaml"
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+    _patch_categories_path(monkeypatch, path)
     with TestClient(app) as client:
         client.put("/categories", json={"categories_yaml": _SEED_CATEGORIES_YAML})
     return path
@@ -1558,7 +1578,7 @@ def test_category_test_match_endpoint_matches_workflow(monkeypatch, tmp_path):
     import src.api as api
 
     path = tmp_path / "categories.yaml"
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", path)
+    _patch_categories_path(monkeypatch, path)
     seed = """enabled: true
 categories:
   - name: refund
@@ -1916,7 +1936,7 @@ def test_signature_endpoint_rejects_unknown_mode(monkeypatch):
 def test_signature_apply_endpoint_composes_final_body(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(signature_router, "load_signature", lambda: api.SignatureConfig(enabled=True, text="Karim"))
+    monkeypatch.setattr(signature_router, "load_signature", lambda: signature_router.SignatureConfig(enabled=True, text="Karim"))
 
     with TestClient(app) as client:
         response = client.post("/signature/apply", json={"content": "Bonjour", "mode": "append_platform_signature"})
@@ -1934,7 +1954,7 @@ def test_signature_apply_endpoint_rejects_unknown_mode(monkeypatch):
 def test_signature_endpoint_accepts_known_mode(monkeypatch):
     import src.api as api
 
-    monkeypatch.setattr(api, "save_signature", lambda body: None)
+    monkeypatch.setattr(signature_router, "save_signature", lambda body: None)
 
     with TestClient(app) as client:
         response = client.put("/signature", json={"enabled": True, "mode": "preserve_provider_signature"})
