@@ -9,6 +9,7 @@ from langgraph.store.memory import InMemoryStore
 from src.categories import classify_category, load_categories
 from src.run_registry import list_runs, upsert_run
 from tests.conftest import ai_tool_call, patch_provider
+from tests.test_control_panel_api import _patch_categories_path
 
 
 def _cfg() -> dict:
@@ -518,7 +519,7 @@ def test_category_proposals_discover_new_domains_and_accept(monkeypatch, tmp_pat
     categories_path = tmp_path / "categories.yaml"
     categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
     state_path = tmp_path / "category_proposals.json"
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    _patch_categories_path(monkeypatch, categories_path)
     monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
     patch_provider(monkeypatch, api, list_inbox=lambda limit: [
         {"id": "1", "from": "A <a@factures.example>", "subject": "Facture janvier", "snippet": ""},
@@ -545,7 +546,7 @@ def test_category_proposals_skip_consumer_mail_domains(monkeypatch, tmp_path):
     categories_path = tmp_path / "categories.yaml"
     categories_path.write_text("enabled: true\ncategories: []\ntemplates: []\ncontacts: []\n", encoding="utf-8")
     state_path = tmp_path / "category_proposals.json"
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    _patch_categories_path(monkeypatch, categories_path)
     monkeypatch.setattr(api, "DEFAULT_CATEGORY_PROPOSAL_STATE_PATH", state_path)
     patch_provider(monkeypatch, api, list_inbox=lambda limit: [
         {"id": str(i), "from": f"P{i} <p{i}@gmail.com>", "subject": f"Bonjour {i}", "snippet": ""}
@@ -571,7 +572,7 @@ def test_category_edit_updates_and_clears_matchers(monkeypatch, tmp_path):
 
     categories_path = tmp_path / "categories.yaml"
     categories_path.write_text(CATEGORIES_YAML, encoding="utf-8")
-    monkeypatch.setattr(api, "DEFAULT_CATEGORIES_PATH", categories_path)
+    _patch_categories_path(monkeypatch, categories_path)
 
     payload = {
         "display_name": "Réclamations clients",
