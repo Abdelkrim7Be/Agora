@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
@@ -59,6 +60,8 @@ from src.prompts import (
 from src.state import RouterSchema, State, StateInput
 from src.utils import ensure_email_paragraphs, format_action_description, format_email_markdown, parse_email
 from src.trace import record_trace
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -311,7 +314,7 @@ def category_router(
     # being asked to perform the attack by hand.
     sec = state["email_input"].get("security")
     if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
-        print("🛡️ Category routing skipped - forced notify by security verdict")
+        logger.warning("🛡️ Category routing skipped - forced notify by security verdict")
         return Command(goto=END, update={"classification_decision": "notify"})
 
     agent_instance_id = state["email_input"].get("agent_instance_id")
@@ -353,7 +356,7 @@ def category_router(
             atts = state["email_input"].get("attachments") or []
             email_markdown = format_email_markdown(subject, author, to, email_thread, attachments=atts)
             if remaining_vars:
-                print(f"📧 Category '{cat}': template has unresolved vars {remaining_vars}, routing to LLM for finalization")
+                logger.info(f"📧 Category '{cat}': template has unresolved vars {remaining_vars}, routing to LLM for finalization")
                 return Command(
                     goto="llm_call",
                     update={
@@ -377,7 +380,7 @@ def category_router(
                         }],
                     },
                 )
-            print(f"📧 Category '{cat}': auto-draft from template")
+            logger.info(f"📧 Category '{cat}': auto-draft from template")
             return Command(
                 goto="environment",
                 update={
@@ -394,7 +397,7 @@ def category_router(
 
     if policy == "organize":
         if "apply_label" not in tools_by_name_map or "archive_email" not in tools_by_name_map:
-            print(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
+            logger.info(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
             return Command(goto="triage_router", update=category_update)
         cat_obj = next((c for c in categories_config.categories if c.name == cat), None)
         labels = (cat_obj.labels if cat_obj and cat_obj.labels else [cat])
@@ -402,7 +405,7 @@ def category_router(
             {"name": "apply_label", "args": {"label": label}, "id": f"org_label_{i}", "type": "tool_call"}
             for i, label in enumerate(labels)
         ] + [{"name": "archive_email", "args": {}, "id": "org_archive", "type": "tool_call"}]
-        print(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
+        logger.info(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
         return Command(
             goto="environment",
             update={
@@ -416,7 +419,7 @@ def category_router(
     if policy == "notify":
         notify_call = _workflow_notify_tool_call(state, category_update)
         if notify_call is not None:
-            print(f"🔔 Category '{cat}': notify policy, routing for approval")
+            logger.info(f"🔔 Category '{cat}': notify policy, routing for approval")
             return Command(
                 goto="environment",
                 update={
@@ -425,11 +428,11 @@ def category_router(
                     "messages": [AIMessage(content="", tool_calls=[notify_call])],
                 },
             )
-        print(f"🔔 Category '{cat}': notify policy, terminating")
+        logger.info(f"🔔 Category '{cat}': notify policy, terminating")
         return Command(goto=END, update={"classification_decision": "notify", **category_update})
 
     if policy == "ignore":
-        print(f"🚫 Category '{cat}': ignore policy")
+        logger.info(f"🚫 Category '{cat}': ignore policy")
         if _can_auto_organize():
             return Command(
                 goto="environment",
@@ -477,7 +480,7 @@ def _category_policy_command(
             reason = (
                 f"unresolved vars {remaining_vars}" if remaining_vars else "template_mode=adapt"
             )
-            print(f"📧 Category '{cat}': {reason}, routing to LLM for finalization")
+            logger.info(f"📧 Category '{cat}': {reason}, routing to LLM for finalization")
             return Command(
                 goto="llm_call",
                 update={
@@ -510,7 +513,7 @@ def _category_policy_command(
                     }],
                 },
             )
-        print(f"📧 Category '{cat}': auto-draft from template")
+        logger.info(f"📧 Category '{cat}': auto-draft from template")
         return Command(
             goto="environment",
             update={
@@ -525,7 +528,7 @@ def _category_policy_command(
 
     if policy == "organize":
         if "apply_label" not in tools_by_name_map or "archive_email" not in tools_by_name_map:
-            print(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
+            logger.info(f"📁 Category '{cat}': organize policy but inbox capability not enabled, falling through to triage")
             return None
         cat_obj = next((c for c in categories_config.categories if c.name == cat), None)
         labels = (cat_obj.labels if cat_obj and cat_obj.labels else [cat])
@@ -533,7 +536,7 @@ def _category_policy_command(
             {"name": "apply_label", "args": {"label": label}, "id": f"org_label_{i}", "type": "tool_call"}
             for i, label in enumerate(labels)
         ] + [{"name": "archive_email", "args": {}, "id": "org_archive", "type": "tool_call"}]
-        print(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
+        logger.info(f"📁 Category '{cat}': organize policy, applying {labels} and archiving")
         return Command(
             goto="environment",
             update={
@@ -547,7 +550,7 @@ def _category_policy_command(
     if policy == "notify":
         notify_call = _workflow_notify_tool_call(state, category_update)
         if notify_call is not None:
-            print(f"🔔 Category '{cat}': notify policy, routing for approval")
+            logger.info(f"🔔 Category '{cat}': notify policy, routing for approval")
             return Command(
                 goto="environment",
                 update={
@@ -556,11 +559,11 @@ def _category_policy_command(
                     "messages": [AIMessage(content="", tool_calls=[notify_call])],
                 },
             )
-        print(f"🔔 Category '{cat}': notify policy, terminating")
+        logger.info(f"🔔 Category '{cat}': notify policy, terminating")
         return Command(goto=END, update={"classification_decision": "notify", **category_update})
 
     if policy == "ignore":
-        print(f"🚫 Category '{cat}': ignore policy")
+        logger.info(f"🚫 Category '{cat}': ignore policy")
         if _can_auto_organize():
             return Command(
                 goto="environment",
@@ -673,18 +676,18 @@ def _coerce_text_draft_to_tool_call(response, messages, run_id: str):
             config=llm_invoke_config(run_id, "llm_call"),
         )
     except Exception as exc:
-        print(f"draft coercion failed: {exc}")
+        logger.warning(f"draft coercion failed: {exc}")
         return None
     content = (extracted.content or "").strip()
     if not extracted.is_email_draft or not content:
-        print("✏️ Redraft narration is not an email draft; not coercing")
+        logger.info("✏️ Redraft narration is not an email draft; not coercing")
         return None
     args = _normalize_recipient_args({
         "to": (extracted.to or "").strip() or previous.get("to", ""),
         "subject": (extracted.subject or "").strip() or previous.get("subject", ""),
         "content": content,
     })
-    print("✏️ Redraft returned as text; coerced into a write_email tool call")
+    logger.info("✏️ Redraft returned as text; coerced into a write_email tool call")
     return _synthetic_write_email_message(args)
 
 
@@ -1320,7 +1323,7 @@ def update_memory_background(store, ns, messages, llm, invoke_config) -> None:
         try:
             update_memory(store, ns, messages, llm, invoke_config)
         except Exception as exc:
-            print(f"memory: background preference update failed: {exc}")
+            logger.warning(f"memory: background preference update failed: {exc}")
 
     threading.Thread(target=_run, name="memory-update", daemon=True).start()
 
@@ -1819,11 +1822,11 @@ def redraft_direct(state: State, store: BaseStore, config=None) -> dict:
         try:
             revised = _invoke_llm(llm_redraft, prompt, llm_invoke_config(run_id, "redraft"))
         except Exception as exc:
-            print(f"✏️ Redraft attempt {attempt + 1} failed: {exc}")
+            logger.warning(f"✏️ Redraft attempt {attempt + 1} failed: {exc}")
             continue
         content = _strip_content_headers((getattr(revised, "content", "") or "").strip())
         if not content:
-            print(f"✏️ Redraft attempt {attempt + 1} returned no draft body")
+            logger.info(f"✏️ Redraft attempt {attempt + 1} returned no draft body")
             continue
         # Recipient and subject are NEVER taken from the model: a retouche is a
         # body revision, and small models corrupt addresses (dropped letters,
@@ -1995,7 +1998,7 @@ def _route_triage_decision(
     email_markdown: str,
 ) -> Command[Literal["llm_call", "environment", "__end__"]]:
     if classification == "respond":
-        print("📧 Classification: RESPOND - This email requires a response")
+        logger.info("📧 Classification: RESPOND - This email requires a response")
         return Command(
             goto="llm_call",
             update={
@@ -2010,7 +2013,7 @@ def _route_triage_decision(
             },
         )
     if classification == "ignore":
-        print("🚫 Classification: IGNORE - This email can be safely ignored")
+        logger.info("🚫 Classification: IGNORE - This email can be safely ignored")
         if _can_auto_organize():
             return Command(
                 goto="environment",
@@ -2026,7 +2029,7 @@ def _route_triage_decision(
             update={"classification_decision": classification, **category_update},
         )
     if classification == "notify":
-        print("🔔 Classification: NOTIFY - This email contains important information")
+        logger.info("🔔 Classification: NOTIFY - This email contains important information")
         return Command(
             goto=END,
             update={"classification_decision": classification, **category_update},
@@ -2045,7 +2048,7 @@ def triage_router(
     """
     sec = state["email_input"].get("security")
     if sec and (sec.get("injection_detected") or sec.get("classifier_unavailable")):
-        print("🛡️ Classification: NOTIFY - forced by security (injection or classifier unavailable)")
+        logger.warning("🛡️ Classification: NOTIFY - forced by security (injection or classifier unavailable)")
         return Command(goto=END, update={"classification_decision": "notify"})
 
     author, to, subject, email_thread = parse_email(state["email_input"])

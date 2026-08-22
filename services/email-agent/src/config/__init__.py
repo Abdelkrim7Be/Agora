@@ -131,6 +131,9 @@ class Settings:
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
     gateway_shared_secret: str = os.getenv("GATEWAY_AGENT_SHARED_SECRET", "")
+    # Long-running entrypoints (poller, worker) configure the root logger from
+    # this; the API inherits uvicorn's handlers instead.
+    log_level: str = os.getenv("AGENT_LOG_LEVEL", "INFO")
     # 10s was tuned for a hosted classifier call; against a single shared local
     # Ollama instance that's also serving triage/draft/persona generation, the
     # classifier queues behind whatever else is running and 10s isn't enough —

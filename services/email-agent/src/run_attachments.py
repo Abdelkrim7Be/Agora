@@ -14,11 +14,14 @@ key prefix.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
 from src.config import settings
 from src.media import media_root
 from src.media_storage import get_backend
+
+logger = logging.getLogger(__name__)
 
 # One JSON blob per run lists the attachment ids that belong to it — the
 # backend has no directory listing, so cleanup needs an explicit index.
@@ -142,4 +145,4 @@ def discard_run_attachments(run_id: str) -> None:
             backend.delete(_meta_key(run_id, attachment_id))
         backend.delete(_index_key(run_id))
     except Exception as exc:  # pragma: no cover - defensive, cleanup must never raise
-        print(f"run_attachments: cleanup failed for run {run_id}: {exc!r}")
+        logger.warning(f"run_attachments: cleanup failed for run {run_id}: {exc!r}")

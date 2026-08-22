@@ -222,7 +222,7 @@ async def _watch_renewal_loop() -> None:
         try:
             await asyncio.to_thread(ensure_watches)
         except Exception as exc:  # network/credential issues must not kill the API
-            print(f"api: gmail watch registration failed: {exc}")
+            logger.warning(f"api: gmail watch registration failed: {exc}")
             record_sync_failure(str(exc))
         await asyncio.sleep(check_interval)
 
@@ -642,7 +642,7 @@ def _derive_action_type(pending_action: list | None, classification: str | None)
         return "organize"
     if "campaign" in name:
         return "campaign"
-    print(f"Unknown pending action tool name: {name}")
+    logger.info(f"Unknown pending action tool name: {name}")
     return "unknown"
 
 
@@ -894,7 +894,7 @@ def _record_decision_failure(run_id: str, action: str, exc: Exception, record: d
             "payload": {"run_id": run_id, "action": action},
         })
     except Exception as dlq_exc:  # pragma: no cover - defensive
-        print(f"api: could not record the DLQ entry for run {run_id}: {dlq_exc}")
+        logger.warning(f"api: could not record the DLQ entry for run {run_id}: {dlq_exc}")
 
 
 def _pending_response_after_decision_error(run_id: str, exc: Exception, action: str) -> RunResponse | None:
@@ -910,7 +910,7 @@ def _pending_response_after_decision_error(run_id: str, exc: Exception, action: 
     _record_decision_failure(run_id, action, exc, record)
     if not record or record.get("status") != "pending_approval":
         return None
-    print(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
+    logger.warning(f"api: {action} failed for run {run_id}; keeping pending approval: {exc}")
     # The redraft give-up carries a user-facing French message; show it as-is
     # instead of wrapping it in the technical English envelope.
     if isinstance(exc, graph_module.RedraftGiveUpError):
@@ -1640,11 +1640,11 @@ async def outlook_connect_callback(
         if settings.setup_enabled:
             _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
-        print(f"api: outlook oauth callback rejected: {exc}")
+        logger.warning(f"api: outlook oauth callback rejected: {exc}")
         instance_id = payload["agent_instance_id"] if payload else None
         return _oauth_callback_redirect("outlook", instance_id, "error", str(exc))
     except Exception as exc:
-        print(f"api: outlook oauth callback failed: {exc!r}\n{traceback.format_exc()}")
+        logger.warning(f"api: outlook oauth callback failed: {exc!r}\n{traceback.format_exc()}")
         instance_id = payload["agent_instance_id"] if payload else None
         return _oauth_callback_redirect(
             "outlook",
@@ -1736,7 +1736,7 @@ def _start_setup_after_connect(background_tasks: BackgroundTasks, user_id: str, 
                 run_pipeline_inline, user_id, agent_instance_id, store=app.state.store
             )
     except Exception as exc:
-        print(f"api: failed to start onboarding for {user_id}/{agent_instance_id}: {exc}")
+        logger.warning(f"api: failed to start onboarding for {user_id}/{agent_instance_id}: {exc}")
 
 
 @app.get("/connect/gmail/callback")
@@ -1756,13 +1756,13 @@ async def gmail_connect_callback(
         if settings.setup_enabled:
             _start_setup_after_connect(background_tasks, payload["user_id"], payload["agent_instance_id"])
     except (ValueError, RuntimeError) as exc:
-        print(f"api: gmail oauth callback rejected: {exc}")
+        logger.warning(f"api: gmail oauth callback rejected: {exc}")
         instance_id = payload["agent_instance_id"] if payload else None
         return _gmail_callback_redirect(instance_id, "error", str(exc))
     except Exception as exc:
         # Token exchange reaches out to Google; a transient network failure (or a
         # stale/replayed single-use code) must not surface as a raw 500.
-        print(f"api: gmail oauth callback failed: {exc!r}\n{traceback.format_exc()}")
+        logger.warning(f"api: gmail oauth callback failed: {exc!r}\n{traceback.format_exc()}")
         instance_id = payload["agent_instance_id"] if payload else None
         return _gmail_callback_redirect(
             instance_id,
@@ -2839,7 +2839,7 @@ async def junk_suggestions(request: Request, limit: int = Query(default=200, ge=
     try:
         messages = await asyncio.to_thread(get_provider().list_inbox, limit)
     except Exception as exc:
-        print(f"api: junk suggestions unavailable: {exc}")
+        logger.warning(f"api: junk suggestions unavailable: {exc}")
         raise HTTPException(
             status_code=503,
             detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
@@ -3290,7 +3290,7 @@ async def suggest_persona_endpoint(request: Request) -> dict:
         sent_samples = await asyncio.to_thread(provider.fetch_sent, cfg.style_learning.max_samples)
         received = await asyncio.to_thread(provider.list_inbox, 25)
     except Exception as exc:
-        print(f"api: persona suggestion Gmail read unavailable for user {user_id}: {exc}")
+        logger.warning(f"api: persona suggestion Gmail read unavailable for user {user_id}: {exc}")
         raise HTTPException(
             status_code=503,
             detail="Gmail is unavailable. Check OAuth credentials and container network access.",
@@ -3302,7 +3302,7 @@ async def suggest_persona_endpoint(request: Request) -> dict:
             suggest_persona, sent_samples, received, graph_module.llm
         )
     except Exception as exc:
-        print(f"api: persona suggestion analysis failed for user {user_id}: {exc}")
+        logger.warning(f"api: persona suggestion analysis failed for user {user_id}: {exc}")
         raise HTTPException(status_code=503, detail="Persona analysis failed with the configured LLM") from exc
     return {
         "agent_instance_id": current_agent_instance_id(),
@@ -3572,7 +3572,7 @@ async def learn_style(request: Request) -> dict:
     try:
         samples = await asyncio.to_thread(get_provider().fetch_sent, cfg.style_learning.max_samples)
     except Exception as exc:
-        print(f"api: style learning Gmail read unavailable for user {user_id}: {exc}")
+        logger.warning(f"api: style learning Gmail read unavailable for user {user_id}: {exc}")
         raise HTTPException(
             status_code=503,
             detail="Gmail sent mail is unavailable. Check OAuth credentials and container network access.",
@@ -3583,7 +3583,7 @@ async def learn_style(request: Request) -> dict:
         profile = await asyncio.to_thread(analyze_style, samples, graph_module.llm)
     except Exception as exc:
         message = str(exc)
-        print(f"api: style learning analysis failed for user {user_id}: {exc}")
+        logger.warning(f"api: style learning analysis failed for user {user_id}: {exc}")
         if "rate_limit" in message or "429" in message or "Rate limit" in message:
             raise HTTPException(
                 status_code=429,
@@ -3808,7 +3808,7 @@ async def sync_unread(request: Request, limit: int | None = Query(default=None, 
     reachable = await asyncio.to_thread(provider.probe)
     if not reachable.get("ok"):
         error = reachable.get("error") or "mailbox unreachable"
-        print(f"api: gmail sync unavailable for user {user_id}: {error}")
+        logger.warning(f"api: gmail sync unavailable for user {user_id}: {error}")
         record_sync_failure(error)
         raise HTTPException(
             status_code=503,
@@ -3819,7 +3819,7 @@ async def sync_unread(request: Request, limit: int | None = Query(default=None, 
         effective_limit = limit or load_runtime_settings(current_agent_instance_id()).sync_limit
         outcomes = await poll_once(request.app.state.graph, provider=provider, max_results=effective_limit)
     except Exception as exc:
-        print(f"api: gmail sync failed for user {user_id}: {exc}")
+        logger.warning(f"api: gmail sync failed for user {user_id}: {exc}")
         record_sync_failure(str(exc))
         detail = public_sync_error_message(str(exc))
         status_code = 429 if "rate limit" in detail.lower() else 503
@@ -4093,7 +4093,7 @@ async def inbox(
 
 async def _inbox_unavailable(exc: Exception, user_id: str, user_dept: str | None, limit: int, mailbox: str = "inbox") -> dict:
     """Gmail is unreachable: fall back to the last runs this instance recorded."""
-    print(f"api: gmail inbox unavailable for user {user_id}: {exc}")
+    logger.warning(f"api: gmail inbox unavailable for user {user_id}: {exc}")
     if mailbox == "sent":
         return {
             "messages": [],
@@ -4139,7 +4139,7 @@ async def _inbox_action(method_name: str, msg_id: str, action: str) -> dict:
         provider = get_provider()
         await asyncio.to_thread(getattr(provider, method_name), msg_id)
     except Exception as exc:
-        print(f"api: gmail inbox action {action} unavailable for {msg_id}: {exc}")
+        logger.warning(f"api: gmail inbox action {action} unavailable for {msg_id}: {exc}")
         raise HTTPException(
             status_code=503,
             detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
@@ -4177,7 +4177,7 @@ async def inbox_force_agent(request: Request, msg_id: str) -> dict:
     try:
         await asyncio.to_thread(provider.mark_as_unread, msg_id)
     except Exception as exc:
-        print(f"api: gmail force-agent unavailable for {msg_id}: {exc}")
+        logger.warning(f"api: gmail force-agent unavailable for {msg_id}: {exc}")
         raise HTTPException(
             status_code=503,
             detail="Gmail inbox is unavailable. Check OAuth credentials and container network access.",
@@ -4361,7 +4361,7 @@ async def _approve_run(graph, run_id: str, args) -> RunResponse:
     except Exception as exc:
         response = _execute_pending_action(run_id, args)
         if response is not None:
-            print(f"api: approve graph resume failed for run {run_id}; used pending action fallback: {exc}")
+            logger.warning(f"api: approve graph resume failed for run {run_id}; used pending action fallback: {exc}")
             return response
         response = _pending_response_after_decision_error(run_id, exc, "approve")
         if response is not None:

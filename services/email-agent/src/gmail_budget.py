@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import defaultdict, deque
@@ -8,6 +9,8 @@ from src.config import settings
 from src.metrics import inc_counter, register_metric
 from src.shared_cache import window_add, window_clear, window_count
 from src.tenant import current_agent_instance_id, normalize_agent_instance_id
+
+logger = logging.getLogger(__name__)
 
 _WINDOW_SECONDS = 3600.0
 _ALERT_RATIO = 0.8
@@ -55,7 +58,7 @@ def record_gmail_call(count: int = 1, agent_instance_id: str | None = None) -> N
             if fresh:
                 _alerted[instance_id] = now
         if fresh:
-            print(f"poller: {instance_id} at {used}/{budget} Gmail calls this hour (>= 80% budget)")
+            logger.info(f"poller: {instance_id} at {used}/{budget} Gmail calls this hour (>= 80% budget)")
             inc_counter("gmail_budget_alerts_total", instance=instance_id)
 
 

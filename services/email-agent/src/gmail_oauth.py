@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.parse
 import urllib.request
@@ -17,6 +18,8 @@ from src.token_store import (
     has_stored_token,
     prepared_token_file,
 )
+
+logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - exercised through monkeypatched fakes in unit tests.
     from google_auth_oauthlib.flow import Flow
@@ -159,7 +162,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
         with _relaxed_token_scope():
             flow.fetch_token(code=code)
     except Exception as exc:
-        print(f"oauth: token exchange failed for {agent_instance_id}: {exc!r}")
+        logger.warning(f"oauth: token exchange failed for {agent_instance_id}: {exc!r}")
         raise ValueError(_explain_token_fetch_error(exc)) from exc
 
     _assert_scopes_sufficient(flow.credentials)
@@ -177,7 +180,7 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(token_json)
     except Exception as exc:
-        print(f"oauth: token persistence failed for {agent_instance_id}: {exc!r}")
+        logger.warning(f"oauth: token persistence failed for {agent_instance_id}: {exc!r}")
         raise RuntimeError(
             f"Gmail authorized but the token could not be stored ({exc}). "
             "Check the token store volume and encryption key, then reconnect."
@@ -188,11 +191,11 @@ def exchange_code_for_token(code: str, state_payload: dict[str, Any]) -> Path:
         delete_token(user_id, agent_instance_id)
         raise
     if not getattr(flow.credentials, "refresh_token", "unknown"):
-        print(
+        logger.info(
             f"oauth: WARNING — no refresh_token returned for {agent_instance_id}; "
             "the connection will drop when the access token expires"
         )
-    print(f"oauth: token stored for {agent_instance_id}")
+    logger.info(f"oauth: token stored for {agent_instance_id}")
     return path
 
 
@@ -218,7 +221,7 @@ def revoke_gmail_token(
             data = json.loads(raw)
             revoke_value = data.get("refresh_token") or data.get("token")
     except Exception as exc:
-        print(f"token: could not read token for revocation: {exc}")
+        logger.warning(f"token: could not read token for revocation: {exc}")
 
     # Attempt Google-side revocation — best-effort.
     if revoke_value:
@@ -233,7 +236,7 @@ def revoke_gmail_token(
             with urllib.request.urlopen(req, timeout=5):
                 pass
         except Exception as exc:
-            print(f"token: Google revocation request failed (local token still deleted): {exc}")
+            logger.warning(f"token: Google revocation request failed (local token still deleted): {exc}")
 
     delete_token(user_id, agent_instance_id)
     release_mailbox("gmail", agent_instance_id)
