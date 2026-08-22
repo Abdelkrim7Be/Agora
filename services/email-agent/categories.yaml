@@ -2,49 +2,72 @@ enabled: true
 categories:
 - name: attestation_travail
   display_name: Attestation de travail
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
   priority: urgent
-  owner: HR
-  approver: abdelkrimbellagnech99@gmail.com
-  route_to:
-  - abdelkrimbellagnech99@gmail.com
   when:
     sender_contains: []
+    sender_regex: []
     sender_domain: []
     subject_contains:
     - attestation
     - work certificate
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: attestation_reply
   policy: auto_draft
   labels: []
-- name: reclamation
-  display_name: Réclamation
-  priority: urgent
-  owner: Operations
-  approver: redacted@example.com
-  route_to:
-  - redacted@example.com
-  when:
-    sender_contains: []
-    sender_domain: []
-    subject_contains:
-    - reclamation
-    - réclamation
-    - complaint
-    - remboursement
-    labels: []
-  template: null
-  policy: notify
-  labels: []
-- name: hr_requests
-  display_name: HR Requests
-  priority: urgent
   owner: HR
   approver: abdelkrimbellagnech99@gmail.com
   route_to:
   - abdelkrimbellagnech99@gmail.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
+- name: reclamation
+  display_name: "R\xE9clamation"
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
+  priority: urgent
   when:
     sender_contains: []
+    sender_regex: []
+    sender_domain: []
+    subject_contains:
+    - reclamation
+    - "r\xE9clamation"
+    - complaint
+    - remboursement
+    body_contains: []
+    labels: []
+    outside_working_hours: null
+  template: null
+  policy: notify
+  labels: []
+  owner: Operations
+  approver: redacted@example.com
+  route_to:
+  - redacted@example.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
+- name: hr_requests
+  display_name: HR Requests
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
+  priority: urgent
+  when:
+    sender_contains: []
+    sender_regex: []
     sender_domain: []
     subject_contains:
     - stagiaire
@@ -52,82 +75,126 @@ categories:
     - candidature
     - internship
     - cv
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: candidate_ack_reply
   policy: auto_draft
   labels: []
+  owner: HR
+  approver: abdelkrimbellagnech99@gmail.com
+  route_to:
+  - abdelkrimbellagnech99@gmail.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
 - name: finance_requests
   display_name: Finance Requests
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
   priority: urgent
-  owner: Finance
-  approver: redacted@example.com
-  route_to:
-  - redacted@example.com
   when:
     sender_contains: []
+    sender_regex: []
     sender_domain: []
     subject_contains:
     - facture
     - invoice
     - payment
     - paiement
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: finance_request_reply
   policy: auto_draft
   labels: []
-- name: conge
-  display_name: Demande de congé
-  priority: urgent
-  owner: HR
-  approver: abdelkrimbellagnech99@gmail.com
+  owner: Finance
+  approver: redacted@example.com
   route_to:
-  - abdelkrimbellagnech99@gmail.com
+  - redacted@example.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
+- name: conge
+  display_name: "Demande de cong\xE9"
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
+  priority: urgent
   when:
     sender_contains: []
+    sender_regex: []
     sender_domain: []
     subject_contains:
-    - congé
+    - "cong\xE9"
     - conge
     - leave
     - vacation
     - absence
     - time off
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: conge_reply
   policy: auto_draft
   labels: []
+  owner: HR
+  approver: abdelkrimbellagnech99@gmail.com
+  route_to:
+  - abdelkrimbellagnech99@gmail.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
 - name: rendez_vous
   display_name: Rendez-vous
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
   priority: normal
-  owner: Operations
-  approver: redacted@example.com
-  route_to:
-  - redacted@example.com
   when:
     sender_contains: []
+    sender_regex: []
     sender_domain: []
     subject_contains:
     - rendez-vous
     - rendez vous
     - meeting
-    - réunion
+    - "r\xE9union"
     - reunion
     - appointment
-    - disponibilité
+    - "disponibilit\xE9"
     - disponibilite
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: rdv_reply
   policy: auto_draft
   labels: []
-- name: devis
-  display_name: Demande de devis
-  priority: normal
-  owner: Finance
+  owner: Operations
   approver: redacted@example.com
   route_to:
   - redacted@example.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
+- name: devis
+  display_name: Demande de devis
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
+  priority: normal
   when:
     sender_contains: []
+    sender_regex: []
     sender_domain: []
     subject_contains:
     - devis
@@ -135,118 +202,104 @@ categories:
     - tarif
     - pricing
     - proposition
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: quote_request_reply
   policy: auto_draft
   labels: []
+  owner: Finance
+  approver: redacted@example.com
+  route_to:
+  - redacted@example.com
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
 - name: newsletter
   display_name: Newsletter
+  description: null
+  accepts_automated: false
+  template_mode: strict
+  enabled: true
   priority: low
   when:
     sender_contains:
     - newsletter
     - noreply
     - no-reply
+    sender_regex: []
     sender_domain: []
     subject_contains: []
+    body_contains: []
     labels: []
+    outside_working_hours: null
   template: null
   policy: organize
   labels:
   - Newsletters
+  owner: null
+  approver: null
+  route_to: []
+  instructions: null
+  require_approval: false
+  external_send_allowed: true
+  allowed_actions: null
 templates:
 - name: attestation_reply
   subject: null
-  body: |
-    Bonjour {{name}},
-
-    Merci pour votre demande d'attestation de travail. Je confirme la prise en
-    charge de votre demande et reviens vers vous avec le document signé dans les
-    plus brefs délais.
-
-    Pourriez-vous me confirmer l'adresse exacte à faire figurer sur l'attestation
-    ainsi que le motif de la demande ?
-
-    Bien cordialement,
+  body: "Bonjour {{name}},\n\nMerci pour votre demande d'attestation de travail. Je\
+    \ confirme la prise en\ncharge de votre demande et reviens vers vous avec le document\
+    \ sign\xE9 dans les\nplus brefs d\xE9lais.\n\nPourriez-vous me confirmer l'adresse\
+    \ exacte \xE0 faire figurer sur l'attestation\nainsi que le motif de la demande\
+    \ ?\n\nBien cordialement,\n"
   variables:
   - name
 - name: conge_reply
   subject: null
-  body: |
-    Bonjour {{name}},
-
-    Merci pour votre demande de congé. Je confirme la bonne réception et reviens
-    vers vous après validation avec le responsable concerné.
-
-    Pourriez-vous me préciser les dates exactes souhaitées (début et fin) ainsi
-    que le motif si nécessaire ?
-
-    Bien cordialement,
+  body: "Bonjour {{name}},\n\nMerci pour votre demande de cong\xE9. Je confirme la\
+    \ bonne r\xE9ception et reviens\nvers vous apr\xE8s validation avec le responsable\
+    \ concern\xE9.\n\nPourriez-vous me pr\xE9ciser les dates exactes souhait\xE9es\
+    \ (d\xE9but et fin) ainsi\nque le motif si n\xE9cessaire ?\n\nBien cordialement,\n"
   variables:
   - name
 - name: rdv_reply
   subject: null
-  body: |
-    Bonjour {{name}},
-
-    Merci pour votre message. Je confirme la prise en compte de votre demande de
-    rendez-vous et reviens vers vous avec un créneau adapté dans les plus brefs
-    délais.
-
-    Pourriez-vous m'indiquer vos disponibilités ainsi que le format souhaité
-    (présentiel ou visioconférence) ?
-
-    Bien cordialement,
+  body: "Bonjour {{name}},\n\nMerci pour votre message. Je confirme la prise en compte\
+    \ de votre demande de\nrendez-vous et reviens vers vous avec un cr\xE9neau adapt\xE9\
+    \ dans les plus brefs\nd\xE9lais.\n\nPourriez-vous m'indiquer vos disponibilit\xE9\
+    s ainsi que le format souhait\xE9\n(pr\xE9sentiel ou visioconf\xE9rence) ?\n\n\
+    Bien cordialement,\n"
   variables:
   - name
 - name: candidate_ack_reply
   subject: null
-  body: |
-    Bonjour {{name}},
-
-    Merci pour votre candidature et l'intérêt porté à notre équipe. Votre dossier
-    a bien été reçu et sera étudié avec attention.
-
-    Pour faciliter le traitement, pouvez-vous confirmer le poste ou le type de stage
-    visé, vos dates de disponibilité, et joindre votre CV à jour si ce n'est pas
-    déjà fait ?
-
-    Nous revenons vers vous dès qu'une prochaine étape est définie.
-
-    Bien cordialement,
+  body: "Bonjour {{name}},\n\nMerci pour votre candidature et l'int\xE9r\xEAt port\xE9\
+    \ \xE0 notre \xE9quipe. Votre dossier\na bien \xE9t\xE9 re\xE7u et sera \xE9tudi\xE9\
+    \ avec attention.\n\nPour faciliter le traitement, pouvez-vous confirmer le poste\
+    \ ou le type de stage\nvis\xE9, vos dates de disponibilit\xE9, et joindre votre\
+    \ CV \xE0 jour si ce n'est pas\nd\xE9j\xE0 fait ?\n\nNous revenons vers vous d\xE8\
+    s qu'une prochaine \xE9tape est d\xE9finie.\n\nBien cordialement,\n"
   variables:
   - name
 - name: finance_request_reply
   subject: null
-  body: |
-    Bonjour {{name}},
-
-    Merci pour votre message. Votre demande liée à la facturation ou au paiement a
-    bien été transmise au suivi financier.
-
-    Pour éviter tout aller-retour, pouvez-vous confirmer le numéro de facture, le
-    montant concerné, la société de facturation et la date d'échéance ou de paiement
-    attendue ?
-
-    Nous vous répondons dès vérification des éléments.
-
-    Bien cordialement,
+  body: "Bonjour {{name}},\n\nMerci pour votre message. Votre demande li\xE9e \xE0\
+    \ la facturation ou au paiement a\nbien \xE9t\xE9 transmise au suivi financier.\n\
+    \nPour \xE9viter tout aller-retour, pouvez-vous confirmer le num\xE9ro de facture,\
+    \ le\nmontant concern\xE9, la soci\xE9t\xE9 de facturation et la date d'\xE9ch\xE9\
+    ance ou de paiement\nattendue ?\n\nNous vous r\xE9pondons d\xE8s v\xE9rification\
+    \ des \xE9l\xE9ments.\n\nBien cordialement,\n"
   variables:
   - name
 - name: quote_request_reply
   subject: null
-  body: |
-    Bonjour {{name}},
-
-    Merci pour votre demande de devis. Nous avons bien reçu votre besoin et préparons
-    une réponse adaptée.
-
-    Pouvez-vous nous préciser le périmètre attendu, le volume estimé, l'échéance
-    souhaitée et toute contrainte particulière à prendre en compte ?
-
-    Nous revenons vers vous avec une proposition structurée dans les meilleurs délais.
-
-    Bien cordialement,
+  body: "Bonjour {{name}},\n\nMerci pour votre demande de devis. Nous avons bien re\xE7\
+    u votre besoin et pr\xE9parons\nune r\xE9ponse adapt\xE9e.\n\nPouvez-vous nous\
+    \ pr\xE9ciser le p\xE9rim\xE8tre attendu, le volume estim\xE9, l'\xE9ch\xE9ance\n\
+    souhait\xE9e et toute contrainte particuli\xE8re \xE0 prendre en compte ?\n\n\
+    Nous revenons vers vous avec une proposition structur\xE9e dans les meilleurs\
+    \ d\xE9lais.\n\nBien cordialement,\n"
   variables:
   - name
 contacts:
@@ -256,3 +309,9 @@ contacts:
   category: attestation_travail
   display_name: null
   priority: urgent
+- email: null
+  domain: client.example
+  name: null
+  category: support
+  display_name: null
+  priority: null
