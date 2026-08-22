@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from src import api
 from src import automation
+from src.routers import inbox as inbox_router
 from src.routers import notifications as notifications_router
 from src.routers import rules as rules_router
 from src.routers import signature as signature_router
@@ -386,7 +387,7 @@ def test_drafts_endpoint_filters_category_and_priority(monkeypatch):
             {"run_id": "run-3", "status": "pending_approval", "category": "reclamation", "priority": "low"},
         ]
 
-    monkeypatch.setattr(api, "list_runs", fake_list_runs)
+    monkeypatch.setattr(inbox_router, "list_runs", fake_list_runs)
 
     with TestClient(app) as client:
         response = client.get(
@@ -1344,7 +1345,7 @@ def test_inbox_returns_agent_known_messages_when_gmail_unavailable(monkeypatch):
         ]
 
     patch_provider(monkeypatch, api, list_inbox=unavailable)
-    monkeypatch.setattr(api, "list_runs", runs)
+    monkeypatch.setattr(inbox_router, "list_runs", runs)
 
     with TestClient(app) as client:
         response = client.get("/inbox", headers={"X-Agora-User": "owner"})
