@@ -46,7 +46,6 @@ class CiScanningTest(unittest.TestCase):
                 "email-agent": "email-agent",
                 "security": "security",
                 "gateway": "gateway",
-                "web": "web",
                 "web-react": "web-react",
             },
         )
@@ -65,7 +64,7 @@ class CiScanningTest(unittest.TestCase):
         self.assertIn("--pkg-types os,library", script)
         self.assertIn("--severity HIGH,CRITICAL", script)
         self.assertIn("--exit-code 1", script)
-        for image in ("email-agent", "security", "gateway", "web", "web-react"):
+        for image in ("email-agent", "security", "gateway", "web-react"):
             self.assertIn(f"scan_image {image} {image}", script)
 
     def test_secret_scan_covers_full_git_history_and_blocks_findings(self):
@@ -95,7 +94,6 @@ class CiScanningTest(unittest.TestCase):
             "email-agent": (ROOT / "services" / "email-agent" / "Dockerfile").read_text(),
             "security": (ROOT / "services" / "security" / "Dockerfile").read_text(),
             "gateway": (ROOT / "services" / "gateway" / "Dockerfile").read_text(),
-            "web": (ROOT / "services" / "web" / "Dockerfile").read_text(),
             "web-react": (ROOT / "services" / "web-react" / "Dockerfile").read_text(),
         }
 
@@ -104,9 +102,9 @@ class CiScanningTest(unittest.TestCase):
                 "RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel",
                 dockerfiles[service],
             )
-        for service in ("gateway", "web", "web-react"):
+        for service in ("gateway", "web-react"):
             self.assertIn("RUN apk upgrade --no-cache", dockerfiles[service])
-        for service in ("web", "web-react"):
+        for service in ("web-react",):
             self.assertIn("USER root", dockerfiles[service])
             self.assertIn("USER 101", dockerfiles[service])
 

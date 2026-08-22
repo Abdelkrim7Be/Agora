@@ -59,7 +59,6 @@ class TlsIngressTest(unittest.TestCase):
 
     def test_https_scheme_survives_web_proxy(self):
         for path in (
-            ROOT.parent / "services" / "web" / "nginx.conf",
             ROOT.parent / "services" / "web-react" / "nginx.conf",
         ):
             config = path.read_text()
