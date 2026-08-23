@@ -13,7 +13,6 @@ code change.
 from __future__ import annotations
 
 from email.utils import parseaddr
-from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field
