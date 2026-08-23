@@ -102,6 +102,11 @@ class CiScanningTest(unittest.TestCase):
                 "RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel",
                 dockerfiles[service],
             )
+            # The pip upgrade alone left the Debian layer stale — the util-linux
+            # family (CVE-2026-53612..53615) is what failed the image scan.
+            self.assertIn("apt-get upgrade -y", dockerfiles[service])
+            # Two transitive packages nothing pins: setuptools, msgpack.
+            self.assertIn('"setuptools>=78.1.1" "msgpack>=1.2.1"', dockerfiles[service])
         for service in ("gateway", "web-react"):
             self.assertIn("RUN apk upgrade --no-cache", dockerfiles[service])
         for service in ("web-react",):

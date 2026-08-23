@@ -110,7 +110,6 @@ from src.gmail_sync import get_last_history_id, set_last_history_id, setup_gmail
 from src.sync_status import get_status, record_failure, record_success, setup_sync_status
 from src.campaigns import due_campaign_ids, load_campaign_runs, save_campaign_runs, send_campaign_run
 from src.run_registry import (
-    ACTIVE_RUN_STATUSES,
     find_run_by_email,
     list_runs,
     setup_run_registry,
