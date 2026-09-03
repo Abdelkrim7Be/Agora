@@ -1,44 +1,20 @@
-# Capability policy for the agent's tool actions. Default-deny: anything not listed is denied.
-#
-# Attachments on write_email/create_draft are NOT checked here — the byte/count cap
-# (AGENT_MAX_ATTACHMENT_BYTES / AGENT_MAX_ATTACHMENT_COUNT) is enforced in the email-agent
-# itself (src/capabilities/attachment_support.py, src/run_attachments.py), not through
-# /authorize. At authorize time the agent only has the model's raw tool args, not downloaded
-# attachment bytes; resolving them earlier just to report a size would force a real download
-# on every call (including simulated/dry-run ones) for no real security gain — reattached
-# files are the sender's own (already Gmail-size-bounded), and uploaded files are capped at
-# upload time before they ever reach a tool.
 default: deny
 
 tools:
   Done:
     decision: allow
   write_email:
-    decision: hitl            # sends always go through the human approval gate
+    decision: hitl
     args:
-      # Mail arriving from outside is UNTRUSTED by baseline and the classifier can
-      # only push it further down to HOSTILE, never up — so this list means "any
-      # recipient except one lifted from content classified hostile". Listing only
-      # TRUSTED/INTERNAL here would block every reply to an external customer,
-      # which is most of what this agent does. The protection is the HOSTILE
-      # exclusion, and it is only worth anything while something actually
-      # classifies content: see AGENT_SECURITY_DEEP_CHECK_DRAFTS, which puts every
-      # drafted reply through the quarantined classifier before it is approvable.
       to: { allow_trust: [TRUSTED, INTERNAL, UNTRUSTED] }
     recipients:
-      allow_domains: []       # empty = any domain (still subject to deny_domains)
+      allow_domains: []
       deny_domains: []
     limits:
       max_content_chars: 20000
-      # The reservation is taken when a draft is PROPOSED (each HITL feedback
-      # round proposes a new draft with a new action id), not when it is sent —
-      # the approval gate still guarantees at most one actual send. Dev-friendly
-      # ceilings: long feedback conversations must never exhaust a run; tighten
-      # for production.
       max_per_run: 50
       max_per_day: 1000
 
-  # Reversible inbox organization actions.
   apply_label:
     decision: allow
   remove_label:
@@ -50,12 +26,9 @@ tools:
   archive_email:
     decision: allow
 
-  # Trash is reversible for a short window, but destructive enough to ask first.
   trash_email:
     decision: hitl
 
-  # Drafts do not send externally, so they keep recipient/content policy but no
-  # send rate-limit — a draft must not consume the per-run/per-day send budget.
   create_draft:
     decision: allow
     args:
@@ -66,12 +39,6 @@ tools:
     limits:
       max_content_chars: 20000
 
-  # NOTE: send tools no longer take a `to` argument — the agent resolves the
-  # destination from the message headers or the workflow's routing and declares
-  # it in `recipients`, which the `recipients:` blocks below check. The
-  # `to: { allow_trust: ... }` rules are kept as defence in depth for any tool
-  # that does pass a recipient argument; they are inert for the ones that don't.
-  # Sending actions always go through HITL and share send-like recipient/content caps.
   forward_email:
     decision: hitl
     args:
@@ -83,12 +50,6 @@ tools:
       max_content_chars: 20000
       max_per_run: 20
       max_per_day: 500
-  # Internal workflow routing notice: synthesized note only, never the original
-  # message body, so it gets a much smaller content cap than an actual forward.
-  # Same recipient-trust rule as forward_email/reply_all (workflow-configured
-  # recipients read as TRUSTED, replies within a known-internal thread as
-  # INTERNAL) — never UNTRUSTED, since that's a recipient lifted from
-  # unsanitized email content.
   notify_internal:
     decision: hitl
     args:
@@ -109,11 +70,6 @@ tools:
       max_per_run: 20
       max_per_day: 500
 
-  # Outbound broadcast campaigns. The batch approval in the control panel is the
-  # human gate, so the decision is allow — but every recipient is still checked
-  # against recipient policy, content caps, and a per-campaign / per-day ceiling.
-  # run_id carries the campaign id (per_run == max recipients per campaign);
-  # a unique action_id per recipient keeps the daily counter honest.
   send_campaign:
     decision: allow
     recipients:
