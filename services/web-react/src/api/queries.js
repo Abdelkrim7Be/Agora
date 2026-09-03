@@ -65,6 +65,13 @@ export function useAuditQuery(page, limit, includeTechnicalNoise = false) {
   });
 }
 
+export function useVerifyAuditChain() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: () => api('/audit/verify'),
+  });
+}
+
 export function useUsersQuery(enabled = true) {
   const { api } = useApi();
   const { token } = useAuth();
@@ -293,6 +300,31 @@ export function useChangeMyPassword() {
       method: 'PUT',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  });
+}
+
+export function useSetupMyMfa() {
+  const { api } = useApi();
+  return useMutation({
+    mutationFn: () => api('/auth/mfa/setup', { method: 'POST' }),
+  });
+}
+
+export function useConfirmMyMfa() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (code) => api('/auth/mfa/confirm', { method: 'POST', body: JSON.stringify({ code }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me'] }),
+  });
+}
+
+export function useDisableMyMfa() {
+  const { api } = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (password) => api('/auth/mfa/disable', { method: 'POST', body: JSON.stringify({ password }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me'] }),
   });
 }
 

@@ -65,7 +65,12 @@ const ROLE_LABELS_FR = {
 };
 
 export function roleLabelFr(value) {
-  return ROLE_LABELS_FR[String(value || '').toLowerCase()] || value || 'lecteur';
+  // No fallback to a specific role name: a falsy value almost always means the
+  // real role hasn't loaded yet, not that the user genuinely has no role — and
+  // silently showing the lowest-privilege label ("lecteur") in that gap reads
+  // as a confirmed fact rather than a still-loading placeholder.
+  if (!value) return '';
+  return ROLE_LABELS_FR[String(value).toLowerCase()] || value;
 }
 
 // Capability ids stay English in the API; only the display layer is translated.

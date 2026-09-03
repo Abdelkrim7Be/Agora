@@ -36,11 +36,11 @@ public class MeController {
     }
 
     public record ProfileResponse(Long id, String username, String email, String role,
-                                  String department, String displayName) {
+                                  String department, String displayName, boolean mfaEnabled) {
         static ProfileResponse from(AppUser user) {
             return new ProfileResponse(
                     user.getId(), user.getUsername(), user.getEmail(),
-                    user.getRole(), user.getDepartment(), user.getDisplayName()
+                    user.getRole(), user.getDepartment(), user.getDisplayName(), user.isMfaEnabled()
             );
         }
     }

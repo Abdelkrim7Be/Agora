@@ -7,6 +7,7 @@ the module that includes them — that would be a cycle.
 from __future__ import annotations
 
 import hmac
+import unicodedata
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
@@ -63,12 +64,28 @@ def _require_instance_role(request: Request, min_role: str) -> None:
         raise HTTPException(status_code=403, detail="Insufficient instance role")
 
 
+def _normalize_dept(value: str | None) -> str:
+    """Case/accent-fold a department string for comparison.
+
+    Department names are free text (seeded per account, assigned per run by the
+    triage/routing step) and the same department has shown up spelled two ways
+    ("Securite" vs "Sécurité") — an exact-string compare silently hid a user's
+    own department's runs from them. Does not reorder words: a genuinely
+    different department name is a data-entry problem to fix at the source,
+    not something a security-relevant comparison should paper over.
+    """
+    if not value:
+        return ""
+    folded = unicodedata.normalize("NFKD", value.strip().casefold())
+    return "".join(ch for ch in folded if not unicodedata.combining(ch))
+
+
 def _require_dept_access(request: Request, record: dict | None) -> None:
     if record is None:
         return
     user_dept = _request_user_dept(request)
     workflow_dept = record.get("workflow_dept")
-    if user_dept and workflow_dept and workflow_dept != user_dept:
+    if user_dept and workflow_dept and _normalize_dept(workflow_dept) != _normalize_dept(user_dept):
         raise HTTPException(status_code=403, detail="Not authorized for this department's approval.")
 
 

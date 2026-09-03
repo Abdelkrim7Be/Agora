@@ -175,7 +175,7 @@ export default function Topbar() {
     || currentInstance?.mailbox_identity
     || 'Utilisateur connecté';
   const initials = String(displayName).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'U';
-  const roleLabel = roleLabelFr(currentInstanceRole);
+  const roleLabel = roleLabelFr(currentInstanceRole) || 'chargement…';
 
   return (
     <header className="topbar">

@@ -3,7 +3,7 @@ import { PageHeading } from '../../components/layout/PageHeading';
 import { TablePager } from '../../components/ui/TablePager';
 import { outcomeClass, compactText } from '../../utils/format';
 import { useStatus } from '../../contexts/StatusContext';
-import { useAuditQuery } from '../../api/queries';
+import { useAuditQuery, useVerifyAuditChain } from '../../api/queries';
 
 const TECHNICAL_NOISE_PATHS = new Set([
   '/api/agent/runs',
@@ -38,6 +38,7 @@ export default function AuditPage() {
   const [search, setSearch] = useState('');
   const [showTechnicalNoise, setShowTechnicalNoise] = useState(false);
   const query = useAuditQuery(page, limit, showTechnicalNoise);
+  const verifyChain = useVerifyAuditChain();
 
   useEffect(() => {
     if (query.data) setStatus(`Page d’audit ${page + 1} chargée.`, 'ok');
@@ -110,6 +111,27 @@ export default function AuditPage() {
           <span className="material-symbols-outlined" aria-hidden="true">download</span>
           <span>Export CSV</span>
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            verifyChain.reset();
+            verifyChain.mutate(undefined, {
+              onSuccess: (result) => {
+                setStatus(
+                  result.valid
+                    ? `Chaîne d’audit intègre (${result.verifiedCount} événements vérifiés).`
+                    : `Chaîne d’audit rompue à l’événement #${result.brokenAtId}.`,
+                  result.valid ? 'ok' : 'error',
+                );
+              },
+              onError: (error) => setStatus(`Vérification impossible : ${error.message}`, 'error'),
+            });
+          }}
+          disabled={verifyChain.isPending}
+        >
+          <span className="material-symbols-outlined" aria-hidden="true">verified</span>
+          <span>{verifyChain.isPending ? 'Vérification…' : 'Vérifier l’intégrité'}</span>
+        </button>
         <label className="toolbar-toggle audit-noise-toggle" title="Afficher les sondages automatiques de statut et de notifications">
           <input
             type="checkbox"
@@ -129,6 +151,16 @@ export default function AuditPage() {
           ) : null}
         </span>
       </div>
+      {verifyChain.data ? (
+        <p className="empty-cell">
+          <span className={`status-pill ${verifyChain.data.valid ? 'ok' : 'error'}`}>
+            {verifyChain.data.valid ? 'Chaîne intègre' : 'Chaîne rompue'}
+          </span>{' '}
+          {verifyChain.data.valid
+            ? `${verifyChain.data.verifiedCount} événements vérifiés, ${verifyChain.data.unverifiableLegacyCount} antérieurs à la chaîne (non vérifiables).`
+            : `rompue à l’événement #${verifyChain.data.brokenAtId} — ${verifyChain.data.reason || 'raison inconnue'}.`}
+        </p>
+      ) : null}
       <div className="table-wrap">
         <table className="data-table audit-table">
           <thead>

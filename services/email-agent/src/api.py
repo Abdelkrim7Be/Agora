@@ -133,6 +133,7 @@ from src.api_shared import (
     _bypasses_gateway_secret,
     _run_timestamp_at_or_after,
     _current_categories,
+    _normalize_dept,
     _now_iso,
     _gateway_secret_is_valid,
     _request_agent_instance_id,
@@ -1792,7 +1793,10 @@ async def runs(
         limit=5000,
     )
     if user_dept:
-        all_runs = [r for r in all_runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+        all_runs = [
+            r for r in all_runs
+            if not r.get("workflow_dept") or _normalize_dept(r.get("workflow_dept")) == _normalize_dept(user_dept)
+        ]
     if category:
         all_runs = [r for r in all_runs if str(r.get("category") or "") == category]
     if priority:
@@ -1850,7 +1854,8 @@ async def _events_generator(request: Request, agent_instance_id: str, user_dept:
             if user_dept:
                 all_runs = [
                     r for r in all_runs
-                    if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept
+                    if not r.get("workflow_dept")
+                    or _normalize_dept(r.get("workflow_dept")) == _normalize_dept(user_dept)
                 ]
             current_state = {r["run_id"]: r.get("updated_at") or "" for r in all_runs}
 

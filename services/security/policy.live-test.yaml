@@ -20,6 +20,7 @@ _test_recipients: &test_recipients
     - test.inbox@example.com
     - owner@example.com
     - abdelkrimbellagnech99@gmail.com
+    - redacted@example.com
   allow_domains: []
   deny_domains: []
   deny_addresses: []
