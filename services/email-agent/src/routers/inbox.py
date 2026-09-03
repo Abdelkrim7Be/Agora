@@ -27,6 +27,7 @@ from src.tenant import (
     current_user_id,
 )
 from src.api_shared import (
+    _normalize_dept,
     _request_user_dept,
     _request_user_id,
     _require_dept_access,
@@ -207,7 +208,10 @@ async def _inbox_unavailable(exc: Exception, user_id: str, user_dept: str | None
         list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
     )
     if user_dept:
-        runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+        runs = [
+            r for r in runs
+            if not r.get("workflow_dept") or _normalize_dept(r.get("workflow_dept")) == _normalize_dept(user_dept)
+        ]
     return {
         "messages": _fallback_inbox_messages(runs, limit),
         "warning": (
@@ -223,7 +227,10 @@ async def _inbox_with_verdicts(messages: list[dict], user_dept: str | None) -> d
         list_runs, user_id=None, agent_instance_id=current_agent_instance_id(), limit=500
     )
     if user_dept:
-        runs = [r for r in runs if not r.get("workflow_dept") or r.get("workflow_dept") == user_dept]
+        runs = [
+            r for r in runs
+            if not r.get("workflow_dept") or _normalize_dept(r.get("workflow_dept")) == _normalize_dept(user_dept)
+        ]
     by_email: dict[str, dict] = {}
     for record in runs:
         email_id = record.get("email_id")

@@ -16,7 +16,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.io.IOException;
 import java.net.URI;
@@ -180,35 +182,48 @@ public class ProxyController {
             spec = spec.contentType(MediaType.parseMediaType(contentType)).body(body);
         }
 
-        spec.exchange((req, resp) -> {
-            int status = resp.getStatusCode().value();
+        try {
+            spec.exchange((req, resp) -> {
+                int status = resp.getStatusCode().value();
 
+                if (shouldRecordForwardedAudit(request, downstreamPath)) {
+                    auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
+                            downstreamPath, status, "forwarded");
+                }
+                if ("admin".equals(jwtRole) && shouldRecordAdminMailboxAccess(request, downstreamPath)) {
+                    auditService.record(username, jwtRole, "admin_mailbox_access", request.getMethod(),
+                            "/agent-instances/" + agentInstance, status, deriveAction(request));
+                }
+
+                response.setStatus(status);
+                MediaType upstreamContentType = resp.getHeaders().getContentType();
+                response.setContentType((upstreamContentType != null
+                        ? upstreamContentType
+                        : MediaType.APPLICATION_OCTET_STREAM).toString());
+                resp.getHeaders().forEach((name, values) -> {
+                    if (HOP_BY_HOP.contains(name.toLowerCase())) {
+                        return;
+                    }
+                    for (String value : values) {
+                        response.addHeader(name, value);
+                    }
+                });
+                StreamUtils.copy(resp.getBody(), response.getOutputStream());
+                response.flushBuffer();
+                return null;
+            });
+        } catch (RestClientException e) {
+            // .exchange() throws instead of returning when the upstream agent never
+            // responds (connect/read timeout) or the connection drops mid-request. Left
+            // uncaught, this both skipped the audit write above (a proxied action would
+            // leave no trace at all) and surfaced to the caller as a bare 500 with no
+            // way to tell a slow agent apart from a real server error.
             if (shouldRecordForwardedAudit(request, downstreamPath)) {
                 auditService.record(username, jwtRole, deriveAction(request), request.getMethod(),
-                        downstreamPath, status, "forwarded");
+                        downstreamPath, null, e instanceof ResourceAccessException ? "timeout" : "upstream_error");
             }
-            if ("admin".equals(jwtRole) && shouldRecordAdminMailboxAccess(request, downstreamPath)) {
-                auditService.record(username, jwtRole, "admin_mailbox_access", request.getMethod(),
-                        "/agent-instances/" + agentInstance, status, deriveAction(request));
-            }
-
-            response.setStatus(status);
-            MediaType upstreamContentType = resp.getHeaders().getContentType();
-            response.setContentType((upstreamContentType != null
-                    ? upstreamContentType
-                    : MediaType.APPLICATION_OCTET_STREAM).toString());
-            resp.getHeaders().forEach((name, values) -> {
-                if (HOP_BY_HOP.contains(name.toLowerCase())) {
-                    return;
-                }
-                for (String value : values) {
-                    response.addHeader(name, value);
-                }
-            });
-            StreamUtils.copy(resp.getBody(), response.getOutputStream());
-            response.flushBuffer();
-            return null;
-        });
+            writeUpstreamError(response, e instanceof ResourceAccessException);
+        }
     }
 
     @RequestMapping("/health")
@@ -329,6 +344,16 @@ public class ProxyController {
         response.setStatus(403);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getOutputStream().write("{\"error\":\"forbidden\"}".getBytes(StandardCharsets.UTF_8));
+        response.flushBuffer();
+    }
+
+    private void writeUpstreamError(HttpServletResponse response, boolean isTimeout) throws IOException {
+        response.setStatus(isTimeout ? 504 : 502);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        String body = isTimeout
+                ? "{\"error\":\"upstream_timeout\"}"
+                : "{\"error\":\"upstream_unavailable\"}";
+        response.getOutputStream().write(body.getBytes(StandardCharsets.UTF_8));
         response.flushBuffer();
     }
 }

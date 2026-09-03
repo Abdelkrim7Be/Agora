@@ -5,7 +5,7 @@
 # message is built. The security service enforces the same pair at policy level
 # (see SECURITY_POLICY_PATH below) — this is the layer underneath it.
 x-outbound-allowlist: &outbound_allowlist
-  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com,abdelkrimbellagnech99@gmail.com"
+  AGENT_OUTBOUND_ALLOWLIST: "agora.test.inbox@gmail.com,abdelkrimbellagnech28@gmail.com,abdelkrimbellagnech99@gmail.com,zinebbellagnech@gmail.com"
 
 # Docker GPU passthrough is not configured on this machine, so an Ollama running
 # inside Compose falls back to CPU and a draft takes minutes. The host runs Ollama

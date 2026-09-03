@@ -5,7 +5,14 @@ import { useInstance, isInstanceActive } from '../../contexts/InstanceContext';
 import { useStatus } from '../../contexts/StatusContext';
 import { currentUsername } from '../../utils/jwt';
 import { useBusy } from '../../contexts/BusyContext';
-import { useMyProfileQuery, useUpdateMyProfile, useChangeMyPassword } from '../../api/queries';
+import {
+  useMyProfileQuery,
+  useUpdateMyProfile,
+  useChangeMyPassword,
+  useSetupMyMfa,
+  useConfirmMyMfa,
+  useDisableMyMfa,
+} from '../../api/queries';
 import { PasswordStrength } from '../../components/ui/PasswordStrength';
 
 function profileStorageKey(username) {
@@ -66,6 +73,13 @@ export default function AccountPage() {
   const meQuery = useMyProfileQuery();
   const updateMe = useUpdateMyProfile();
   const changePassword = useChangeMyPassword();
+  const setupMfa = useSetupMyMfa();
+  const confirmMfa = useConfirmMyMfa();
+  const disableMfa = useDisableMyMfa();
+  const [mfaEnrollment, setMfaEnrollment] = useState(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState(null);
+  const [disablePassword, setDisablePassword] = useState('');
 
   // The display name and e-mail live on the account, not in this browser: they
   // used to be localStorage-only, so they vanished on another machine and
@@ -146,6 +160,42 @@ export default function AccountPage() {
       setStatus('Mot de passe modifié. Il servira à votre prochaine connexion.', 'ok');
     } catch (error) {
       setStatus(`Impossible de changer le mot de passe : ${error.message}`, 'error');
+    }
+  };
+
+  const handleMfaSetup = async () => {
+    try {
+      const result = await runBusy('Préparation de la double authentification', () => setupMfa.mutateAsync());
+      setMfaEnrollment(result);
+      setRecoveryCodes(null);
+      setStatus('Scannez le code avec votre application d’authentification, puis confirmez.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible de démarrer la double authentification : ${error.message}`, 'error');
+    }
+  };
+
+  const handleMfaConfirm = async (event) => {
+    event.preventDefault();
+    try {
+      const result = await runBusy('Confirmation du code', () => confirmMfa.mutateAsync(mfaCode.trim()));
+      setMfaEnrollment(null);
+      setMfaCode('');
+      setRecoveryCodes(result.recovery_codes || []);
+      setStatus('Double authentification activée.', 'ok');
+    } catch (error) {
+      setStatus(`Code invalide : ${error.message}`, 'error');
+    }
+  };
+
+  const handleMfaDisable = async (event) => {
+    event.preventDefault();
+    try {
+      await runBusy('Désactivation de la double authentification', () => disableMfa.mutateAsync(disablePassword));
+      setDisablePassword('');
+      setRecoveryCodes(null);
+      setStatus('Double authentification désactivée.', 'ok');
+    } catch (error) {
+      setStatus(`Impossible de désactiver : ${error.message}`, 'error');
     }
   };
 
@@ -254,6 +304,67 @@ export default function AccountPage() {
             servira à votre prochaine connexion.
           </div>
         ) : null}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h2>Double authentification</h2>
+            <div className="meta">
+              <span className={`status-pill ${meQuery.data?.mfaEnabled ? 'ok' : 'warn'}`}>
+                {meQuery.data?.mfaEnabled ? 'Activée' : 'Désactivée'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {recoveryCodes ? (
+          <div className="notice" role="status">
+            <p>Conservez ces codes de secours : chacun ne fonctionne qu’une fois si vous perdez l’accès à votre application d’authentification.</p>
+            <pre>{recoveryCodes.join('\n')}</pre>
+            <button type="button" onClick={() => setRecoveryCodes(null)}>J’ai noté ces codes</button>
+          </div>
+        ) : meQuery.data?.mfaEnabled ? (
+          <form className="profile-form password-form" onSubmit={handleMfaDisable}>
+            <label>Mot de passe actuel (pour désactiver)
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={disablePassword}
+                onChange={(event) => setDisablePassword(event.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" className="danger" disabled={disableMfa.isPending}>
+              {disableMfa.isPending ? 'Désactivation…' : 'Désactiver la double authentification'}
+            </button>
+          </form>
+        ) : mfaEnrollment ? (
+          <form className="profile-form password-form" onSubmit={handleMfaConfirm}>
+            <p>Ajoutez cette clé dans votre application d’authentification (Google Authenticator, 1Password, etc.), ou saisissez-la manuellement :</p>
+            <label>Clé secrète
+              <input value={mfaEnrollment.secret} readOnly onFocus={(event) => event.target.select()} />
+            </label>
+            <label>Code à 6 chiffres
+              <input
+                value={mfaCode}
+                onChange={(event) => setMfaCode(event.target.value)}
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                required
+                autoFocus
+              />
+            </label>
+            <button type="submit" className="primary" disabled={confirmMfa.isPending}>
+              {confirmMfa.isPending ? 'Vérification…' : 'Confirmer et activer'}
+            </button>
+          </form>
+        ) : (
+          <button type="button" className="primary" onClick={handleMfaSetup} disabled={setupMfa.isPending}>
+            {setupMfa.isPending ? 'Préparation…' : 'Activer la double authentification'}
+          </button>
+        )}
       </div>
     </>
   );

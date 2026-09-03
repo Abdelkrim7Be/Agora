@@ -3,27 +3,28 @@ temperature: 0.0
 # Bounded replies so a draft takes seconds, not minutes.
 max_tokens: 700
 timeout: 300
-# qwen3:4b-4k for every role: single resident model on the 4GB GPU (no VRAM
+# qwen3:4b-8k for every role: single resident model on the 4GB GPU (no VRAM
 # swap between calls), and a clear quality jump over qwen2.5:3b for French
 # drafting and instruction-following on retouches.
+#
+# Was qwen3:4b-4k for triage/quarantine/draft/reason until a live poller sweep
+# of a real backlog (109 emails) hit "request (6240 tokens) exceeds the
+# available context size (4096 tokens)" on the large majority of them — the
+# 2207-token p95 this cap was sized against did not hold under real inbox
+# traffic. Pointing every role at the same -8k tag as memory_style (already
+# proven resident) avoids reintroducing the two-model eviction-thrash problem
+# this comment used to warn about, while giving triage/draft the headroom
+# memory_style already needed.
 roles:
-  triage: "openai:qwen3:4b-4k"
-  # Same model as every other role on purpose. Pointing the classifier at a
-  # second model made Ollama hold two of them on a 4GB card: each alternating
-  # call logged "predicted to exceed available memory, evicting" and reloaded
-  # the other one, which is how a 2-second rewrite became a 12-minute request.
-  quarantine: "openai:qwen3:4b-4k"
+  triage: "openai:qwen3:4b-8k"
+  quarantine: "openai:qwen3:4b-8k"
   # Draft role: slightly creative. qwen3's structured (JSON) drafts need more
   # completion room than qwen2.5 — a 550 cap truncated the JSON mid-draft and
   # every redraft failed to parse.
   draft:
-    model: "openai:qwen3:4b-4k"
+    model: "openai:qwen3:4b-8k"
     temperature: 0.3
     max_tokens: 1100
-  reason: "openai:qwen3:4b-4k"
-  # Style learning digests up to several full sent-mail samples in one call and
-  # routinely exceeds a 4k context (observed: 8 samples -> ~8.3k tokens). Runs
-  # once at setup, not on the per-email hot path, so the extra VRAM swap here
-  # is an acceptable tradeoff (unlike triage/draft, see comment above).
+  reason: "openai:qwen3:4b-8k"
   memory_style: "openai:qwen3:4b-8k"
 fallbacks: {}
