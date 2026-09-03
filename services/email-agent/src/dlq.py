@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import threading
 from typing import Any
 import uuid
 
@@ -47,12 +48,29 @@ def _connect_postgres():
     return tenant_connection()
 
 
+_redis_client_lock = threading.Lock()
+_redis_client_singleton = None
+
+
 def _redis_client():
-    try:
-        from redis import Redis
-    except ImportError as exc:
-        raise RuntimeError("Redis DLQ requires the redis package.") from exc
-    return Redis.from_url(settings.redis_url, decode_responses=True)
+    # A fresh `Redis.from_url(...)` was constructed on every call — one per DLQ
+    # entry, since `_redis_list` calls this in a loop up to `limit` times (5000
+    # for `_redis_count`, hit on every /metrics scrape). redis-py resolves its
+    # own library version via `importlib.metadata` on each new client's first
+    # command, which walks sys.path on disk; at scrape frequency against a
+    # backlog-sized queue this was blocking the whole event loop for minutes.
+    # One process-lifetime client, same pattern as shared_cache.redis_client().
+    global _redis_client_singleton
+    if _redis_client_singleton is not None:
+        return _redis_client_singleton
+    with _redis_client_lock:
+        if _redis_client_singleton is None:
+            try:
+                from redis import Redis
+            except ImportError as exc:
+                raise RuntimeError("Redis DLQ requires the redis package.") from exc
+            _redis_client_singleton = Redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client_singleton
 
 
 def setup_dlq() -> None:
@@ -346,10 +364,21 @@ def _redis_get(entry_id: str, agent_instance_id: str | None = None) -> dict | No
 def _redis_list(status: str | None = None, limit: int = 100, agent_instance_id: str | None = None) -> list[dict]:
     client = _redis_client()
     ids = client.zrevrange(_redis_index_key(), 0, max(0, limit - 1))
-    rows = []
+    if not ids:
+        return []
+    # One round trip for up to `limit` (5000 for a count) entries instead of
+    # one HGETALL per id — at count-scale that was thousands of sequential
+    # network round trips synchronously on the request path.
+    pipe = client.pipeline(transaction=False)
     for entry_id in ids:
-        row = _redis_get(entry_id, agent_instance_id=agent_instance_id)
-        if not row:
+        pipe.hgetall(_redis_entry_key(entry_id))
+    results = pipe.execute()
+    rows = []
+    for entry_id, data in zip(ids, results):
+        if not data:
+            continue
+        row = _redis_decode(data)
+        if agent_instance_id is not None and normalize_agent_instance_id(row.get("agent_instance_id")) != normalize_agent_instance_id(agent_instance_id):
             continue
         if status is not None and row.get("status") != status:
             continue
