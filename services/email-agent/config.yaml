@@ -51,8 +51,8 @@ agent:
 capabilities:
   email: true       # write_email + Done — keep on
   calendar: false   # schedule_meeting + check_calendar_availability — off for now
-  inbox: false      # labels, archive, read/unread, trash — off until Phase 5 is enabled
-  drafts: false     # create Gmail drafts without sending — off until Phase 5 is enabled
+  inbox: false      # labels, archive, read/unread, trash — off by default — enable to turn this capability on
+  drafts: false     # create Gmail drafts without sending — off by default — enable to turn this capability on
 
 # Optional automatic organization for ignored emails. Requires the inbox capability.
 auto_organize:

@@ -18,9 +18,9 @@ default: deny
 _test_recipients: &test_recipients
   allow_addresses:
     - agora.test.inbox@gmail.com
-    - abdelkrimbellagnech28@gmail.com
-    - abdelkrimbellagnech99@gmail.com
-    - zinebbellagnech@gmail.com
+    - thomas.lefevre@example.com
+    - amina.diallo@example.com
+    - julien.moreau@example.com
   allow_domains: []
   deny_domains: []
   deny_addresses: []

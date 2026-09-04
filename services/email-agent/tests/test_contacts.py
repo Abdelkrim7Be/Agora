@@ -29,7 +29,7 @@ contacts:
   name: Bob Durand
   audience: client
   fields:
-    company: Agora
+    company: Acme
   tags:
   - vip
   active: true

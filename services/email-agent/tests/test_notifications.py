@@ -45,7 +45,7 @@ def test_notify_resolves_role_key_to_directory_email(sent):
     notifications.notify_pending_approval("run-1", email_input, _result())
 
     assert len(sent) == 1
-    assert sent[0]["to"] == "abdelkrimbellagnech99@gmail.com"
+    assert sent[0]["to"] == "amina.diallo@example.com"
 
 
 def test_notify_prefers_literal_email_over_role_key(sent):
@@ -138,4 +138,4 @@ def test_overdue_notification_uses_owner_fallback(sent):
 def test_notify_admin_alert_routes_through_directory_email(sent):
     delivered = notifications.notify_admin_alert("hr", "Sujet", "Corps")
     assert delivered is True
-    assert sent == [{"to": "abdelkrimbellagnech99@gmail.com", "subject": "Sujet", "body": "Corps"}]
+    assert sent == [{"to": "amina.diallo@example.com", "subject": "Sujet", "body": "Corps"}]

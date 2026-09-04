@@ -10,14 +10,14 @@ from src.persona import Persona, PersonaIdentite, PersonaPerimetre, compile_pers
 def _full_persona() -> Persona:
     return Persona(
         identite=PersonaIdentite(
-            prenom="Karim", nom="Bellagnech", fonction="Chargé RH",
-            entreprise="Agora", langue_reponse="fr",
+            prenom="Karim", nom="Martin", fonction="Chargé RH",
+            entreprise="Acme", langue_reponse="fr",
         ),
         mission="répondre aux candidats et aux demandes RH",
         perimetre=PersonaPerimetre(
             repond_a=["candidats", "demandes RH internes"],
             ne_repond_jamais_a=["newsletters", "démarchage commercial"],
-            escalade_vers="direction@agora.example",
+            escalade_vers="direction@acme.example",
         ),
         ton="chaleureux",
     )
@@ -36,13 +36,13 @@ def file_backend(monkeypatch, tmp_path):
 def test_compile_persona_produces_french_instructions():
     background, triage, response = compile_persona(_full_persona())
 
-    assert "Karim Bellagnech" in background
-    assert "Chargé RH chez Agora" in background
+    assert "Karim Martin" in background
+    assert "Chargé RH chez Acme" in background
     assert "répondre aux candidats et aux demandes RH" in background
 
     assert "candidats, demandes RH internes" in triage
     assert "newsletters, démarchage commercial" in triage
-    assert "direction@agora.example" in triage
+    assert "direction@acme.example" in triage
     assert "notify" in triage
 
     assert "chaleureux" in response
@@ -66,7 +66,7 @@ def test_persona_round_trip_endpoint(file_backend, monkeypatch, tmp_path):
     with TestClient(app) as client:
         saved = client.put("/persona", json=_full_persona().model_dump()).json()
         assert saved["identite"]["prenom"] == "Karim"
-        assert "Karim Bellagnech" in saved["compiled"]["background"]
+        assert "Karim Martin" in saved["compiled"]["background"]
 
         fetched = client.get("/persona").json()
         assert fetched["mission"] == "répondre aux candidats et aux demandes RH"
@@ -88,7 +88,7 @@ def test_put_persona_compiles_into_agent_config(file_backend, monkeypatch, tmp_p
     with TestClient(app) as client:
         client.put("/persona", json=_full_persona().model_dump())
         cfg = client.get("/config").json()
-    assert "Karim Bellagnech" in cfg["agent"]["background"]
+    assert "Karim Martin" in cfg["agent"]["background"]
     assert "newsletters" in cfg["agent"]["triage_instructions"]
     assert "Toujours répondre en français." in cfg["agent"]["response_preferences"]
 

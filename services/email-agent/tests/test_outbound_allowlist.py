@@ -15,7 +15,7 @@ from src.config import settings
 
 
 ALLOWED = "agora.test.inbox@gmail.com"
-OTHER_ALLOWED = "abdelkrimbellagnech28@gmail.com"
+OTHER_ALLOWED = "thomas.lefevre@example.com"
 STRANGER = "someone.else@gmail.com"
 
 

@@ -69,8 +69,8 @@ def test_notify_workflow_routes_to_notify_approval(monkeypatch, respond_email):
                 "priority": "urgent",
                 "policy": "notify",
                 "owner": "Operations",
-                "approver": "zinebbellagnech@gmail.com",
-                "route_to": ["zinebbellagnech@gmail.com"],
+                "approver": "julien.moreau@example.com",
+                "route_to": ["julien.moreau@example.com"],
                 "when": {"subject_contains": ["question"]},
             }
         ],
@@ -82,13 +82,13 @@ def test_notify_workflow_routes_to_notify_approval(monkeypatch, respond_email):
 
     assert result["classification_decision"] == "notify"
     assert result["workflow_owner"] == "Operations"
-    assert result["workflow_route_to"] == ["zinebbellagnech@gmail.com"]
+    assert result["workflow_route_to"] == ["julien.moreau@example.com"]
     request = result["__interrupt__"][0].value[0]
     assert request["action_request"]["action"] == "notify_internal"
     # The recipient is no longer an argument the model can set; tool_node
     # resolves it and exposes it read-only so the approver still sees it.
     assert "to" not in request["action_request"]["args"]
-    assert request["action_request"]["recipients"] == ["zinebbellagnech@gmail.com"]
+    assert request["action_request"]["recipients"] == ["julien.moreau@example.com"]
     assert "Réclamation" in request["action_request"]["args"]["note"]
 
 

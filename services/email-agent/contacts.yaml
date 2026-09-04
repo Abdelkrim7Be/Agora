@@ -1,6 +1,6 @@
 contacts:
-- email: abdelkrimbellagnech99@gmail.com
-  name: Abdelkrim Bellagnech
+- email: amina.diallo@example.com
+  name: Amina Diallo
   audience: employee
   fields:
     dept: HR
@@ -8,8 +8,8 @@ contacts:
   - hr
   - approver
   active: true
-- email: zinebbellagnech@gmail.com
-  name: Zineb Bellagnech
+- email: julien.moreau@example.com
+  name: Julien Moreau
   audience: employee
   fields:
     dept: Finance
@@ -21,11 +21,11 @@ segments:
 - id: team_internal
   name: Équipe interne
   members:
-  - abdelkrimbellagnech99@gmail.com
-  - zinebbellagnech@gmail.com
+  - amina.diallo@example.com
+  - julien.moreau@example.com
   match: {}
 - id: clients_demo
   name: Clients (démo)
   members:
-  - abdelkrimbellagnech99@gmail.com
+  - amina.diallo@example.com
   match: {}

@@ -6,7 +6,7 @@ from src.junk_gate import is_junk
 def _email(**overrides):
     base = {
         "author": "Jean Dupont <jean.dupont@example.com>",
-        "to": "Support <support@agora.ai>",
+        "to": "Support <support@example.com>",
         "subject": "Question sur mon dossier",
         "email_thread": "Bonjour, où en est mon dossier ?",
         "labels": ["INBOX", "UNREAD"],
@@ -73,13 +73,13 @@ def test_marketing_local_part_is_junk():
 def test_own_component_alert_is_junk():
     """The admin alert recipient is frequently the monitored mailbox itself —
     a down/up alert must not loop back into triage as ordinary mail."""
-    junk, reason = is_junk(_email(subject="Alerte Agora AI : Poller hors service"))
+    junk, reason = is_junk(_email(subject="Alerte Agora : Poller hors service"))
     assert junk
     assert reason == "system:self-alert"
 
 
 def test_own_component_resolution_is_junk():
-    junk, reason = is_junk(_email(subject="Resolution Agora AI : Poller de nouveau actif"))
+    junk, reason = is_junk(_email(subject="Resolution Agora : Poller de nouveau actif"))
     assert junk
     assert reason == "system:self-alert"
 
@@ -88,7 +88,7 @@ def test_own_alert_is_junk_even_from_an_allowed_sender():
     from src.junk_config import JunkConfig
 
     config = JunkConfig(allowed_senders=["jean.dupont@example.com"])
-    junk, reason = is_junk(_email(subject="Alerte Agora AI : Securite hors service"), config)
+    junk, reason = is_junk(_email(subject="Alerte Agora : Securite hors service"), config)
     assert junk
     assert reason == "system:self-alert"
 

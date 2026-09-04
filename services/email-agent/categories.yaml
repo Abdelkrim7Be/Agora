@@ -21,9 +21,9 @@ categories:
   policy: auto_draft
   labels: []
   owner: HR
-  approver: abdelkrimbellagnech99@gmail.com
+  approver: amina.diallo@example.com
   route_to:
-  - abdelkrimbellagnech99@gmail.com
+  - amina.diallo@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true
@@ -51,9 +51,9 @@ categories:
   policy: notify
   labels: []
   owner: Operations
-  approver: zinebbellagnech@gmail.com
+  approver: julien.moreau@example.com
   route_to:
-  - zinebbellagnech@gmail.com
+  - julien.moreau@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true
@@ -82,9 +82,9 @@ categories:
   policy: auto_draft
   labels: []
   owner: HR
-  approver: abdelkrimbellagnech99@gmail.com
+  approver: amina.diallo@example.com
   route_to:
-  - abdelkrimbellagnech99@gmail.com
+  - amina.diallo@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true
@@ -112,9 +112,9 @@ categories:
   policy: auto_draft
   labels: []
   owner: Finance
-  approver: zinebbellagnech@gmail.com
+  approver: julien.moreau@example.com
   route_to:
-  - zinebbellagnech@gmail.com
+  - julien.moreau@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true
@@ -144,9 +144,9 @@ categories:
   policy: auto_draft
   labels: []
   owner: HR
-  approver: abdelkrimbellagnech99@gmail.com
+  approver: amina.diallo@example.com
   route_to:
-  - abdelkrimbellagnech99@gmail.com
+  - amina.diallo@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true
@@ -178,9 +178,9 @@ categories:
   policy: auto_draft
   labels: []
   owner: Operations
-  approver: zinebbellagnech@gmail.com
+  approver: julien.moreau@example.com
   route_to:
-  - zinebbellagnech@gmail.com
+  - julien.moreau@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true
@@ -209,9 +209,9 @@ categories:
   policy: auto_draft
   labels: []
   owner: Finance
-  approver: zinebbellagnech@gmail.com
+  approver: julien.moreau@example.com
   route_to:
-  - zinebbellagnech@gmail.com
+  - julien.moreau@example.com
   instructions: null
   require_approval: false
   external_send_allowed: true

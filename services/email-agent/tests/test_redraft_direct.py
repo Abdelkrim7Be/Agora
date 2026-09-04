@@ -132,10 +132,10 @@ def test_redraft_strips_signature_before_prompt_and_reappends_once(fake_llms, re
     import src.signature as sig
     from src.signature import SignatureConfig
 
-    signature = SignatureConfig(enabled=True, text="Karim\nAgora Consulting")
+    signature = SignatureConfig(enabled=True, text="Karim Martin\nAcme Corp")
     monkeypatch.setattr(sig, "load_signature", lambda *args, **kwargs: signature)
 
-    signed_block = "-- \nKarim\nAgora Consulting"
+    signed_block = "-- \nKarim Martin\nAcme Corp"
     already_signed_draft = {**DRAFT, "content": f"Here you go.\n\n{signed_block}"}
 
     captured_prompts = []

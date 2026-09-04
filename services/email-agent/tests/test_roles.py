@@ -32,9 +32,9 @@ def test_seed_directory_matches_current_demo_routes() -> None:
     assert hr is not None
     assert rh is not None
     assert finance is not None
-    assert hr.primary_email == "abdelkrimbellagnech99@gmail.com"
-    assert rh.primary_email == "abdelkrimbellagnech99@gmail.com"
-    assert finance.primary_email == "zinebbellagnech@gmail.com"
+    assert hr.primary_email == "amina.diallo@example.com"
+    assert rh.primary_email == "amina.diallo@example.com"
+    assert finance.primary_email == "julien.moreau@example.com"
 
 
 def test_unknown_role_returns_none() -> None:
