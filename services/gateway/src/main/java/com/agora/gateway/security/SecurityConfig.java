@@ -127,7 +127,7 @@ public class SecurityConfig {
                 // approve/reject/respond: VIEWER stays in the gate so a user whose global JWT
                 // role is viewer but holds a per-instance approver grant can still reach
                 // ProxyController, which enforces the real (instance-level) authorization.
-                // APPROVER is now a first-class JWT role (wave-1b) for users who are globally
+                // APPROVER is now a first-class JWT role for users who are globally
                 // approvers, not just grant-delegated.
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/approve").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/run/*/reject").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
@@ -144,8 +144,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/sync/status").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync/pause").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/sync/resume").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/api/agent/costs").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/api/agent/costs/**").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
+                // Billing-sensitive: platform OWNER/VIEWER stay excluded even when they own
+                // the instance — cost visibility is admin-tier by design, widened only far
+                // enough to let a platform APPROVER with a real per-instance grant through
+                // (ProxyController's instance-role check is the actual gate beyond this).
+                .requestMatchers(HttpMethod.GET, "/api/agent/costs").hasAnyRole("APPROVER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/costs/**").hasAnyRole("APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/style").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/style").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/style/**").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
