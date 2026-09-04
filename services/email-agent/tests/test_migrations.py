@@ -22,9 +22,6 @@ def test_alembic_scaffold_and_scripts_exist() -> None:
     assert (SERVICE_ROOT / "migrations" / "versions" / "0011_instance_setup.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0012_notifications.py").is_file()
     assert (SERVICE_ROOT / "migrations" / "versions" / "0013_contact_categories.py").is_file()
-    assert (SERVICE_ROOT / "scripts" / "backup.sh").is_file()
-    assert (SERVICE_ROOT / "scripts" / "restore.sh").is_file()
-    assert (SERVICE_ROOT / "docs" / "backup-restore.md").is_file()
 
 
 def test_baseline_migration_covers_current_app_tables() -> None:
@@ -115,10 +112,10 @@ def test_postgres_setup_functions_defer_to_alembic(monkeypatch) -> None:
 
 
 def test_backup_restore_docs_capture_langgraph_boundary() -> None:
-    text = (SERVICE_ROOT / "docs" / "backup-restore.md").read_text(encoding="utf-8")
-    assert "LangGraph checkpoint and store tables remain outside Alembic" in text
+    text = (SERVICE_ROOT.parent.parent / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+    assert "LangGraph's own checkpoint/store tables, which live outside" in text
     assert "pg_dump" in text
-    assert "pg_restore" in text
+    assert "restore-postgres.sh" in text
 
 
 def test_upgrade_to_head_noop_without_postgres(monkeypatch) -> None:

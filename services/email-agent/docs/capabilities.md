@@ -143,7 +143,7 @@ When enabled, ignored emails are automatically labeled and archived:
 
 These actions still run through `tool_node`, so dry-run, trusted message context, and security authorization are reused. They are reversible `allow` actions by default and do not pause for human approval.
 
-## Automation (Phase 6)
+## Automation (rules engine)
 
 Configured in `rules.yaml`, fully opt-in (`enabled: false` everywhere by default — the
 file then changes nothing). The poller builds a deterministic plan and the graph's
@@ -177,7 +177,7 @@ authorization, HITL, dry-run, and trusted message context all still apply.
   as plain text (not the full body) — content caps and HITL review still apply, since those
   fields are untrusted-content-derived.
 - Auto-organization can perform reversible allowed actions without human approval when enabled.
-- In the Phase 4 compose stack, security rate limits use Redis; local dev can still use the in-memory backend.
+- When `SECURITY_RATELIMIT_BACKEND=redis` (the Compose default), security rate limits use Redis; local dev can still use the in-memory backend.
 - Every capability tool above runs through the mail provider layer, so it works on Gmail and
   Outlook alike — see `docs/mail-providers.md` for the mapping and for the Outlook caveats
   (no push notifications, no live verification yet).

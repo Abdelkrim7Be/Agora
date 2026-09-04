@@ -1,0 +1,8 @@
+# Non-thinking base: qwen3:4b emits a <think> block of hundreds to thousands of
+# tokens before answering, which on this GPU costs minutes per call.
+FROM qwen3:4b-instruct
+
+# 8192, not the base model's 4096 default. Every role in the local-host LLM
+# profile (config/llm.local-host.yaml) points at this tag uniformly — see
+# docs/DEPLOYMENT.md for why every role shares one model instead of two.
+PARAMETER num_ctx 8192

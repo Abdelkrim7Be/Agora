@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 BACKUP = ROOT / "infra" / "backup-postgres.sh"
 RESTORE = ROOT / "infra" / "restore-postgres.sh"
-README = ROOT / "infra" / "README.md"
+DEPLOYMENT_DOC = ROOT / "docs" / "DEPLOYMENT.md"
 GITIGNORE = ROOT / ".gitignore"
 
 
@@ -44,10 +44,10 @@ class PostgresBackupTest(unittest.TestCase):
 
     def test_backup_artifacts_are_ignored_and_documented(self):
         self.assertIn("infra/backups/", GITIGNORE.read_text())
-        readme = README.read_text()
-        self.assertIn("./backup-postgres.sh", readme)
-        self.assertIn("./restore-postgres.sh", readme)
-        self.assertIn("AGORA_RESTORE_CONFIRM", readme)
+        doc = DEPLOYMENT_DOC.read_text()
+        self.assertIn("./backup-postgres.sh", doc)
+        self.assertIn("./restore-postgres.sh", doc)
+        self.assertIn("AGORA_RESTORE_CONFIRM", doc)
 
 
 if __name__ == "__main__":
