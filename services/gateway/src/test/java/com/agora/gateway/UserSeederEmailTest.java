@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "gateway.jwt.secret=test-secret-test-secret-test-secret-0123",
         "gateway.owner.username=seed-owner",
         "gateway.owner.password=ownerpass",
-        "gateway.owner.email=owner@agora.example",
+        "gateway.owner.email=owner@example.com",
         "gateway.viewer.username=seed-viewer",
         "gateway.viewer.password=viewerpass",
         "gateway.admin.username=seed-admin",
@@ -53,7 +53,7 @@ class UserSeederEmailTest {
         assertThat(users.findByUsername("seed-owner")).isPresent()
                 .get()
                 .extracting(AppUser::getEmail)
-                .isEqualTo("owner@agora.example");
+                .isEqualTo("owner@example.com");
     }
 
     @Test
@@ -69,31 +69,31 @@ class UserSeederEmailTest {
         users.save(new AppUser("legacy-admin", passwordEncoder.encode("x"), "admin"));
         props.getAdmin().setUsername("legacy-admin");
         props.getAdmin().setPassword("x");
-        props.getAdmin().setEmail("admin@agora.example");
+        props.getAdmin().setEmail("admin@example.com");
 
         seeder.run();
 
         assertThat(users.findByUsername("legacy-admin")).isPresent()
                 .get()
                 .extracting(AppUser::getEmail)
-                .isEqualTo("admin@agora.example");
+                .isEqualTo("admin@example.com");
     }
 
     @Test
     void an_address_already_set_is_never_overwritten() {
         AppUser user = new AppUser("kept-address", passwordEncoder.encode("x"), "owner");
-        user.setEmail("chosen-by-a-human@agora.example");
+        user.setEmail("chosen-by-a-human@example.com");
         users.save(user);
         props.getOwner().setUsername("kept-address");
         props.getOwner().setPassword("x");
-        props.getOwner().setEmail("from-config@agora.example");
+        props.getOwner().setEmail("from-config@example.com");
 
         seeder.run();
 
         assertThat(users.findByUsername("kept-address")).isPresent()
                 .get()
                 .extracting(AppUser::getEmail)
-                .isEqualTo("chosen-by-a-human@agora.example");
+                .isEqualTo("chosen-by-a-human@example.com");
     }
 
     @Test
@@ -103,7 +103,7 @@ class UserSeederEmailTest {
         String hashBefore = user.getPasswordHash();
         props.getOwner().setUsername("stable-password");
         props.getOwner().setPassword("a-different-password");
-        props.getOwner().setEmail("someone@agora.example");
+        props.getOwner().setEmail("someone@example.com");
 
         seeder.run();
 

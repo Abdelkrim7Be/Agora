@@ -5,7 +5,7 @@
 # message is built. The security service enforces the same pair at policy level
 # (see SECURITY_POLICY_PATH below) — this is the layer underneath it.
 x-outbound-allowlist: &outbound_allowlist
-  AGENT_OUTBOUND_ALLOWLIST: "test.inbox@example.com,owner@example.com,abdelkrimbellagnech99@gmail.com,redacted@example.com"
+  AGENT_OUTBOUND_ALLOWLIST: "test.inbox@example.com,thomas.lefevre@example.com,amina.diallo@example.com,julien.moreau@example.com"
 
 # Docker GPU passthrough is not configured on this machine, so an Ollama running
 # inside Compose falls back to CPU and a draft takes minutes. The host runs Ollama
@@ -32,9 +32,6 @@ services:
     <<: *host_ollama
     volumes:
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
-      # The live-test harness runs inside this container so the sender's OAuth
-      # token never has to leave it. Not part of the image — test-only surface.
-      - ../services/email-agent/scripts:/app/scripts:ro
     environment:
       <<: *outbound_allowlist
       AGENT_DRY_RUN: "false"
@@ -135,7 +132,7 @@ services:
       AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
       AGENT_NOTIFY_APP_BASE_URL: http://localhost:${WEB_PORT:-5173}
       AGENT_ALERTS_ENABLED: ${AGENT_ALERTS_ENABLED:-true}
-      AGENT_ALERT_ADMIN_RECIPIENT: ${AGENT_ALERT_ADMIN_RECIPIENT:-owner@example.com}
+      AGENT_ALERT_ADMIN_RECIPIENT: ${AGENT_ALERT_ADMIN_RECIPIENT:-thomas.lefevre@example.com}
       TENANT_MODE: ${TENANT_MODE:-single}
       AGENT_DEFAULT_USER_ID: ${AGENT_DEFAULT_USER_ID:-owner}
       GMAIL_TOKEN_STORE_PATH: /app/data/gmail_tokens.json
@@ -158,9 +155,6 @@ services:
     volumes:
       - agent_data:/app/data
       - ../services/email-agent/credentials.json:/app/credentials.json:ro
-      # The rules harness has to run where the rules run: it pauses this process's
-      # sweep to set up label predicates, then lets it pick the mail up.
-      - ../services/email-agent/scripts:/app/scripts:ro
     depends_on:
       postgres:
         condition: service_healthy

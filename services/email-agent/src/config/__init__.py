@@ -158,10 +158,10 @@ class Settings:
     # connected Gmail mailbox as agent sends; recipient resolves via the role directory.
     notify_enabled: bool = _env_bool("AGENT_NOTIFY_ENABLED", "false")
     # Optional base URL of the web control panel, used to link back to the approval
-    # instead of including the email body in the notification (Part H guardrail).
+    # instead of including the email body in the notification.
     notify_app_base_url: str = os.getenv("AGENT_NOTIFY_APP_BASE_URL", "")
 
-    # Phase 4 platform mode. Empty DATABASE_URL keeps the current SQLite dev backend.
+    # Empty DATABASE_URL keeps the current SQLite dev backend.
     database_url: str = get_secret("AGENT", "DATABASE_URL")
     migration_database_url: str = get_secret("AGENT", "MIGRATION_DATABASE_URL") or database_url
     run_migrations: bool = _env_bool("AGENT_RUN_MIGRATIONS", "true")
@@ -224,7 +224,7 @@ class Settings:
     job_queue_max_attempts: int = int(os.getenv("AGENT_JOB_QUEUE_MAX_ATTEMPTS", "5"))
     job_queue_poll_seconds: float = float(os.getenv("AGENT_JOB_QUEUE_POLL_SECONDS", "2"))
 
-    # Instance onboarding pipeline (Phase 6 delta — see instance_setup.py).
+    # Instance onboarding pipeline — see instance_setup.py.
     setup_enabled: bool = _env_bool("AGENT_SETUP_PIPELINE_ENABLED", "true")
     # Onboarding reads the mailbox once and everything downstream — contacts,
     # categories, style, persona, the first drafts — is built from that single
@@ -241,7 +241,7 @@ class Settings:
     setup_max_attempts: int = int(os.getenv("AGENT_SETUP_MAX_ATTEMPTS", "3"))
     instance_setup_path: str = os.getenv("AGENT_INSTANCE_SETUP_PATH", "logs/instance_setup.json")
 
-    # In-app notification centre (Phase 6 delta — see notification_store.py).
+    # In-app notification centre — see notification_store.py.
     notification_store_path: str = os.getenv("AGENT_NOTIFICATION_STORE_PATH", "logs/notifications.json")
     notification_retention_days: int = int(os.getenv("AGENT_NOTIFICATION_RETENTION_DAYS", "90"))
 

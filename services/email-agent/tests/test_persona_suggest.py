@@ -26,7 +26,7 @@ class _FakeStructuredLLM:
 
 
 SENT = [
-    {"to": "candidat@example.com", "subject": "Re: candidature", "body": "Bonjour,\n...\nKarim Bellagnech\nChargé RH — Agora"},
+    {"to": "candidat@example.com", "subject": "Re: candidature", "body": "Bonjour,\n...\nKarim Martin\nChargé RH — Acme"},
 ]
 RECEIVED = [
     {"from": "candidat@example.com", "subject": "Candidature stage"},
@@ -34,7 +34,7 @@ RECEIVED = [
 ]
 
 SUGGESTION = PersonaSuggestion(
-    prenom="Karim", nom="Bellagnech", fonction="Chargé RH", entreprise="Agora",
+    prenom="Karim", nom="Martin", fonction="Chargé RH", entreprise="Acme",
     repond_a=["candidats", "fournisseurs"],
 )
 

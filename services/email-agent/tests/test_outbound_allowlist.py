@@ -15,7 +15,7 @@ from src.config import settings
 
 
 ALLOWED = "test.inbox@example.com"
-OTHER_ALLOWED = "owner@example.com"
+OTHER_ALLOWED = "thomas.lefevre@example.com"
 STRANGER = "someone.else@gmail.com"
 
 

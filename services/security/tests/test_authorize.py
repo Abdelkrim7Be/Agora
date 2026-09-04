@@ -415,7 +415,7 @@ def test_policy_endpoint_returns_yaml():
     assert "write_email" in body["policy_yaml"]
 
 
-# --- Phase 5 inbox/draft/send capability policy ---
+# --- inbox/draft/send capability policy ---
 
 def _authorize_action(action: str, args: dict | None = None, run_id: str | None = None) -> dict:
     r = client.post(

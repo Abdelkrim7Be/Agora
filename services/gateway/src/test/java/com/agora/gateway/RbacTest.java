@@ -997,8 +997,8 @@ class RbacTest {
     @Test
     void approver_role_passes_approve_route_gate() throws Exception {
         // A global "approver" JWT role must clear the SecurityConfig JWT gate on
-        // /approve (the slice-05 TODO this slice resolves), then the existing
-        // instance-grant model (unchanged) authorizes the actual send.
+        // /approve, then the existing instance-grant model (unchanged) authorizes
+        // the actual send.
         userRepository.save(new com.agora.gateway.user.AppUser(
                 "hrapprover2", passwordEncoder.encode("pw123456"), "approver", "HR"));
         instanceGrantService.addGrant("default-email-agent", "hrapprover2", "approver", "admin");

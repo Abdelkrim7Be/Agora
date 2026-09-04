@@ -422,7 +422,7 @@ def test_shipped_categories_classify_new_workflows():
     assert conge["category"] == "conge"
     assert conge["policy"] == "auto_draft"
     assert conge["template"] == "conge_reply"
-    assert conge["route_to"] == ["abdelkrimbellagnech99@gmail.com"]
+    assert conge["route_to"] == ["amina.diallo@example.com"]
 
     rdv = classify_category({"author": "client@corp.com", "subject": "Rendez-vous la semaine prochaine"}, cfg)
     assert rdv["category"] == "rendez_vous"
@@ -433,7 +433,7 @@ def test_shipped_categories_classify_new_workflows():
     assert devis["category"] == "devis"
     assert devis["policy"] == "auto_draft"
     assert devis["template"] == "quote_request_reply"
-    assert devis["route_to"] == ["redacted@example.com"]
+    assert devis["route_to"] == ["julien.moreau@example.com"]
 
     # New templates resolve and carry a body.
     templates = {t.name: t for t in cfg.templates}

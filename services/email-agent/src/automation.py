@@ -25,7 +25,7 @@ class RuleWhen(BaseModel):
 
     Rules are evaluated pre-triage (cheap, before the LLM), so they intentionally
     have no classification predicate — classification-driven organization is handled
-    by `auto_organize` (Phase 5) after triage.
+    by `auto_organize` after triage.
     """
 
     sender_contains: list[str] = Field(default_factory=list)

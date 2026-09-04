@@ -18,17 +18,17 @@ def test_disabled_signature_leaves_content_unchanged():
 def test_signature_appends_text_and_image_once():
     signature = SignatureConfig(
         enabled=True,
-        text="Karim\nAgora Consulting",
+        text="Karim Martin\nAcme Corp",
         image_url="https://example.com/signature.png",
-        image_alt="Logo Agora",
+        image_alt="Logo Acme",
     )
 
     signed = append_signature("Bonjour", signature)
 
     assert "<!--" not in signed and "-->" not in signed
     assert "-- \n" in signed
-    assert "Karim\nAgora Consulting" in signed
-    assert "![Logo Agora](https://example.com/signature.png)" in signed
+    assert "Karim Martin\nAcme Corp" in signed
+    assert "![Logo Acme](https://example.com/signature.png)" in signed
     assert append_signature(signed, signature) == signed
     assert strip_signature(signed, signature) == "Bonjour"
 
@@ -45,19 +45,19 @@ def test_structured_fields_compose_signature_block():
     signature = SignatureConfig(
         enabled=True,
         first_name="Karim",
-        last_name="Bellagnech",
+        last_name="Martin",
         title="Chargé RH",
-        company="Agora",
+        company="Acme",
         phone="+212 6 00 00 00 00",
-        website="https://agora.example",
+        website="https://acme.example",
     )
 
     signed = append_signature("Bonjour", signature)
 
-    assert "Karim Bellagnech" in signed
-    assert "Chargé RH — Agora" in signed
+    assert "Karim Martin" in signed
+    assert "Chargé RH — Acme" in signed
     assert "Tél. : +212 6 00 00 00 00" in signed
-    assert "https://agora.example" in signed
+    assert "https://acme.example" in signed
     assert append_signature(signed, signature) == signed
 
 
@@ -70,13 +70,13 @@ def test_structured_fields_keep_free_text_as_extra_line():
 
 
 def test_legacy_text_only_signature_unchanged():
-    signature = SignatureConfig(enabled=True, text="Karim\nAgora Consulting")
+    signature = SignatureConfig(enabled=True, text="Karim Martin\nAcme Corp")
     signed = append_signature("Bonjour", signature)
-    assert "-- \nKarim\nAgora Consulting" in signed
+    assert "-- \nKarim Martin\nAcme Corp" in signed
 
 
 def test_strip_signature_is_the_inverse_of_append():
-    signature = SignatureConfig(enabled=True, text="Karim\nAgora Consulting")
+    signature = SignatureConfig(enabled=True, text="Karim Martin\nAcme Corp")
     signed = append_signature("Bonjour,\n\nDetails.", signature)
     assert strip_signature(signed, signature) == "Bonjour,\n\nDetails."
 
@@ -137,19 +137,19 @@ def test_invalid_mode_rejected_by_whitelist():
 
 def test_detect_from_sent_finds_repeated_block():
     messages = [
-        {"body": f"Salut,\n\nMessage {i}.\n\n-- \nKarim Bellagnech\n+212 6 00 00 00 00"}
+        {"body": f"Salut,\n\nMessage {i}.\n\n-- \nKarim Martin\n+212 6 00 00 00 00"}
         for i in range(5)
     ]
     result = detect_from_sent(messages)
     assert result["detected"] is True
-    assert "Karim Bellagnech" in result["block"]
+    assert "Karim Martin" in result["block"]
     assert result["sample_size"] == 5
     assert result["confidence"] >= 0.6
 
 
 def test_detect_from_sent_ignores_single_occurrence():
     messages = [
-        {"body": "Salut,\n\nMessage 1.\n\n-- \nKarim Bellagnech\n+212 6 00 00 00 00"},
+        {"body": "Salut,\n\nMessage 1.\n\n-- \nKarim Martin\n+212 6 00 00 00 00"},
         {"body": "Salut,\n\nMessage 2, nothing signature-like here at all."},
         {"body": "Salut,\n\nMessage 3, also plain."},
     ]

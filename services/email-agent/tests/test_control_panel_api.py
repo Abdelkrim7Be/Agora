@@ -279,7 +279,7 @@ def test_contacts_endpoint_returns_directory_contacts(monkeypatch, tmp_path):
   name: VIP Contact
   audience: client
   fields:
-    company: Agora
+    company: Acme
   tags:
   - vip
   active: true
@@ -298,7 +298,7 @@ segments: []
                 "email": "vip@example.com",
                 "name": "VIP Contact",
                 "audience": "client",
-                "fields": {"company": "Agora"},
+                "fields": {"company": "Acme"},
                 "tags": ["vip"],
                 "category": None,
                 "domain": None,
