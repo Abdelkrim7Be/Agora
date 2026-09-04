@@ -1,4 +1,4 @@
-"""Executable form of `docs/platform/agent-contract.md`.
+"""Executable form of `docs/AGENTS.md`.
 
 One test per MUST in the document, named after the section it enforces. A new
 agent type is conformant when this file passes against it.

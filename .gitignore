@@ -87,3 +87,10 @@ infra/docker-compose.override.yml
 # Local database/volume backups taken before environment migrations.
 # Contains real mail data and encrypted OAuth tokens — never commit.
 .backup-*/
+
+# Local review/audit artifacts (not part of the published repo)
+/E2E_FUNCTIONAL_AUDIT.md
+/REPOSITORY_MAP_FOR_REVIEW.md
+/ROOT_PUBLICATION_CLEANUP_PLAN.md
+/REPOSITORY_CLEANUP_PLAN.md
+/FILE_INVENTORY.md

@@ -12,7 +12,7 @@ from src.token_store import delete_token
 from src.trace import count_traces_for_runs, delete_traces_for_runs
 
 # Automates steps 1-5 of the manual right-to-erasure procedure in
-# docs/conception/data-retention-policy.md §3. Backups (6) and the audit log (7)
+# docs/compliance/DATA_RETENTION.md §3. Backups (6) and the audit log (7)
 # are deliberately out of scope here — see that doc for why.
 
 
@@ -92,7 +92,7 @@ def erase_subject(
     subject IS the mailbox owner being offboarded, not a third-party contact
     whose address merely appears in the mailbox's mail. There is no reliable
     email-to-instance-owner mapping to infer this automatically (see
-    docs/conception/data-retention-policy.md §3, step 2).
+    docs/compliance/DATA_RETENTION.md §3, step 2).
     """
     resolved_instance = normalize_agent_instance_id(agent_instance_id or current_agent_instance_id())
 

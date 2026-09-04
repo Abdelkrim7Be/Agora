@@ -37,10 +37,41 @@ Short imperative subject line. No period at the end. Body optional for non-obvio
 
 ## Local Setup
 
+### Python services (`email-agent`, `security`, `platform-core`)
+
 ```bash
 cd services/<service-name>
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # fill in real values
+pytest tests/ -q
 ```
+
+### Gateway (Java / Spring Boot)
+
+```bash
+cd services/gateway
+mvn -B test
+```
+
+### Frontend (`web-react`)
+
+```bash
+cd services/web-react
+npm ci
+npm run dev
+```
+
+`npm run dev` starts the Vite dev server on `http://localhost:5173` and proxies
+gateway paths (`/api`, `/auth`, `/audit`, `/users`, `/me`, `/agents`,
+`/agent-instances`, `/mailboxes`, `/health`, `/reports`) to a gateway running
+on `http://localhost:8090` — no `.env` file needed for local dev against a
+gateway started the normal way (see `docs/DEPLOYMENT.md`). To point at a
+gateway on a different host/port, set `VITE_GATEWAY_PROXY_TARGET` before
+starting the dev server.
+
+Other scripts: `npm run build` (production bundle), `npm run lint` (oxlint).
+
+The frontend has no automated test suite yet — verify UI changes manually
+against a running stack before opening a PR.
