@@ -46,11 +46,11 @@ public class InvitationMailer {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(smtp.getFrom());
         message.setTo(to);
-        message.setSubject("Votre accès Agora AI");
+        message.setSubject("Votre accès Agora");
         message.setText("""
                 Bonjour %s,
 
-                Un accès Agora AI a été créé pour vous. Choisissez votre mot de passe ici :
+                Un accès Agora a été créé pour vous. Choisissez votre mot de passe ici :
 
                 %s
 
@@ -86,7 +86,7 @@ public class InvitationMailer {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(smtp.getFrom());
         message.setTo(to);
-        message.setSubject("Réinitialisation de votre mot de passe Agora AI");
+        message.setSubject("Réinitialisation de votre mot de passe Agora");
         message.setText("""
                 Bonjour %s,
 

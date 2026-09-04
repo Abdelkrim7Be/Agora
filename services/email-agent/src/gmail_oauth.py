@@ -147,7 +147,7 @@ def _explain_token_fetch_error(exc: Exception) -> str:
         return (
             "Google returned different permissions than the agent requested, usually "
             "because this account already granted an older, broader scope to the same "
-            "OAuth client. Revoke Agora AI at myaccount.google.com/permissions, then "
+            "OAuth client. Revoke Agora at myaccount.google.com/permissions, then "
             "connect again."
         )
     if "access_denied" in lowered:

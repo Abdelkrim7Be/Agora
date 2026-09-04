@@ -40,7 +40,7 @@ public class ReportMailer {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(smtp.getFrom());
             message.setTo(to);
-            message.setSubject("[Agora AI] Nouveau signalement : " + report.getSubject());
+            message.setSubject("[Agora] Nouveau signalement : " + report.getSubject());
             message.setText("""
                     Un nouveau signalement a été soumis par %s (%s).
 

@@ -60,7 +60,7 @@ export default function LoginPage() {
         <div className="modal-header">
           <div>
             <AgoraLogo className="login-brand" />
-            <h2 id="login-title">Bienvenue dans votre espace Agora AI</h2>
+            <h2 id="login-title">Bienvenue dans votre espace Agora</h2>
             <p>Supervisez vos agents métiers, vos validations et vos boîtes connectées depuis un environnement sécurisé.</p>
           </div>
         </div>
@@ -146,7 +146,7 @@ export default function LoginPage() {
       </section>
       <aside className="login-side" aria-hidden="true">
         <div className="login-product-panel">
-          <span className="eyebrow">Agora Consulting · agents métiers supervisés</span>
+          <span className="eyebrow">Agora · agents métiers supervisés</span>
           <h2>Des agents IA utiles, mais jamais hors contrôle.</h2>
           <p>Centralisez les validations, la synchronisation des boîtes mail, les règles métier et les journaux d’audit dans une interface pensée pour les équipes clientes.</p>
           <ol className="login-proof-rail">

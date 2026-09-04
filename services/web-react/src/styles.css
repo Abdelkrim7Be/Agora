@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Agora AI — application styles
+   Agora — application styles
    Design tokens live in styles/tokens.css and are imported before this file.
    Nothing below declares a raw colour.
    ========================================================================== */
@@ -5159,20 +5159,14 @@ body.workspace-mode .sidebar .workspace-tabs { display: grid; }
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  padding: 6px;
   border-radius: var(--radius-card);
-  /* Fixed light plate, not theme-tracking var(--surface) — the mark's own
-     dark strokes need to stay readable in dark mode too, same reasoning as
-     the favicon's backing square. */
+  /* Fixed light plate, not theme-tracking var(--surface) — the mark stays
+     readable in dark mode too, same reasoning as the favicon's backing square. */
   background: #ffffff;
   border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--outline));
   box-shadow: var(--shadow-subtle);
-}
-
-.agora-logo-icon {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  font: 700 22px/1 var(--font-display);
+  color: var(--primary);
 }
 
 .agora-logo-copy {

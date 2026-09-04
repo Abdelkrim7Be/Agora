@@ -203,9 +203,9 @@ export default function SignaturePage() {
             <label><span>Prénom</span><input placeholder="Karim" value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></label>
             <label><span>Nom</span><input placeholder="Bellagnech" value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></label>
             <label><span>Fonction</span><input placeholder="Chargé RH" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label>
-            <label><span>Entreprise</span><input placeholder="Agora" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} /></label>
+            <label><span>Entreprise</span><input placeholder="Acme" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} /></label>
             <label><span>Téléphone</span><input placeholder="+212 6 00 00 00 00" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
-            <label><span>Site web</span><input type="url" placeholder="https://agora.example" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} /></label>
+            <label><span>Site web</span><input type="url" placeholder="https://acme.example" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} /></label>
           </div>
           <label><span>Texte complémentaire (optionnel)</span><textarea rows={3} spellCheck={false} placeholder="L’humain d’abord." value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} /></label>
           <div className="signature-image-row">
@@ -219,7 +219,7 @@ export default function SignaturePage() {
             />
             {hasImage && <button type="button" className="ghost" onClick={handleDeleteImage}>Retirer l’image</button>}
           </div>
-          <label><span>Texte alternatif de l’image</span><input type="text" placeholder="Logo Agora" value={form.image_alt} onChange={(e) => setForm({ ...form, image_alt: e.target.value })} /></label>
+          <label><span>Texte alternatif de l’image</span><input type="text" placeholder="Logo Acme" value={form.image_alt} onChange={(e) => setForm({ ...form, image_alt: e.target.value })} /></label>
           <label>
             <span>Largeur de l’image (px)</span>
             <input

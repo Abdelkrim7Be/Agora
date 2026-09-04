@@ -359,7 +359,7 @@ export default function UsersPage() {
           </button>
         </div>
         <div className="notice">
-          Invitez un collaborateur sans partager de mot de passe temporaire. Si aucun relais SMTP n’est configuré, Agora AI affiche un lien sécurisé à transmettre manuellement.
+          Invitez un collaborateur sans partager de mot de passe temporaire. Si aucun relais SMTP n’est configuré, Agora affiche un lien sécurisé à transmettre manuellement.
         </div>
         {inviteLink ? (
           <div className="notice invite-link-notice">

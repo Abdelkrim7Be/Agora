@@ -348,7 +348,7 @@ export default function PersonaPage() {
             <label>Prénom <input placeholder="Karim" value={persona.identite.prenom} onChange={(e) => setPersona({ ...persona, identite: { ...persona.identite, prenom: e.target.value } })} /></label>
             <label>Nom <input placeholder="Bellagnech" value={persona.identite.nom} onChange={(e) => setPersona({ ...persona, identite: { ...persona.identite, nom: e.target.value } })} /></label>
             <label>Fonction <input placeholder="Chargé RH" value={persona.identite.fonction} onChange={(e) => setPersona({ ...persona, identite: { ...persona.identite, fonction: e.target.value } })} /></label>
-            <label>Entreprise <input placeholder="Agora" value={persona.identite.entreprise} onChange={(e) => setPersona({ ...persona, identite: { ...persona.identite, entreprise: e.target.value } })} /></label>
+            <label>Entreprise <input placeholder="Acme" value={persona.identite.entreprise} onChange={(e) => setPersona({ ...persona, identite: { ...persona.identite, entreprise: e.target.value } })} /></label>
           </div>
         </fieldset>
         <label className="persona-mission">Mission (une phrase)

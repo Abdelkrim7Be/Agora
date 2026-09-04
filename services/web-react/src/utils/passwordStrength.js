@@ -19,7 +19,7 @@
 const COMMON_BASES = [
   'password', 'motdepasse', 'azerty', 'qwerty', 'admin', 'welcome', 'bienvenue',
   'letmein', 'iloveyou', 'soleil', 'dragon', 'monkey', 'football', 'agora',
-  'agora', 'changeme', 'secret', 'default',
+  'changeme', 'secret', 'default',
 ];
 
 export const STRENGTH_LEVELS = ['faible', 'moyen', 'fort'];
