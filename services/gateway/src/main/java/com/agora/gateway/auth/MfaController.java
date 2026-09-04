@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
 @RestController
 public class MfaController {
 
-    private static final String ISSUER = "Agora AI";
+    private static final String ISSUER = "Agora";
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;

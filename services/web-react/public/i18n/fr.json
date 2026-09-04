@@ -13,12 +13,12 @@
   "view": {
     "platformDashboard": {
       "title": "Tableau de bord plateforme",
-      "kicker": "Agora AI",
+      "kicker": "Agora",
       "description": "Vue globale des agents IA, des boîtes connectées et des accès qui structurent la plateforme."
     },
     "instances": {
       "title": "Instances d’agents",
-      "kicker": "Agora AI",
+      "kicker": "Agora",
       "description": "Créez, ouvrez et administrez les espaces de travail des agents IA actifs sur la plateforme."
     },
     "agentTypes": {

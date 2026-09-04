@@ -255,12 +255,12 @@
   ],
   "refresh": "15s",
   "schemaVersion": 42,
-  "tags": ["agora", "agora-ai"],
+  "tags": ["agora"],
   "templating": {"list": []},
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
-  "title": "Agora AI",
+  "title": "Agora",
   "uid": "agora-overview",
   "version": 3
 }

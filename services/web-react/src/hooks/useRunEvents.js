@@ -28,7 +28,7 @@ export function useRunEvents() {
           if (document.hidden && window.Notification?.permission === 'granted') {
             const title = data?.status === 'pending_approval' ? 'Brouillon prêt à valider' : 'Activité de l’agent';
             const body = [data?.subject, data?.author].filter(Boolean).join(' · ');
-            new Notification(title, { body: body || 'Agora AI a mis à jour une exécution.' });
+            new Notification(title, { body: body || 'Agora a mis à jour une exécution.' });
           }
         }
       })

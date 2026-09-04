@@ -328,7 +328,7 @@ export default function ContactsPage() {
                 </select>
               </label>
               <label><span>Département</span><input value={form.dept} onChange={(e) => setForm({ ...form, dept: e.target.value })} placeholder="Finance" /></label>
-              <label><span>Entreprise</span><input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Agora" /></label>
+              <label><span>Entreprise</span><input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Acme" /></label>
               <label><span>Langue</span><input value={form.lang} onChange={(e) => setForm({ ...form, lang: e.target.value })} placeholder="fr" /></label>
               <label><span>Tags (virgules)</span><input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="finance, approver" /></label>
               <label className="toggle-row"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /><span>Actif</span></label>

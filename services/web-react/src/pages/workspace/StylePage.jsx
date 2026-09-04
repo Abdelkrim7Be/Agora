@@ -201,7 +201,7 @@ export default function StylePage() {
         <span className="counter">{learningEnabled ? 'apprentissage actif' : 'apprentissage désactivé'}</span>
         <span className="counter">{ORIGIN_LABELS[origin] || 'provenance inconnue'}</span>
       </div>
-      <div className="notice">Les mails envoyés sont analysés par le LLM configuré. Agora AI conserve le profil de style distillé, pas le contenu brut des e-mails.</div>
+      <div className="notice">Les mails envoyés sont analysés par le LLM configuré. Agora conserve le profil de style distillé, pas le contenu brut des e-mails.</div>
       <SyncProgressBar label="Apprentissage du style" mode={visual.mode} message={visual.message} />
       <div className="editor-grid style-grid">
         <Card className="editor-card">
