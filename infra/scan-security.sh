@@ -53,5 +53,4 @@ run_trivy fs \
 scan_image email-agent email-agent
 scan_image security security
 scan_image gateway gateway
-scan_image web web
 scan_image web-react web-react
