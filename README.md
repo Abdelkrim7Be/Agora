@@ -94,10 +94,13 @@ configuration: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Screenshots
 
-_Not yet added._ The most representative views, once captured from a running
-instance, will be: the login page, the workspace inbox/dashboard, the
-validation queue (a pending draft awaiting human approval — Agora's most
-distinctive screen), the audit log, and the permissions/roles page.
+| | |
+|---|---|
+| Login | ![Login](docs/screenshots/01-login.png) |
+| Workspace inbox | ![Inbox](docs/screenshots/02-inbox.png) |
+| Validation queue — a pending draft awaiting human approval, Agora's most distinctive screen | ![Validation queue](docs/screenshots/03-validation.png) |
+| Tamper-evident audit log | ![Audit log](docs/screenshots/04-audit-log.png) |
+| Per-instance permissions | ![Permissions](docs/screenshots/05-permissions.png) |
 
 ## Documentation
 
