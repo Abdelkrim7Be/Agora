@@ -205,7 +205,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/agent/metrics").hasAnyRole("OWNER", "VIEWER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/dlq").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/dlq/*/requeue").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.GET, "/api/agent/roles").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/roles").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/roles").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/roles/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/roles/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
@@ -213,17 +213,17 @@ public class SecurityConfig {
                 // categories themselves, but only an owner turns one into a category.
                 // Declared before the generic /categories/* rules so the literal
                 // "proposals" path never falls through to them.
-                .requestMatchers(HttpMethod.GET, "/api/agent/categories/proposals").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/categories/proposals").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/categories/proposals/accept").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/categories/proposals/dismiss").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/api/agent/categories").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/categories").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/categories").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/categories/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/categories/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/categories/test-match").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/categories/*/duplicate").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/agent/templates").hasAnyRole("OWNER", "VIEWER", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/api/agent/contacts").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/contacts").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/agent/contacts").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/contacts/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/contacts/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
@@ -237,7 +237,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/agent/segments").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/api/agent/segments/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/agent/segments/*").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/api/agent/drafts").hasAnyRole("OWNER", "VIEWER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/agent/drafts").hasAnyRole("OWNER", "VIEWER", "APPROVER", "ADMIN")
                 // Junk-gate settings: readable by anyone who can see the workspace,
                 // editable by the instance owner, same shape as the rules surface.
                 // Block candidates derived from the mailbox: readable with the settings.
