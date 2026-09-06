@@ -15,8 +15,10 @@ backport to at this stage.
 
 **Do not open a public GitHub issue for a security vulnerability.**
 
-Report it privately to: `<SECURITY CONTACT NOT YET SET — fill in before
-publishing this repository>`.
+Use GitHub's private vulnerability reporting: go to the
+[Security tab](../../security/advisories/new) and click "Report a
+vulnerability." This opens a private advisory visible only to you and the
+maintainer.
 
 Include:
 - A description of the vulnerability and its potential impact.
