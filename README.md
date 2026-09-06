@@ -1,9 +1,21 @@
+<div align="center">
+
 # Agora
 
-A self-hosted platform for running AI agents behind a single authenticated
-gateway, with capability-based isolation between what an agent can *decide*
-and what it's actually allowed to *do*. The email agent is the platform's
-current reference implementation.
+### Self-hosted, capability-isolated AI agent platform
+
+A single authenticated gateway in front of one or more AI agents — every tool
+call authorized against explicit policy, human approval for anything hard to
+undo, and a tamper-evident audit log of every action taken.
+
+![License](https://img.shields.io/badge/License-Apache%202.0-blue)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F?logo=springboot&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED?logo=docker&logoColor=white)
+
+</div>
 
 ## Why Agora?
 
