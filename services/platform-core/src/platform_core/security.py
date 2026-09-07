@@ -25,15 +25,21 @@ class SecurityClient:
         current_user_id: Callable[[], str],
         current_agent_instance_id: Callable[[], str],
         record_usage: Callable[[dict | None, str], None] | None = None,
+        shared_secret: Callable[[], str] | None = None,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._current_user_id = current_user_id
         self._current_agent_instance_id = current_agent_instance_id
         self._record_usage = record_usage
+        self._shared_secret = shared_secret
 
     def _url(self, path: str) -> str:
         return f"{self._base_url()}{path}"
+
+    def _headers(self) -> dict[str, str]:
+        secret = self._shared_secret() if self._shared_secret else ""
+        return {"x-agora-security-secret": secret} if secret else {}
 
     async def classify_content(self, content: str, known_internal: bool = False) -> dict:
         """Always run the quarantined classifier over some content.
@@ -48,7 +54,7 @@ class SecurityClient:
         payload = {"source": "gmail_thread", "content": content, "known_internal": known_internal}
         try:
             async with httpx.AsyncClient(timeout=self._timeout()) as client:
-                resp = await client.post(self._url("/classify"), json=payload)
+                resp = await client.post(self._url("/classify"), json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception:
@@ -84,7 +90,7 @@ class SecurityClient:
         payload = {"sender": sender, "subject": subject, "content": content}
         try:
             async with httpx.AsyncClient(timeout=self._timeout()) as client:
-                resp = await client.post(self._url("/sanitize"), json=payload)
+                resp = await client.post(self._url("/sanitize"), json=payload, headers=self._headers())
                 resp.raise_for_status()
                 verdict = resp.json()
                 self.record_quarantine_usage(verdict.get("usage"))
@@ -113,7 +119,7 @@ class SecurityClient:
         """
         try:
             async with httpx.AsyncClient(timeout=self._timeout()) as client:
-                resp = await client.get(self._url("/policy"))
+                resp = await client.get(self._url("/policy"), headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception:
@@ -170,7 +176,7 @@ class SecurityClient:
         )
         try:
             with httpx.Client(timeout=self._timeout()) as client:
-                resp = client.post(self._url("/authorize"), json=payload)
+                resp = client.post(self._url("/authorize"), json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception:
@@ -192,7 +198,7 @@ class SecurityClient:
         }
         try:
             with httpx.Client(timeout=self._timeout()) as client:
-                resp = client.post(self._url("/audit-output"), json=payload)
+                resp = client.post(self._url("/audit-output"), json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception:
@@ -216,7 +222,7 @@ class SecurityClient:
         payload = {"sender": "", "subject": f"memory:{namespace_label}", "content": content}
         try:
             with httpx.Client(timeout=self._timeout()) as client:
-                resp = client.post(self._url("/sanitize"), json=payload)
+                resp = client.post(self._url("/sanitize"), json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception:

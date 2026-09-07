@@ -43,6 +43,7 @@ _client = SecurityClient(
     current_user_id=_user_id,
     current_agent_instance_id=_agent_instance_id,
     record_usage=lambda usage, node: _record_quarantine_usage(usage, node),
+    shared_secret=lambda: settings.security_shared_secret,
 )
 
 classify_content = _client.classify_content
