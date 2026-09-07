@@ -8,6 +8,7 @@ A single authenticated gateway in front of one or more AI agents — every tool
 call authorized against explicit policy, human approval for anything hard to
 undo, and a tamper-evident audit log of every action taken.
 
+[![CI](https://github.com/Abdelkrim7Be/Agora/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdelkrim7Be/Agora/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F?logo=springboot&logoColor=white)
@@ -16,6 +17,20 @@ undo, and a tamper-evident audit log of every action taken.
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED?logo=docker&logoColor=white)
 
 </div>
+
+## Contents
+
+- [Why Agora?](#why-agora)
+- [What it provides today](#what-it-provides-today)
+- [What Agora is not](#what-agora-is-not)
+- [Architecture](#architecture)
+- [Security model](#security-model)
+- [Quick start](#quick-start)
+- [Screenshots](#screenshots)
+- [Documentation](#documentation)
+- [Project status](#project-status)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Why Agora?
 
@@ -61,6 +76,21 @@ not aspirational:
   enterprise-provided model endpoint instead. See `docs/DEPLOYMENT.md`.
 - **Observability** — Prometheus metrics, a starter Grafana dashboard.
 
+## What Agora is not
+
+Stated plainly, so expectations are set before you deploy it:
+
+- **Not a knowledge-base / RAG assistant.** Agora is workflow-driven —
+  categories, rules, and templates you configure — not a system that answers
+  questions from a document corpus. No retrieval pipeline is planned.
+- **Not a multi-agent orchestration framework.** The platform is
+  agent-agnostic by contract (`docs/AGENTS.md`), but only one agent type
+  (email) exists today, and agents don't currently coordinate with each other.
+- **Not a managed/hosted service.** Self-hosted only — you run the containers,
+  you hold the LLM and mailbox credentials.
+- **Not SSO/enterprise-IdP integrated (yet).** Auth is username/password + JWT
+  + optional TOTP MFA; no SAML/OIDC federation.
+
 ## Architecture
 
 ```mermaid
@@ -98,6 +128,20 @@ git clone <repo-url> agora && cd agora/infra
 cp .env.example .env   # fill in the required values — see docs/DEPLOYMENT.md
 docker compose -f docker-compose.yml -f docker-compose.override.local.yml up --build
 ```
+
+`.env` has no usable defaults for secrets or credentials — every value below must
+be set explicitly before the stack will start (full list in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)):
+
+| Variable | What it's for |
+|---|---|
+| `GATEWAY_JWT_SECRET` | Signs access/refresh tokens |
+| `GATEWAY_OWNER_USERNAME` / `GATEWAY_OWNER_PASSWORD` | Your first login |
+| `GATEWAY_AGENT_SHARED_SECRET` | Authenticates gateway → email-agent calls |
+| `AGENT_SECURITY_SHARED_SECRET` | Authenticates email-agent → security-service calls |
+| `POSTGRES_PASSWORD` / `AGENT_POSTGRES_PASSWORD` | Database access |
+| `REDIS_PASSWORD` | Cache/rate-limit store access |
+| `GATEWAY_CORS_ALLOWED_ORIGINS` | Which origin the browser SPA is allowed to call the gateway from |
 
 Open `http://localhost:5173` once containers report healthy, and log in with
 the owner credentials you set in `.env`. This mode is dry-run by default —
@@ -144,7 +188,8 @@ than glossed over:
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for workflow, branch/commit
-conventions, and local setup for each service.
+conventions, and local setup for each service. See
+[`CHANGELOG.md`](CHANGELOG.md) for what's changed between releases.
 
 ## License
 
