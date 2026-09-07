@@ -305,11 +305,7 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
-    // CORS so the browser control panel (served from a different origin) can call the
-    // gateway. Origins are env-driven (GATEWAY_CORS_ALLOWED_ORIGINS, comma-separated) —
-    // no wildcard default: refresh tokens use an HttpOnly cookie, so credentialed CORS
-    // is enabled, and a credentialed wildcard origin is a real vulnerability, not a dev
-    // convenience. The operator must set an explicit allowlist; compose always does.
+    // No wildcard default: credentialed CORS + "*" is a real vulnerability.
     @Bean
     public CorsConfigurationSource corsConfigurationSource(
             @Value("${GATEWAY_CORS_ALLOWED_ORIGINS}") String allowedOrigins) {
