@@ -45,7 +45,7 @@ class _FakeAsyncClient:
     async def __aexit__(self, *_args):
         pass
 
-    async def post(self, url: str, json=None):
+    async def post(self, url: str, json=None, headers=None):
         if self._raises:
             raise self._raises
         return self._response
@@ -115,7 +115,7 @@ class _FakeSyncClient:
     def __exit__(self, *_args):
         pass
 
-    def post(self, url: str, json=None):
+    def post(self, url: str, json=None, headers=None):
         if self._raises:
             raise self._raises
         self._calls.append({"url": url, "json": json})

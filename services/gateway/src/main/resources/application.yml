@@ -6,7 +6,7 @@ spring:
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:agora}
     username: ${POSTGRES_USER:agora}
-    password: ${POSTGRES_PASSWORD:agora}
+    password: ${POSTGRES_PASSWORD}
   jpa:
     open-in-view: false
     hibernate:
