@@ -50,10 +50,7 @@ class Settings:
     # that does is a personal-data incident.
     redact_pii: bool = os.getenv("SECURITY_REDACT_PII", "true").lower() == "true"
 
-    # Shared with email-agent's AGENT_SECURITY_SHARED_SECRET — same value on both
-    # sides. This service publishes no host port by default, so network isolation
-    # is the first layer; this is the second, same tradeoff as the gateway's own
-    # GATEWAY_AGENT_SHARED_SECRET (degrades open only if left unconfigured).
+    # Must match email-agent's AGENT_SECURITY_SHARED_SECRET.
     shared_secret: str = os.getenv("AGENT_SECURITY_SHARED_SECRET", "")
 
     database_url: str = get_secret("SECURITY", "DATABASE_URL")
