@@ -7,7 +7,7 @@ COPY . .
 RUN npm run build
 
 # Serve stage
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 USER root
 RUN apk upgrade --no-cache
 USER 101
