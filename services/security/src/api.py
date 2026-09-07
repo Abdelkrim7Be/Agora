@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hmac
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from src.authorize import authorize
 from src.classify import classify_source
@@ -32,6 +33,25 @@ from src.sanitize import sanitize
 app = FastAPI(title="agora-security")
 
 logger = logging.getLogger("agora.security")
+
+_OPEN_PATHS = {"/health", "/metrics"}
+
+
+@app.middleware("http")
+async def require_agent_shared_secret(request: Request, call_next):
+    """Reject calls that don't carry the secret shared with email-agent.
+
+    This service publishes no host port by default, so docker-network isolation
+    is the first layer; this is the second. Degrades open only if the operator
+    never configured AGENT_SECURITY_SHARED_SECRET — same tradeoff already made
+    for GATEWAY_AGENT_SHARED_SECRET on the gateway<->agent hop.
+    """
+    expected = settings.shared_secret.strip()
+    if expected and request.url.path not in _OPEN_PATHS:
+        actual = request.headers.get("x-agora-security-secret", "")
+        if not hmac.compare_digest(actual, expected):
+            return JSONResponse({"detail": "invalid or missing shared secret"}, status_code=401)
+    return await call_next(request)
 
 
 @app.on_event("startup")

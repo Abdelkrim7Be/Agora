@@ -130,6 +130,7 @@ class Settings:
     # Security service integration (off by default — no behavior change until opted in).
     security_enabled: bool = _env_bool("AGENT_SECURITY_ENABLED", "false")
     security_url: str = os.getenv("AGENT_SECURITY_URL", "http://localhost:8001")
+    security_shared_secret: str = os.getenv("AGENT_SECURITY_SHARED_SECRET", "")
     gateway_shared_secret: str = os.getenv("GATEWAY_AGENT_SHARED_SECRET", "")
     # Long-running entrypoints (poller, worker) configure the root logger from
     # this; the API inherits uvicorn's handlers instead.

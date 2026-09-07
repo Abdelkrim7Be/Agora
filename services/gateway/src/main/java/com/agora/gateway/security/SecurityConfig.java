@@ -306,12 +306,13 @@ public class SecurityConfig {
     }
 
     // CORS so the browser control panel (served from a different origin) can call the
-    // gateway. Origins are env-driven (GATEWAY_CORS_ALLOWED_ORIGINS, comma-separated;
-    // default "*" for dev — tighten in production). Refresh tokens use an HttpOnly cookie,
-    // so credentialed CORS is enabled; production must keep an explicit origin allowlist.
+    // gateway. Origins are env-driven (GATEWAY_CORS_ALLOWED_ORIGINS, comma-separated) —
+    // no wildcard default: refresh tokens use an HttpOnly cookie, so credentialed CORS
+    // is enabled, and a credentialed wildcard origin is a real vulnerability, not a dev
+    // convenience. The operator must set an explicit allowlist; compose always does.
     @Bean
     public CorsConfigurationSource corsConfigurationSource(
-            @Value("${GATEWAY_CORS_ALLOWED_ORIGINS:*}") String allowedOrigins) {
+            @Value("${GATEWAY_CORS_ALLOWED_ORIGINS}") String allowedOrigins) {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOriginPatterns(Arrays.asList(allowedOrigins.split(",")));
         config.setAllowCredentials(true);

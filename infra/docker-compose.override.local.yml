@@ -126,7 +126,7 @@ services:
       AGENT_RUN_MIGRATIONS: "false"
       AGENT_STORAGE_BACKEND: postgres
       AGENT_RUN_REGISTRY_BACKEND: postgres
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       # The SLA escalation and component alerts run in this process, not the API.
       # Both recipients below are on the outbound allow list at the top of the file.
       AGENT_NOTIFY_ENABLED: ${AGENT_NOTIFY_ENABLED:-true}
