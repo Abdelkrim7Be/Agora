@@ -37,7 +37,7 @@ jobs:
       RLS_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/agora_ci
       RLS_TEST_APP_URL: postgresql://agora_email_agent:agent-test-password@localhost:5432/agora_ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -60,7 +60,7 @@ jobs:
       OPENAI_API_KEY: "ci-dummy"
       PYTHONPATH: "."
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -76,7 +76,7 @@ jobs:
       run:
         working-directory: infra
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -88,7 +88,7 @@ jobs:
     name: secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Scan git history for secrets
@@ -100,7 +100,7 @@ jobs:
     name: dependency and image scanning
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Scan dependency manifests
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -149,7 +149,7 @@ jobs:
       run:
         working-directory: services/web-react
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -166,7 +166,7 @@ jobs:
       run:
         working-directory: services/gateway
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
