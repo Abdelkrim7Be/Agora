@@ -7,7 +7,7 @@ RUN mvn -q dependency:go-offline
 COPY src/ ./src/
 RUN mvn -q -DskipTests package
 
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 RUN apk upgrade --no-cache
 RUN addgroup -S app && adduser -S -G app -h /app app \
