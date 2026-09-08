@@ -13,7 +13,7 @@ dependencies = ["httpx>=0.28.1"]
 [project.optional-dependencies]
 langchain = ["langchain-core>=0.3"]
 langgraph = ["langgraph-checkpoint-sqlite>=2.0"]
-postgres = ["psycopg[binary]>=3.1"]
+postgres = ["psycopg[binary]>=3.3.5"]
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]

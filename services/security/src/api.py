@@ -39,13 +39,7 @@ _OPEN_PATHS = {"/health", "/metrics"}
 
 @app.middleware("http")
 async def require_agent_shared_secret(request: Request, call_next):
-    """Reject calls that don't carry the secret shared with email-agent.
-
-    This service publishes no host port by default, so docker-network isolation
-    is the first layer; this is the second. Degrades open only if the operator
-    never configured AGENT_SECURITY_SHARED_SECRET — same tradeoff already made
-    for GATEWAY_AGENT_SHARED_SECRET on the gateway<->agent hop.
-    """
+    """Reject calls that don't carry the secret shared with email-agent."""
     expected = settings.shared_secret.strip()
     if expected and request.url.path not in _OPEN_PATHS:
         actual = request.headers.get("x-agora-security-secret", "")
