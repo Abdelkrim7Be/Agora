@@ -11,7 +11,7 @@ dependencies = ["httpx>=0.28.1"]
 # Imported lazily by the modules that need them, so a service installs only what
 # its own backends use.
 [project.optional-dependencies]
-langchain = ["langchain-core>=0.3"]
+langchain = ["langchain-core>=1.6.2"]
 langgraph = ["langgraph-checkpoint-sqlite>=2.0"]
 postgres = ["psycopg[binary]>=3.3.5"]
 dev = ["pytest>=8.0"]
