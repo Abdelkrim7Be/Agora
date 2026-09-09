@@ -1,7 +1,7 @@
 # Security model
 
 Agora's security model is defense-in-depth: no single layer is trusted to
-catch everything, and each layer is independently enforceable — a bug in one
+catch everything, and each layer is independently enforceable: a bug in one
 doesn't remove the others. This document explains what's actually
 implemented, what it defends against, and where the real limitations are.
 Precision is the goal here, not reassurance; every claim below is checked
@@ -26,7 +26,7 @@ against the code, not the intent behind it.
 
 **What Agora does not claim to solve:**
 - Prompt injection is *mitigated*, not eliminated. See "Prompt injection
-  defenses" below — this is the section most likely to be misread as a
+  defenses" below; this is the section most likely to be misread as a
   stronger guarantee than it is.
 - Agora does not audit the LLM provider itself. If you point it at a
   third-party model endpoint, that provider sees the content you send it,
@@ -35,7 +35,7 @@ against the code, not the intent behind it.
   implementation. There is no rate limiting on most endpoints beyond login
   attempts.
 - Outlook support has not been verified against a live mailbox (see
-  `services/email-agent/docs/mail-providers.md`) — treat it as less battle-
+  `services/email-agent/docs/mail-providers.md`); treat it as less battle-
   tested than the Gmail path from a correctness standpoint, though it goes
   through the same authorization chain.
 
@@ -44,7 +44,7 @@ against the code, not the intent behind it.
 The gateway is the only component that authenticates a user; no other
 service does. Login (`POST /auth/login`) issues a short-lived JWT access
 token (default 15 minutes) and a rotating `HttpOnly`, `SameSite=Strict`
-refresh cookie (default 7 days) — the refresh token never touches
+refresh cookie (default 7 days); the refresh token never touches
 JavaScript. Passwords are hashed with BCrypt. Optional TOTP-based MFA is
 supported per account, with recovery codes issued at enrollment; when
 enabled, login requires a second `/auth/mfa/verify` step against a
@@ -57,10 +57,10 @@ rate-limited per account and globally.
 
 Two independent role axes, both enforced server-side in the gateway:
 
-- **Platform role** — `admin`, `owner`, `viewer`, or `approver`, carried in
+- **Platform role**: `admin`, `owner`, `viewer`, or `approver`, carried in
   the JWT. Gates broad categories of gateway endpoint (user management,
   agent-type registration, audit access).
-- **Instance role** — `owner`, `approver`, or `viewer`, resolved per agent
+- **Instance role**: `owner`, `approver`, or `viewer`, resolved per agent
   instance: the instance's creator is always its owner; beyond that, an
   explicit grant (`AgentInstanceGrant`) or an instance's configured allowed
   roles determine who can do what. This is what lets a platform-level
@@ -70,25 +70,25 @@ Two independent role axes, both enforced server-side in the gateway:
 A request has to clear both: the platform-role gate before it reaches the
 proxy, and the instance-role resolution inside the proxy before it's
 forwarded to the agent. Neither check trusts anything the browser sends
-except the JWT itself — instance role is resolved server-side from the
+except the JWT itself; instance role is resolved server-side from the
 database on every request, not cached in a client-readable token claim.
 
 ## Tenant isolation
 
 Every agent instance is a separate scope, not just a filter applied to a
-shared table. `email-agent` tags every piece of state — run records,
-learned memory, OAuth tokens, cost entries, categories — with both a user id
+shared table. `email-agent` tags every piece of state (run records,
+learned memory, OAuth tokens, cost entries, categories) with both a user id
 and an agent instance id, and the gateway stamps the instance id on every
 proxied request from the resolved, server-side value, never from anything
 the client supplies directly. Underneath the application-level scoping,
 PostgreSQL enforces row-level security on the app-owned business tables,
-bound to the tenant/instance pair for the runtime database role — so a bug
+bound to the tenant/instance pair for the runtime database role, so a bug
 in the application-level scoping doesn't automatically mean cross-tenant
 data is readable at the database layer too, for the tables RLS covers.
 
 **Known boundary**: LangGraph's own checkpoint/store tables (conversation
 state, not the app's own business tables) are not covered by PostgreSQL RLS
-— isolation there is enforced by application-level ownership checks before
+. Isolation there is enforced by application-level ownership checks before
 a checkpoint is read, not by the database. A bug in that specific check path
 is a tenant-isolation bug, not something RLS would independently catch. This
 is exercised by `email-agent`'s own tenant-isolation test suite
@@ -104,26 +104,26 @@ Every tool an agent can call is registered with a policy decision in
 |---|---|
 | `allow` | Executes immediately. Used for reversible, low-risk actions (labeling, archiving). |
 | `hitl` | Pauses for human approval before executing. Used for anything that sends, forwards, or is otherwise hard to undo. |
-| `deny` | Never executes. The default for anything not explicitly listed — an unlisted tool is refused, not silently allowed. |
+| `deny` | Never executes. The default for anything not explicitly listed: an unlisted tool is refused, not silently allowed. |
 
 The policy engine (`security` service, `/authorize`) evaluates every tool
-call **before** it executes, independent of what the LLM decided to do — the
+call **before** it executes, independent of what the LLM decided to do. The
 model proposes a tool call, the policy decides whether it's allowed to
 happen. Recipient-level allow/deny lists can further constrain send-style
 tools regardless of the tool's own default decision. A category's own
 configuration can only make a workflow's policy *stricter* than the tool's
-default (escalate `allow` to `hitl`, narrow allowed recipients) — never
+default (escalate `allow` to `hitl`, narrow allowed recipients), never
 looser. See `services/email-agent/docs/capabilities.md` for the full
 tool-by-tool table.
 
 ## Human-in-the-loop
 
-When a tool call's policy decision is `hitl`, the LangGraph run interrupts —
-execution genuinely pauses, it doesn't queue behind a timer — and surfaces
+When a tool call's policy decision is `hitl`, the LangGraph run interrupts:
+execution genuinely pauses, it doesn't queue behind a timer, and surfaces
 as a pending approval in the validation queue. A reviewer with sufficient
 instance role can approve as-is, edit and approve, reject, or send free-text
 feedback for the agent to revise and re-propose. **An edited approval is
-re-authorized before execution**, not just re-displayed — editing a draft
+re-authorized before execution**, not just re-displayed. Editing a draft
 doesn't bypass the policy check that would otherwise have applied to the
 original content.
 
@@ -131,7 +131,7 @@ original content.
 
 Inbound email content passes through the `security` service's sanitization
 step before any agent reasoning sees it. This is a mitigation, layered with
-the capability-policy and HITL gates above it — not a claim that prompt
+the capability-policy and HITL gates above it, not a claim that prompt
 injection is solved. Concretely:
 
 - Sanitization runs on every inbound message before triage, independent of
@@ -141,13 +141,13 @@ injection is solved. Concretely:
 - Right before an approved send actually reaches Gmail/Outlook, a second,
   independent check (`/audit-output`) scans the *outbound* content for
   injection artifacts that survived sanitization and got echoed into a
-  draft — whether by the model or a careless human edit during review. A
+  draft, whether by the model or a careless human edit during review. A
   flagged draft is blocked even if `/authorize` already allowed the action,
   and a `security`-service outage blocks the send rather than letting it
   through unaudited.
 - CI runs an adversarial regression suite
   (`services/email-agent/eval/`, AgentDojo-style attack cases) on every PR
-  and **fails the build on any successful attack** — this is a regression
+  and **fails the build on any successful attack**. This is a regression
   gate against known attack patterns, not a proof that novel attacks don't
   exist.
 
@@ -162,7 +162,7 @@ environment variable, not a database row a compromised process could edit
 at runtime) can restrict which addresses the agent may ever send or forward
 to, regardless of what the policy engine or the model decided. This is
 meant as a last-resort, config-level backstop for testing or narrowly-scoped
-deployments — it's independent by design, not a replacement for
+deployments. It's independent by design, not a replacement for
 `policy.yaml`'s recipient rules.
 
 ## Secrets and OAuth token protection
@@ -173,7 +173,7 @@ until they're naturally re-wrapped on next write). Production deployments
 can back the encryption key with an external secret manager (Vault KV v2)
 instead of an environment variable. Full detail, including the rotation and
 recovery procedure, is in
-`services/email-agent/docs/token-encryption.md` — this section is a
+`services/email-agent/docs/token-encryption.md`; this section is a
 summary, that file is the operational reference.
 
 CI runs secret scanning (`gitleaks`, full git history, every PR) and
@@ -183,14 +183,14 @@ fixable CVEs fail the build) as merge-blocking gates, not optional checks.
 ## Auditability
 
 Every gateway-mediated action is recorded to an append-only audit log, each
-row hash-chained to the previous one (`prevHash`/`hash`, SHA-256) —
+row hash-chained to the previous one (`prevHash`/`hash`, SHA-256).
 `GET /audit/verify` recomputes the chain and reports whether it's intact,
 and if not, the id of the first row where it breaks. A direct database edit
 to a historical row breaks that row's recomputed hash or the next row's
 link; either shows up as `valid: false`. Rows written before hash-chaining
 existed are counted separately (`unverifiableLegacyCount`) rather than
 treated as a broken chain. Audit rows are intentionally exempt from data
-retention — see `docs/compliance/DATA_RETENTION.md`.
+retention; see `docs/compliance/DATA_RETENTION.md`.
 
 ## Security limitations
 

@@ -20,4 +20,4 @@ assignees: ""
 
 ## Additional context
 
-<!-- Anything else relevant — affected component, related issues, etc. -->
+<!-- Anything else relevant: affected component, related issues, etc. -->

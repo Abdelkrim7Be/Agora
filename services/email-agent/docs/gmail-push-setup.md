@@ -36,7 +36,7 @@ Pub/Sub must reach the gateway over HTTPS.
 - **Local dev**: tunnel to the gateway port, e.g.
   `cloudflared tunnel --url http://localhost:8090` (or ngrok). Use the printed
   HTTPS hostname in the subscription endpoint. Free tunnels change hostname on
-  restart — update the subscription endpoint when it changes.
+  restart; update the subscription endpoint when it changes.
 
 ## 3. Service configuration
 
@@ -62,7 +62,7 @@ never spams `users.watch` either.
 
 1. `docker logs infra-poller-1` shows `gmail watch registered for N instance(s)`.
 2. Send a mail to a connected mailbox. Within seconds the API log shows
-   `POST /webhooks/gmail` and a run appears in the UI — no poll cycle needed.
+   `POST /webhooks/gmail` and a run appears in the UI, no poll cycle needed.
 3. `GET /api/agent/sync/status` reports `sync_mode: webhook` with a
    `watch_expires_at` timestamp.
 
@@ -73,5 +73,5 @@ never spams `users.watch` either.
   from the *next* push onward.
 - History older than ~1 week is purged by Gmail; the webhook and the polling
   fallback both detect the stale window and reseed automatically.
-- Per-call cost: `history.list` = 2 quota units vs `messages.list` = 5 —
+- Per-call cost: `history.list` = 2 quota units vs `messages.list` = 5,
   and pushes only fire when something actually changed.

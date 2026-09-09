@@ -2,8 +2,8 @@
 
 The agent talks to a mailbox through one object satisfying `MailProvider`
 (`src/mail/base.py`). Two implementations ship: Gmail and Outlook. Everything
-above that layer — the poller, the graph, the junk gate, category routing, the
-capability tools, campaigns — is written against the protocol and does not know
+above that layer (the poller, the graph, the junk gate, category routing, the
+capability tools, campaigns) is written against the protocol and does not know
 which mailbox it is working with.
 
 ## Choosing a provider
@@ -16,7 +16,7 @@ Anything unset reads as `gmail`. Every instance that existed before Outlook
 support therefore keeps working with no migration.
 
 The value is exposed on `GET /sync/status` as `provider`. That is the only place
-other components read it from — the gateway deliberately does not keep its own
+other components read it from. The gateway deliberately does not keep its own
 copy, because the agent is the component that holds the token and so the only
 one that can be authoritative.
 
@@ -46,7 +46,7 @@ OUTLOOK_OAUTH_REDIRECT_URI=http://localhost:8080/api/agent/connect/outlook/callb
 ```
 
 Scopes requested: `offline_access User.Read Mail.ReadWrite Mail.Send`.
-`offline_access` is what returns a refresh token — without it the connection
+`offline_access` is what returns a refresh token; without it the connection
 dies at the first access-token expiry (about an hour).
 
 Gmail-only deployments leave all four blank; nothing reaches this code path
@@ -55,7 +55,7 @@ unless an instance's provider is `outlook`.
 Connect: `GET /agent-instances/{id}/connect/outlook/start` → consent →
 `GET /connect/outlook/callback`. Disconnect: `POST /disconnect/outlook`.
 
-The OAuth state is signed with the same `GMAIL_OAUTH_STATE_SECRET` — that secret
+The OAuth state is signed with the same `GMAIL_OAUTH_STATE_SECRET`; that secret
 protects the state envelope, not the provider account. PKCE is always used: the
 redirect passes through the gateway, so the code is briefly visible on that
 path, and the verifier makes an intercepted code useless on its own.
@@ -78,7 +78,7 @@ Two of these are worth understanding:
 
 - **The two Gmail pseudo-labels are handled inside `modify_labels`.** That is
   what lets the inbox capability tools, auto-organization and the poller's
-  mark-as-read keep working unchanged on Outlook — they all express themselves
+  mark-as-read keep working unchanged on Outlook; they all express themselves
   as label edits, and the provider translates.
 - **Replies go through a draft.** Creating a reply draft is what makes Graph
   populate `References` and `In-Reply-To` itself, so the message threads
@@ -88,7 +88,7 @@ Two of these are worth understanding:
 
 `POST /connect/test` round-trips the configured mailbox and returns
 `{ok, provider, mailbox, error}`. A broken mailbox is a **200 with `ok: false`**,
-not an error status — the UI has to be able to show why. The result is recorded
+not an error status; the UI has to be able to show why. The result is recorded
 through the normal sync-status path, so the reason appears wherever connection
 state is displayed. Exposed in the workspace as "Tester la connexion".
 
@@ -112,6 +112,6 @@ state is displayed. Exposed in the workspace as "Tester la connexion".
 - Outlook attachment text extraction follows the same
   `AGENT_EXTRACT_ATTACHMENTS` gate as Gmail.
 - **Outlook cannot send attachments.** `write_email`/`create_draft`'s `include_attachments` and
-  reviewer-uploaded files (see `docs/capabilities.md#attachments`) are Gmail-only —
+  reviewer-uploaded files (see `docs/capabilities.md#attachments`) are Gmail-only;
   `OutlookProvider.send_message`/`create_draft` raise `NotImplementedError` if attachments are
   passed.

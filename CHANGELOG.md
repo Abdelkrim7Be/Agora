@@ -10,7 +10,7 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Fixed
 - Platform-role approvers could manage (write) categories, contacts, roles, and
-  drafts but could not read them back through the same endpoints — the UI's own
+  drafts but could not read them back through the same endpoints. The UI's own
   nav links to those screens 403'd for that role.
 - Gateway CORS accepted a credentialed wildcard origin when
   `GATEWAY_CORS_ALLOWED_ORIGINS` was left unset outside Docker Compose.

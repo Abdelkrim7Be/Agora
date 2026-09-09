@@ -3,7 +3,7 @@
 Companion to `docs/compliance/GDPR_DATA_INVENTORY.md`. This is the
 operator-facing policy: what gets kept, for how long, how to purge it
 early, and how to erase a specific person's data on request. Grounded in
-shipped code — every mechanism described below has a corresponding source
+shipped code: every mechanism described below has a corresponding source
 file, not just a stated intention.
 
 ## 1. Automated retention (time-based)
@@ -22,7 +22,7 @@ which on each invocation:
 3. Deletes, for those runs only: LangGraph checkpoints and checkpoint
    writes (whichever storage backend is active), cost entries, trace
    entries, and the run registry record itself.
-4. Leaves the **audit log untouched** — audit is append-only and outlives
+4. Leaves the **audit log untouched**: audit is append-only and outlives
    run data by design; see `docs/SECURITY_MODEL.md`.
 
 A dry-run mode (`preview_retention()`) runs the same query without
@@ -30,19 +30,19 @@ deleting, for a count before committing to a purge.
 
 **Operator action**: set `retention_days` to match your own data-protection
 policy or contractual obligations. The shipped default of `30` is a
-placeholder, not a compliance decision — confirm it against whatever
+placeholder, not a compliance decision; confirm it against whatever
 agreement governs your deployment.
 
 ## 2. What is NOT covered by automatic retention
 
-- **Mailbox content itself** — lives in Gmail/Outlook, governed by the
+- **Mailbox content itself**: lives in Gmail/Outlook, governed by the
   mailbox owner's own account settings, not by Agora.
-- **Contacts, segments, campaign definitions** — persist until explicitly
+- **Contacts, segments, campaign definitions**: persist until explicitly
   deleted by the operator.
-- **OAuth tokens** — persist until revoked/deleted or overwritten by
+- **OAuth tokens**: persist until revoked/deleted or overwritten by
   re-authorization.
-- **Platform accounts** — persist until an admin removes the account.
-- **Backups** — `infra/backup-postgres.sh` snapshots are retained per your
+- **Platform accounts**: persist until an admin removes the account.
+- **Backups**: `infra/backup-postgres.sh` snapshots are retained per your
   own backup rotation, separate from in-app retention. Purging a run in-app
   does not retroactively scrub it from an already-taken backup; expire old
   backups on your own schedule.
@@ -58,7 +58,7 @@ agent_instance_id?, revoke_owner_token?}`.
 `erase_subject()` in `services/email-agent/src/gdpr.py` automates:
 
 1. **Contact/employee record**: deletes the matching row, if one exists.
-2. **OAuth token** — only when the caller explicitly passes
+2. **OAuth token**: only when the caller explicitly passes
    `revoke_owner_token=True`. This is never inferred automatically, because
    there is no reliable email-to-instance-owner mapping; set it only when
    the subject *is* the mailbox owner being offboarded, not a third party
@@ -70,14 +70,14 @@ agent_instance_id?, revoke_owner_token?}`.
 
 Two things this does **not** touch, matching the age-based retention path:
 
-6. **Backups** — note the erasure date; the subject's data reappears in any
+6. **Backups**: note the erasure date; the subject's data reappears in any
    backup taken before that date until that backup itself expires. Disclose
-   this to the requester — it's a standard limitation of backup retention,
+   this to the requester; it's a standard limitation of backup retention,
    not a bug.
-7. **Audit log** — deliberately not erased. The audit trail is append-only
-   by design (tamper-evidence requirement — see `docs/SECURITY_MODEL.md`).
+7. **Audit log**: deliberately not erased. The audit trail is append-only
+   by design (tamper-evidence requirement, see `docs/SECURITY_MODEL.md`).
    If a request legally requires scrubbing audit entries too, that's a
-   policy exception outside this procedure — deleting audit rows ad hoc
+   policy exception outside this procedure; deleting audit rows ad hoc
    breaks the hash chain and invalidates the trail from that point forward.
 
 ## 4. Known limitations

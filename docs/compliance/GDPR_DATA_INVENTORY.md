@@ -1,6 +1,6 @@
 # GDPR data processing inventory
 
-A record of processing activities in the shape of a GDPR Article 30 record —
+A record of processing activities in the shape of a GDPR Article 30 record:
 the kind of document a controller or data protection officer can be asked
 to produce on request. Grounded in the actual codebase; update this file
 whenever a new class of personal data is stored or a new processor (LLM
@@ -17,13 +17,13 @@ provider, object storage, etc.) is added.
 - **Sub-processors**: whichever external inference provider is selected for
   the active LLM profile (`services/email-agent/config/llm.*.yaml`, see
   `docs/DEPLOYMENT.md`):
-  - **Ollama** (`local`/`local-docker`/`local-host`/`safe` profiles) — runs
+  - **Ollama** (`local`/`local-docker`/`local-host`/`safe` profiles): runs
     on your own infrastructure. No sub-processor, no data leaves the
     deployment.
-  - **Groq** (`dev` profile, opt-in) — US-hosted, only contacted if this
+  - **Groq** (`dev` profile, opt-in): US-hosted, only contacted if this
     profile is explicitly selected.
   - **Mistral** (`prod` profile's primary model, via a self-hosted LiteLLM
-    proxy) — with **OpenAI** and **Anthropic** configured as fallback
+    proxy), with **OpenAI** and **Anthropic** configured as fallback
     providers if the primary is unavailable. All three are opt-in via the
     `cloud` Compose profile; none is contacted unless `prod` is explicitly
     selected.
@@ -56,7 +56,7 @@ LLM profile is explicitly enabled by the operator (§1).
 
 Determined by the controller's relationship with the mailbox owner
 (typically contract or legitimate interest for an internal company
-mailbox). Agora as processor does not itself establish a legal basis — this
+mailbox). Agora as processor does not itself establish a legal basis; this
 section is a placeholder the deploying business must fill in for their own
 data processing agreement.
 
@@ -70,7 +70,7 @@ explicitly exempt (append-only, outlives run retention by design).
 ## 6. Right to erasure
 
 Automated via `POST /gdpr/erase` (dry-run variant at
-`/gdpr/erase/dry-run`, both owner-role gated) — see
+`/gdpr/erase/dry-run`, both owner-role gated); see
 `docs/compliance/DATA_RETENTION.md` §3 for exactly what it covers and its
 known limitation (subject-matching only checks the sender field, not
 `to`/`cc`).
@@ -81,7 +81,7 @@ known limitation (subject-matching only checks the sender field, not
 - Groq (`dev` profile, opt-in): US-hosted.
 - Mistral (`prod` profile's primary): confirm current hosting region against
   Mistral's own data-processing terms before relying on this for a
-  residency-sensitive deployment — this document states what Agora is
+  residency-sensitive deployment; this document states what Agora is
   configured to call, not what any given provider guarantees about where
   processing happens.
 - OpenAI / Anthropic (`prod` profile's fallback only, contacted solely if
@@ -97,7 +97,7 @@ and a documented backup/restore drill (`docs/DEPLOYMENT.md`).
 
 ## 9. Open items
 
-- [ ] Fill in legal basis per deployment — controller-specific, not
+- [ ] Fill in legal basis per deployment: controller-specific, not
       something the code can decide.
 - [ ] Decide and document a data processing agreement template for
       business customers, if you're operating this on behalf of others.
@@ -105,5 +105,5 @@ and a documented backup/restore drill (`docs/DEPLOYMENT.md`).
       if/when recipient-side erasure requests become something you need to
       handle.
 - [ ] Confirm attachment/PDF-extracted text follows the same retention
-      cutoff as the email thread it came from — currently piggybacks on run
+      cutoff as the email thread it came from; currently piggybacks on run
       retention; verify no copy survives elsewhere (e.g. temp files).

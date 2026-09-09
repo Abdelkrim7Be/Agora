@@ -1,13 +1,13 @@
 # Security policy
 
-For the security *architecture* — what's defended against, how
-authentication and authorization work, what the real limitations are — see
+For the security *architecture* (what's defended against, how
+authentication and authorization work, what the real limitations are), see
 [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md). This file is about
 reporting a vulnerability, not explaining the design.
 
 ## Supported versions
 
-Agora doesn't yet have a versioned release process — `main` is the only
+Agora doesn't yet have a versioned release process; `main` is the only
 supported line. Security fixes land there; there is no LTS branch to
 backport to at this stage.
 
@@ -28,7 +28,7 @@ Include:
 
 You should expect an acknowledgment within a reasonable timeframe. As a
 small project without a dedicated security team, response times aren't
-formally guaranteed yet — see the "known gaps" note in
+formally guaranteed yet; see the "known gaps" note in
 [`docs/INCIDENT_RESPONSE.md`](docs/INCIDENT_RESPONSE.md).
 
 ## Scope
@@ -39,7 +39,7 @@ deployment configuration under `infra/`, and the CI pipeline.
 Out of scope: vulnerabilities in third-party dependencies without a
 demonstrated, Agora-specific exploit path (report those upstream instead);
 the security posture of an LLM provider you choose to connect (Ollama,
-Groq, Mistral, OpenAI, Anthropic) — that's between you and the provider.
+Groq, Mistral, OpenAI, Anthropic): that's between you and the provider.
 
 ## Disclosure
 

@@ -30,7 +30,7 @@ Short imperative subject line. No period at the end. Body optional for non-obvio
 ## Pull Requests
 
 - Branch off `main`, PR back into `main`.
-- One logical change per PR — keep them small.
+- One logical change per PR; keep them small.
 - All CI checks must pass before merge.
 - At least one approval required once the second collaborator joins.
 - Squash-merge to keep `main` history linear.
@@ -66,12 +66,12 @@ npm run dev
 `npm run dev` starts the Vite dev server on `http://localhost:5173` and proxies
 gateway paths (`/api`, `/auth`, `/audit`, `/users`, `/me`, `/agents`,
 `/agent-instances`, `/mailboxes`, `/health`, `/reports`) to a gateway running
-on `http://localhost:8090` — no `.env` file needed for local dev against a
+on `http://localhost:8090`. No `.env` file is needed for local dev against a
 gateway started the normal way (see `docs/DEPLOYMENT.md`). To point at a
 gateway on a different host/port, set `VITE_GATEWAY_PROXY_TARGET` before
 starting the dev server.
 
 Other scripts: `npm run build` (production bundle), `npm run lint` (oxlint).
 
-The frontend has no automated test suite yet — verify UI changes manually
+The frontend has no automated test suite yet. Verify UI changes manually
 against a running stack before opening a PR.
