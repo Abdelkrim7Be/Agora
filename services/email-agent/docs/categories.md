@@ -46,18 +46,18 @@ contacts:
 ```
 
 Relative paths are resolved from `SERVICE_ROOT`. A missing or empty file is treated
-as `enabled: false` — zero behavior change for the default single-mailbox setup.
+as `enabled: false`, zero behavior change for the default single-mailbox setup.
 
 ## Classification order
 
-1. **Contact match** — sender email or domain found in `contacts` with a `category`
+1. **Contact match**: sender email or domain found in `contacts` with a `category`
    field. Highest priority. This means a broad domain contact (for example,
    `example.com`) overrides even an explicit subject keyword from another category;
    use exact contact emails when that broad override is not intended.
-2. **Predicate match** — first `Category` whose `when` conditions match the message
+2. **Predicate match**: first `Category` whose `when` conditions match the message
    (sender, domain, subject, label). An empty `when: {}` never matches by design;
    at least one condition is required.
-3. **LLM fallback** — the triage router can attach a `category` tag (from
+3. **LLM fallback**: the triage router can attach a `category` tag (from
    `RouterSchema.category`) when no deterministic match was found. Deterministic
    always wins.
 

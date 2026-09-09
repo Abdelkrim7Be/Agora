@@ -2,7 +2,7 @@
 
 Agora's core (gateway + web UI) is agent-agnostic: it doesn't know anything
 email-specific. An **agent type** is any service that registers with the
-gateway and can be instantiated as one or more **agent instances** — separate
+gateway and can be instantiated as one or more **agent instances**: separate
 mailboxes, separate tenants, separate configuration, all isolated from each
 other. `email-agent` is the one agent type that ships and is exercised today.
 
@@ -13,8 +13,8 @@ satisfy the contract" is a command you can run, not a judgment call.
 
 **Current status: one agent type (`email-agent`) implements this contract.**
 The contract and conformance suite exist and are exercised by `email-agent`
-itself, but no second, independent agent type has been built against it yet —
-treat the multi-agent-type story as a real, tested mechanism with a sample
+itself, but no second, independent agent type has been built against it yet.
+Treat the multi-agent-type story as a real, tested mechanism with a sample
 size of one, not as a proven ecosystem.
 
 **Contract version: 1.**
@@ -32,7 +32,7 @@ surfaced but not automatically disabled.
 
 ---
 
-## 2. Manifest — the agent declares itself
+## 2. Manifest: the agent declares itself
 
 The service MUST expose `GET /manifest`, returning the agent type's own
 description:
@@ -63,7 +63,7 @@ The manifest MUST be:
   manifest to another.
 
 The manifest MUST NOT declare `base_path`, `health_path`, or `manifest_path`.
-**Routing is the platform's decision** — an agent that could name its own
+**Routing is the platform's decision.** An agent that could name its own
 proxy prefix could claim another agent's traffic. Likewise `color` and `icon`
 belong to the design system, not the agent.
 
@@ -76,7 +76,7 @@ agent owns. The configured entry is served unchanged when the agent is
 unreachable, hasn't shipped `/manifest`, declares a `contract_version` this
 gateway doesn't understand, or the manifest's `id` doesn't match the
 registered type. Individual `settings_schema` entries with a non-relative
-`path` are dropped — an agent that is down must never blank out the settings
+`path` are dropped: an agent that is down must never blank out the settings
 navigation.
 
 ---
@@ -85,7 +85,7 @@ navigation.
 
 The gateway stamps three headers on every proxied request and expects the
 agent service to honour them. The service MUST NOT trust any client-supplied
-values for these headers — the gateway strips them from the inbound request
+values for these headers. The gateway strips them from the inbound request
 before forwarding, so a value the agent sees always came from the gateway.
 
 | Header | Description |
@@ -99,12 +99,12 @@ The service MUST:
   tenant.
 - Use `X-Agora-Agent-Instance` to scope state to the instance so two
   instances' data never mixes.
-- Return an empty result — never another instance's data — for an instance
+- Return an empty result (never another instance's data) for an instance
   id it has never seen.
 
 The service SHOULD use `X-Agora-Instance-Role` for defense-in-depth
 authorization checks on sensitive actions (approve, reject) when the header
-is present — the gateway already enforces this before the request arrives,
+is present. The gateway already enforces this before the request arrives,
 but a second check on the agent side means the agent isn't relying solely on
 the network boundary.
 
@@ -123,7 +123,7 @@ Every piece of persisted state the service produces MUST carry both
 
 The default instance MUST behave identically to a single-instance
 deployment. Introducing a second instance MUST produce fully isolated state
-with no cross-instance leakage — this is the property the conformance suite
+with no cross-instance leakage. This is the property the conformance suite
 and `email-agent`'s own tenant-isolation tests both exist to check.
 
 ---
@@ -140,7 +140,7 @@ via standard endpoints the gateway aggregates:
 | `GET /sync/status` | Connection/sync badge (`email-agent`-specific today) |
 
 These are `email-agent`-specific conventions, not part of the normative
-contract. A different agent type can expose different summary data, or none —
+contract. A different agent type can expose different summary data, or none;
 the gateway falls back to `0` / `"unknown"` on error.
 
 ---
@@ -148,7 +148,7 @@ the gateway falls back to `0` / `"unknown"` on error.
 ## 6. Proxy transparency
 
 The agent service MUST:
-- Accept and return arbitrary HTTP methods and bodies — the gateway forwards
+- Accept and return arbitrary HTTP methods and bodies; the gateway forwards
   them verbatim.
 - Return **404**, not 5xx, for an unknown path or an unknown run id. The
   gateway passes the upstream status through unchanged, so an agent that
@@ -166,7 +166,7 @@ The agent service MUST:
 of §3–§4 that aren't agent-specific: tenancy scoping, storage helpers, a
 security-service client, cost/pricing/usage accounting, run registry
 helpers, and system notifications. A Python agent SHOULD import it rather
-than reimplement tenancy and cost accounting — `email-agent` does. It's not
+than reimplement tenancy and cost accounting; `email-agent` does. It's not
 required; the contract is the HTTP surface, not the language a conforming
 agent is written in.
 
@@ -174,9 +174,9 @@ agent is written in.
 
 ## 8. Out of scope (for now)
 
-- A browser OAuth onboarding flow — that's `email-agent`-specific, not part
+- A browser OAuth onboarding flow: that's `email-agent`-specific, not part
   of the general contract.
-- Redis/Postgres backends — services may use any durable store.
+- Redis/Postgres backends: services may use any durable store.
 - Registration at runtime. Agent types are registered in `application.yml`;
   the manifest describes a type the platform already knows, it doesn't add
   one.
@@ -189,7 +189,7 @@ The conformance suite is the executable half of this document: the document
 says what MUST hold, the suite says whether it does, for a specific running
 instance of a candidate agent type.
 
-It talks to the agent **directly**, on its own port — not through the
+It talks to the agent **directly**, on its own port, not through the
 gateway. That's deliberate: it checks that the agent honours the contract by
 itself, rather than checking that the gateway happens to protect it.
 
@@ -206,7 +206,7 @@ docker compose -f infra/docker-compose.yml exec email-agent \
   python -m pytest /app/conformance/ -q
 ```
 
-Without `AGENT_CONFORMANCE_URL` set, the whole suite skips — it never turns
+Without `AGENT_CONFORMANCE_URL` set, the whole suite skips. It never turns
 a normal unit-test run red on a machine with nothing listening.
 
 **What it does NOT check:**
