@@ -40,7 +40,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "langgraph-cli[inmem]>=0.2",
+    "langgraph-cli[inmem]>=0.4.31",
 ]
 
 [tool.setuptools.packages.find]
