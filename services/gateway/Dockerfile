@@ -1,4 +1,4 @@
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3-eclipse-temurin-26 AS build
 ENV MAVEN_OPTS="-Djava.net.preferIPv4Stack=true"
 WORKDIR /build
 COPY maven-settings.xml /root/.m2/settings.xml
