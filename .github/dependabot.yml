@@ -4,6 +4,11 @@ updates:
     directory: "/services/gateway"
     schedule:
       interval: "weekly"
+    ignore:
+      # Not CVE-driven; needs a deliberate migration (jjwt-jackson still
+      # drags in old Jackson 2.x, breaks classpath resolution in auth code).
+      - dependency-name: "org.springframework.boot:spring-boot-starter-parent"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "pip"
     directory: "/services/email-agent"
@@ -34,11 +39,18 @@ updates:
     directory: "/services/email-agent"
     schedule:
       interval: "weekly"
+    ignore:
+      # platform-core pins requires-python <3.12 project-wide; not CVE-driven.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/services/security"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/services/web-react"
